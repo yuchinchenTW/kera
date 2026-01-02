@@ -28,6 +28,8 @@ const el = {
   voteTarget: document.getElementById("voteTarget"),
   lastWordsInput: document.getElementById("lastWordsInput"),
   runVoteBtn: document.getElementById("runVoteBtn"),
+  playerChatInput: document.getElementById("playerChatInput"),
+  sendChatBtn: document.getElementById("sendChatBtn"),
   logText: document.getElementById("logText"),
   lastNight: document.getElementById("lastNight"),
   endView: document.getElementById("endView"),
@@ -35,6 +37,7 @@ const el = {
   intelBox: document.getElementById("intelBox"),
   themeSelect: document.getElementById("themeSelect"),
   localeSelect: document.getElementById("localeSelect"),
+  difficultySelect: document.getElementById("difficultySelect"),
 };
 
 const translations = {
@@ -55,6 +58,12 @@ const translations = {
     nightMove: "Night move",
     resolveNight: "Resolve Night",
     discussion: "Discussion",
+    sendChat: "Send",
+    chatPlaceholder: "Say something...",
+    diffEasy: "Easy",
+    diffNormal: "Normal",
+    diffHard: "Hard",
+    diffNightmare: "Nightmare",
     toVote: "Go to Vote",
     publicVote: "Public vote",
     resolveVote: "Resolve Vote",
@@ -104,6 +113,12 @@ const translations = {
     nightMove: "夜間行動",
     resolveNight: "結算夜晚",
     discussion: "白天討論",
+    sendChat: "發言",
+    chatPlaceholder: "輸入你的發言…",
+    diffEasy: "簡單",
+    diffNormal: "一般",
+    diffHard: "困難",
+    diffNightmare: "夢魘",
     toVote: "進入投票",
     publicVote: "公開投票",
     resolveVote: "結算投票",
@@ -139,6 +154,7 @@ const translations = {
 };
 
 let locale = "zh";
+let defaultDifficulty = "hard";
 
 function applyLocaleText() {
   document.documentElement.lang = locale;
@@ -148,11 +164,13 @@ function applyLocaleText() {
     if (typeof val === "string") node.textContent = val;
   });
   if (el.lastWordsInput) el.lastWordsInput.placeholder = translations[locale].lastWordsPlaceholder;
+  if (el.playerChatInput) el.playerChatInput.placeholder = translations[locale].chatPlaceholder;
 }
 
 function resetGame() {
   const themeId = el.themeSelect?.value || Theme.GOOD_VS_EVIL.id;
-  engine = new GameEngine(Date.now(), themeId);
+  const difficulty = el.difficultySelect?.value || defaultDifficulty || "normal";
+  engine = new GameEngine(Date.now(), themeId, difficulty);
   render();
 }
 
@@ -445,6 +463,19 @@ function renderChat() {
   }
 }
 
+function sendPlayerChat() {
+  const input = el.playerChatInput;
+  if (!input || engine.state.phase !== Phase.DAY) return;
+  const text = (input.value || "").trim();
+  if (!text) return;
+  const human = engine.human();
+  const line = `${human.name}: ${text}`;
+  engine.state.dayChat.push(line);
+  engine.state.publicLog.push(line);
+  input.value = "";
+  render();
+}
+
 function renderControls() {
   const phase = engine.state.phase;
   const human = engine.human();
@@ -453,6 +484,12 @@ function renderControls() {
   el.dayView.classList.toggle("hidden", phase !== Phase.DAY);
   el.voteControls.classList.toggle("hidden", phase !== Phase.VOTE);
   el.endView.classList.toggle("hidden", phase !== Phase.END);
+  if (el.playerChatInput) {
+    el.playerChatInput.disabled = phase !== Phase.DAY || !alive;
+  }
+  if (el.sendChatBtn) {
+    el.sendChatBtn.disabled = phase !== Phase.DAY || !alive;
+  }
 
   if (phase === Phase.NIGHT) {
     const roleId = human?.role;
@@ -576,11 +613,24 @@ function render() {
 
 function init() {
   setupThemeSelect();
+  if (el.difficultySelect && defaultDifficulty) {
+    el.difficultySelect.value = defaultDifficulty;
+  }
   if (el.restartBtn) el.restartBtn.addEventListener("click", resetGame);
   if (el.runNightBtn) el.runNightBtn.addEventListener("click", resolveNightAction);
   if (el.runVoteBtn) el.runVoteBtn.addEventListener("click", resolveVoteAction);
   if (el.toVoteBtn) el.toVoteBtn.addEventListener("click", setPhaseDayToVote);
   if (el.themeSelect) el.themeSelect.addEventListener("change", resetGame);
+  if (el.difficultySelect) el.difficultySelect.addEventListener("change", resetGame);
+  if (el.sendChatBtn) el.sendChatBtn.addEventListener("click", sendPlayerChat);
+  if (el.playerChatInput) {
+    el.playerChatInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendPlayerChat();
+      }
+    });
+  }
   if (el.localeSelect) {
     el.localeSelect.value = locale;
     el.localeSelect.addEventListener("change", () => {

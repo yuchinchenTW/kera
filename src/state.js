@@ -44,7 +44,7 @@ function makePlayer(id, name, roleId, isHuman = false) {
   };
 }
 
-export function createInitialState(seed = Date.now(), themeId = Theme.GOOD_VS_EVIL.id) {
+export function createInitialState(seed = Date.now(), themeId = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   const rng = createRng(seed);
   const rolePool = roleListFromTheme(themeId);
   shuffle(rng, rolePool);
@@ -77,11 +77,16 @@ export function createInitialState(seed = Date.now(), themeId = Theme.GOOD_VS_EV
       night: [],
       vote: [],
     },
+    history: {
+      votes: [],
+    },
+    lastVoteTargetByActor: {},
     usage: {
       doctorInjections: 0,
       sniperShots: 0,
       riotGrenades: 0,
     },
+    difficulty,
     grudgeState: {
       berserk: false,
       triggerFaction: null,

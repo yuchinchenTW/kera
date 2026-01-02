@@ -261,6 +261,16 @@ input {
   color: var(--text);
 }
 
+.chat-input {
+  width: 100%;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px;
+  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+}
+
 .last-night {
   background: rgba(93, 228, 199, 0.05);
   border: 1px solid rgba(93, 228, 199, 0.2);

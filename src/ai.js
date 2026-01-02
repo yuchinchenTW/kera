@@ -7,6 +7,19 @@ function clamp(val, min, max) {
 
 function ensureSuspicion(state) {
   const living = alivePlayers(state).map((p) => p.id);
+  const diffScaleMap = { easy: 0.6, normal: 1, hard: 1.3, nightmare: 1.6 };
+  const diffScale = diffScaleMap[state.difficulty || "normal"] ?? 1;
+  const human = state.players.find((p) => p.isHuman);
+  const humanFaction = human?.faction || null;
+  const opposingFaction =
+    humanFaction === Faction.RED ? Faction.BLUE : humanFaction === Faction.BLUE ? Faction.RED : null;
+  const lastVoteHist = state.history?.votes?.[state.history.votes.length - 1] || null;
+  const mentionMax = lastVoteHist?.mentions ? Math.max(1, ...Object.values(lastVoteHist.mentions)) : 1;
+  const flipSet = new Set(lastVoteHist?.flips || []);
+  const firstVoterId = lastVoteHist?.order?.[0]?.actorId ?? null;
+  const lastVoterId = lastVoteHist?.order?.[lastVoteHist.order.length - 1]?.actorId ?? null;
+  const lastTally = lastVoteHist?.tally || {};
+
   for (const p of alivePlayers(state)) {
     if (p.isHuman) continue;
     if (!p.aiMemory) p.aiMemory = { suspicion: {} };
@@ -14,13 +27,64 @@ function ensureSuspicion(state) {
       if (targetId === p.id) continue;
       const target = getPlayer(state, targetId);
       const sameFaction = target?.faction === p.faction;
-      const baseStart = p.faction === Faction.BLUE ? 0.4 : 0.35;
+      const baseStart = p.faction === Faction.BLUE ? 0.32 : 0.35;
       const base = baseStart + state.rng() * 0.35 - (sameFaction ? 0.15 : 0);
       if (p.aiMemory.suspicion[targetId] === undefined) {
         p.aiMemory.suspicion[targetId] = clamp(base, 0.05, 0.95);
       } else {
         const drift = (state.rng() - 0.5) * 0.08;
         p.aiMemory.suspicion[targetId] = clamp(p.aiMemory.suspicion[targetId] + drift, 0.05, 0.95);
+      }
+
+      // Heuristic bumps (weak strength)
+      let delta = 0;
+      // Mentions in discussion
+      if (lastVoteHist?.mentions && lastVoteHist.mentions[targetId]) {
+        const weight = (lastVoteHist.mentions[targetId] || 0) / mentionMax;
+        delta += 0.05 * weight * diffScale;
+      }
+      // Flip voters (medium)
+      if (flipSet.has(targetId)) {
+        delta += 0.15 * diffScale;
+      }
+      // Last voter (opportunistic, medium)
+      if (targetId === lastVoterId) {
+        delta += 0.15 * diffScale;
+      }
+      // First voter (info holder) slight reduction
+      if (targetId === firstVoterId) {
+        delta -= 0.05 * diffScale;
+      }
+      // Voted into majority (if tally shows high votes)
+      const tallyScore = lastTally[targetId] || 0;
+      const maxTally = Math.max(1, ...Object.values(lastTally || {}));
+      if (tallyScore && maxTally > 0) {
+        const bandwagon = tallyScore / maxTally;
+        delta += 0.08 * bandwagon * diffScale;
+      }
+      // Difficulty-based bias toward opposing the human
+      if (humanFaction) {
+        if (state.difficulty === "hard") {
+          if (target?.faction === humanFaction) delta += 0.05 * diffScale;
+          else if (opposingFaction && target?.faction === opposingFaction) delta -= 0.02 * diffScale;
+        } else if (state.difficulty === "nightmare") {
+          if (target?.faction === humanFaction) delta += 0.12 * diffScale;
+          else if (opposingFaction && target?.faction === opposingFaction) delta -= 0.05 * diffScale;
+        }
+      }
+      p.aiMemory.suspicion[targetId] = clamp(p.aiMemory.suspicion[targetId] + delta, 0.01, 0.99);
+    }
+
+    // Normalize suspicions per actor
+    const vals = Object.values(p.aiMemory.suspicion).filter((v) => typeof v === "number");
+    const minVal = Math.min(...vals, 1);
+    const maxVal = Math.max(...vals, 0);
+    const range = maxVal - minVal;
+    if (range > 0) {
+      for (const tId of Object.keys(p.aiMemory.suspicion)) {
+        const v = p.aiMemory.suspicion[tId];
+        const norm = 0.05 + ((v - minVal) / range) * 0.9;
+        p.aiMemory.suspicion[tId] = clamp(norm, 0.01, 0.99);
       }
     }
   }
@@ -244,6 +308,20 @@ export function buildAiNightActions(state, opts = {}) {
 export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const includeHuman = opts.includeHuman === true;
   ensureSuspicion(state);
+  const chatMentions = {};
+  const chats = state.dayChat || [];
+  for (const line of chats) {
+    for (const player of state.players) {
+      if (!player) continue;
+      const name = player.name;
+      if (line.includes(name)) {
+        chatMentions[player.id] = (chatMentions[player.id] || 0) + 1;
+      }
+    }
+  }
+  const maxMention = Math.max(1, ...Object.values(chatMentions));
+  const chatWeight = (id) => (chatMentions[id] || 0) / maxMention;
+
   const votes = [];
   const aiVoters = alivePlayers(state).filter(
     (p) => (includeHuman || !p.isHuman) && !(p.role === Roles.BRAT.id && p.status.bratRevived)
@@ -265,13 +343,13 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
     if (state.policeRevealedRed !== null && actor.faction === Faction.BLUE && actor.role !== Roles.POLICE.id) {
       const redTarget = getPlayer(state, state.policeRevealedRed);
-      if (redTarget?.alive && state.rng() < 0.7) {
+      if (redTarget?.alive && state.rng() < 0.38) {
         votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
         return;
       }
     }
     const pruned =
-      actor.faction === Faction.RED && state.rng() >= 0.05
+      actor.faction === Faction.RED
         ? everyone.filter((t) => t.faction !== Faction.RED)
         : everyone;
     const candidates = pruned.length ? pruned : everyone;
@@ -282,7 +360,29 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       let best = null;
       let bestScore = -Infinity;
       for (const t of candidates) {
-        const s = jitter(actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+        const base = jitter(actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+        const chatBonus = actor.role !== Roles.POLICE.id ? chatWeight(t.id) * 0.05 : 0;
+        let s = clamp(base + chatBonus, 0, 1);
+        // Nightmare bias: opposing faction gets more focus on the human side
+        const human = state.players.find((p) => p.isHuman);
+        if (human) {
+          if (state.difficulty === "hard") {
+            if (actor.faction !== human.faction && t.faction === human.faction) {
+              s += 0.05;
+            }
+            if (actor.faction === human.faction && t.faction === actor.faction) {
+              s -= 0.02;
+            }
+          } else if (state.difficulty === "nightmare") {
+            if (actor.faction !== human.faction && t.faction === human.faction) {
+              s += 0.1;
+            }
+            if (actor.faction === human.faction && t.faction === actor.faction) {
+              s -= 0.05;
+            }
+          }
+          s = clamp(s, 0, 1);
+        }
         if (s > bestScore) {
           bestScore = s;
           best = t;

@@ -19,6 +19,12 @@
         <option value="en">English</option>
       </select>
       <select id="themeSelect"></select>
+      <select id="difficultySelect">
+        <option value="easy" data-i18n="diffEasy">Easy</option>
+        <option value="normal" data-i18n="diffNormal">Normal</option>
+        <option value="hard" data-i18n="diffHard">Hard</option>
+        <option value="nightmare" data-i18n="diffNightmare">Nightmare</option>
+      </select>
       <button id="restartBtn" data-i18n="newGame">New Game</button>
       <span id="seedDisplay" class="pill"></span>
     </div>
@@ -85,6 +91,8 @@
       <div id="dayView" class="controls hidden">
         <p class="label" data-i18n="discussion">Discussion</p>
         <div id="chatLines" class="chat"></div>
+        <textarea id="playerChatInput" class="chat-input" rows="3" placeholder="Say something..."></textarea>
+        <button id="sendChatBtn" data-i18n="sendChat">Send</button>
         <button id="toVoteBtn" data-i18n="toVote">Go to Vote</button>
       </div>
 

@@ -62,8 +62,8 @@ function updateWinrateHint(state) {
 }
 
 export class GameEngine {
-  constructor(seed = Date.now(), themeId = Theme.GOOD_VS_EVIL.id) {
-    this.state = createInitialState(seed, themeId);
+  constructor(seed = Date.now(), themeId = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
+    this.state = createInitialState(seed, themeId, difficulty);
     this.state.lastNightSummary = [];
     updateWinrateHint(this.state);
   }
@@ -368,6 +368,31 @@ export class GameEngine {
     const killersAlive = alivePlayers(this.state).filter((p) => p.role === Roles.KILLER.id && !actorBlocked(p)).length;
     const killerNeeded = Math.floor(killersAlive / 2) + 1;
     let killerDecision = majorityTarget(killerVotes, killerNeeded);
+    if (!killerDecision && Object.keys(killerVotes).length > 0) {
+      // allow plurality kill if no majority
+      let bestId = null;
+      let bestCount = -1;
+      for (const [tid, cnt] of Object.entries(killerVotes)) {
+        const numId = Number(tid);
+        if (cnt > bestCount || (cnt === bestCount && numId < (bestId ?? numId + 1))) {
+          bestId = numId;
+          bestCount = cnt;
+        }
+      }
+      if (bestId !== null) killerDecision = { targetId: bestId, count: bestCount };
+    }
+    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.5) {
+      const pool = alivePlayers(this.state).filter(
+        (p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id && !isUntargetable(p) && !p.status.purified
+      );
+      if (pool.length) {
+        killerDecision = { targetId: pool[0].id, count: killerNeeded };
+      }
+    }
+    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.5) {
+      const pool = alivePlayers(this.state).filter((p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id);
+      if (pool.length) killerDecision = { targetId: pool[0].id, count: killerNeeded };
+    }
     if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.2) {
       const pool = alivePlayers(this.state).filter(
         (p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id && !isUntargetable(p) && !p.status.purified
@@ -643,15 +668,29 @@ export class GameEngine {
     this.state.phase = Phase.VOTE;
     const votes = {};
     const votePairs = [];
+    const voteOrder = [];
 
     const aliveCount = alivePlayers(this.state).length;
     const needed = Math.floor(aliveCount / 2) + 1;
+
+    const mentionCounts = {};
+    const chats = this.state.dayChat || [];
+    for (const line of chats) {
+      for (const p of this.state.players) {
+        if (line.includes(p.name)) {
+          mentionCounts[p.id] = (mentionCounts[p.id] || 0) + 1;
+        }
+      }
+    }
 
     const human = this.human();
     if (human?.alive && humanVoteTargetId !== null) {
       votes[humanVoteTargetId] = (votes[humanVoteTargetId] || 0) + 1;
       const target = getPlayer(this.state, humanVoteTargetId);
-      if (target) votePairs.push(`${human.name} -> ${target.name}`);
+      if (target) {
+        votePairs.push(`${human.name} -> ${target.name}`);
+        voteOrder.push({ actorId: human.id, targetId: target.id });
+      }
     }
 
     const aiVotes = buildAiVoteActions(this.state, humanVoteTargetId, { includeHuman: opts.includeHuman === true });
@@ -659,8 +698,28 @@ export class GameEngine {
       votes[v.targetId] = (votes[v.targetId] || 0) + 1;
       const actor = getPlayer(this.state, v.actorId);
       const target = getPlayer(this.state, v.targetId);
-      if (actor && target) votePairs.push(`${actor.name} -> ${target.name}`);
+      if (actor && target) {
+        votePairs.push(`${actor.name} -> ${target.name}`);
+        voteOrder.push({ actorId: actor.id, targetId: target.id });
+      }
     }
+
+    const flips = [];
+    const newLastVote = {};
+    for (const entry of voteOrder) {
+      const prev = this.state.lastVoteTargetByActor?.[entry.actorId];
+      if (prev !== undefined && prev !== entry.targetId) flips.push(entry.actorId);
+      newLastVote[entry.actorId] = entry.targetId;
+    }
+    this.state.lastVoteTargetByActor = newLastVote;
+    if (!this.state.history) this.state.history = { votes: [] };
+    this.state.history.votes.push({
+      day: this.state.dayNumber,
+      order: voteOrder,
+      flips,
+      mentions: mentionCounts,
+      tally: { ...votes },
+    });
 
     if (votePairs.length) {
       addPublicLog(this.state, `Votes:\n${votePairs.map((v) => `- ${v}`).join("\n")}`);
@@ -724,6 +783,12 @@ export class GameEngine {
 export function checkVictory(state) {
   const counts = factionCounts(state);
   const aliveTotal = alivePlayers(state).length;
+  const civilianWipeAutoWinThemes = new Set([
+    Theme.GOOD_VS_EVIL.id,
+    Theme.COUNTER_TERROR.id,
+    Theme.WILD_WEST.id,
+  ]);
+  const civilianAutoWin = civilianWipeAutoWinThemes.has(state.theme) && counts.civilians === 0;
 
   // 1) Grudge Beast precedence
   if (counts.grudge > 0) {
@@ -750,7 +815,7 @@ export function checkVictory(state) {
       p.alive &&
       ![Roles.POLICE.id, Roles.KILLER.id, Roles.CIVILIAN.id, Roles.ZOMBIE.id, Roles.GRUDGE_BEAST.id].includes(p.role)
   );
-  if ((counts.killers >= counts.blue && !hasOtherSpecials) || counts.police === 0 || counts.civilians === 0) {
+  if ((counts.killers >= counts.blue && !hasOtherSpecials) || counts.police === 0 || civilianAutoWin) {
     state.victory = { winner: "RED", reason: "Red faction satisfied elimination condition." };
     return state.victory;
   }
