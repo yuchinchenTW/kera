@@ -3,56 +3,74 @@ This project is an original, non-commercial technical prototype for learning and
 It does not use or include any assets, code, data, or materials from any existing commercial games.
 Any similarities are purely coincidental.
 
-# Night / Day 18
+
+## 聲明
+本專案為原創、非商業之技術試作與學習用途，
+未使用任何現有商業遊戲之素材、程式碼或資料，
+與任何既有作品無任何關聯。
+
+# Night / Day 18 (Single-Player)
+
 Single-player social deduction: 1 human + 17 AI, multiple themes/roles, deterministic night/day loop.
 
-## Quick Play (single-player)
-1) Serve files locally (avoid `file://`):
+## Quick Play
+1) Start a local server (avoid `file://` module blocking):
 ```bash
+cd C:\Users\yuchi\Desktop\kera
 python -m http.server 8000
 ```
-2) Open `http://localhost:8000/` and click **New Game**.
-
-## Multiplayer (experimental)
-- Centralized WebSocket server; humans connect, empty seats are filled by **hard** AI.
-- Install deps and start server:
-  ```bash
-  npm install
-  npm run start   # ws://localhost:3001
-  ```
-- Web lobby: host the repo statically (same as single-player) and open `multiplayer.html`. Enter server URL + name -> Join. Host clicks Start.
-- Client protocol (JSON over ws) for manual testing:
-  - `{"type":"join","name":"Alice"}` joins lobby (first join becomes host).
-  - Host: `{"type":"start","theme":"GOOD_VS_EVIL"}` start; seats lock.
-  - Night action: `{"type":"night_action","action":{"type":"POLICE_INVESTIGATE","targetId":3}}`
-  - Vote: `{"type":"vote","targetId":5,"lastWords":"gg"}` (omit `targetId` to abstain).
-  - Host resolves: `{"type":"resolve_night"}` / `{"type":"resolve_vote"}`.
-  - Day chat: `{"type":"chat","text":"..."}` (only during DAY).
-- Server pushes per-player masked views: `{"type":"view", view}`, plus `lobby`, `started`, `phase` events.
-- Max 18 seats; restart: host sends `{"type":"restart"}` then `start` again.
+Open `http://localhost:8000/` in your browser. (Or use `npx http-server . 8000` / VSCode Live Server.)
+2) Pick a theme (top-right), click **New Game**, then play via the UI.
 
 ## Gameplay Highlights
 - 18 players fixed: 1 human + 17 AI.
 - Themes: presets like Good vs Evil, etc. (select and restart).
 - Night: police/killers/doctor/sniper/agent/smoke/bomb/fire, etc.; factions need majority; fixed resolution order with protection/absorb/purify rules.
-- Day: chat + vote; if no majority, highest votes are executed; vote box shows who voted for whom.
+- Day: chat + vote; if no majority, highest votes are executed; vote box shows “who voted for whom”.
 - Identity visibility: you always see yourself; police see police, killers see killers; others are Hidden while alive, revealed on death.
 - Doctor: two empty injections on the same target cause a fatal overdose.
 
 ## Files
-- `index.html`, `styles.css` – single-player UI.
-- `multiplayer.html`, `src/multi.js` – multiplayer lobby UI.
+- `index.html`, `styles.css` – UI.
 - `src/roles.js` – roles, factions, themes, death causes.
 - `src/state.js` – game state helpers, death marking, faction counts.
 - `src/engine.js` – night resolution, voting, victory checks.
-- `src/view.js` – per-player masked views.
 - `src/ai.js` – AI actions, chat, voting logic.
-- `src/main.js` – single-player browser wiring/rendering.
-- `server.js` – WebSocket game host (centralized referee).
+- `src/main.js` – browser wiring/rendering.
 - `tests/simulate.js` – headless win-rate simulator (all AI).
 
 ## Win-Rate Simulation
+Run from project root:
 ```bash
 node tests/simulate.js 500
 ```
 Prints win percentages by faction (all AI, human slot auto-played). Increase the number for more samples.
+
+## Tuning Notes
+- AI chat/vote include noise; Red side avoids voting fellow Reds and will defend them in chat.
+- Public events at night hide actor names (“Someone ...”). Votes are public with voter->target pairs.
+
+---
+
+# 夜 / 日 18（繁體摘要）
+
+單人版推理遊戲：1 玩家 + 17 AI；夜晚行動、白天聊天與投票，多主題多角色，解算具決定性。
+
+## 遊戲重點
+- 夜晚：警/殺/醫/狙/特務/煙霧/炸彈/火燒等，多數決才生效，固定解算順序。
+- 白天：聊天 + 投票，無多數則處決最高票；票箱會公開「誰投給誰」。
+- 身份：自己永遠可見；警察互認、殺手互認；其他存活者顯示 Hidden，死亡公開。
+- 醫生：同一目標空針累積到 2/2 會致死。
+
+## 執行步驟
+```bash
+cd C:\Users\yuchi\Desktop\kera
+python -m http.server 8000
+```
+在瀏覽器打開 `http://localhost:8000/`，選主題後按 **New Game**。
+
+## 勝率模擬
+```bash
+node tests/simulate.js 500
+```
+輸出各陣營勝率，用來觀察平衡（全 AI 自動遊玩，含人類位）。***

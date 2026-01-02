@@ -44,27 +44,16 @@ function makePlayer(id, name, roleId, isHuman = false) {
   };
 }
 
-export function createInitialState(
-  seed = Date.now(),
-  themeId = Theme.GOOD_VS_EVIL.id,
-  difficulty = "normal",
-  opts = {}
-) {
+export function createInitialState(seed = Date.now(), themeId = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   const rng = createRng(seed);
   const rolePool = roleListFromTheme(themeId);
   shuffle(rng, rolePool);
 
-  const humanIds = Array.isArray(opts.humanIds) ? opts.humanIds : [];
-  const humanIdSet = new Set(humanIds);
-  if (humanIdSet.size === 0) {
-    const randomHuman = Math.floor(rng() * rolePool.length);
-    humanIdSet.add(randomHuman);
-  }
-
+  const humanIndex = Math.floor(rng() * rolePool.length);
   const players = [];
   for (let i = 0; i < rolePool.length; i++) {
     const name = `Player ${i + 1}`;
-    players.push(makePlayer(i, name, rolePool[i], humanIdSet.has(i)));
+    players.push(makePlayer(i, name, rolePool[i], i === humanIndex));
   }
 
   const aliveIds = players.filter((p) => p.alive).map((p) => p.id);
