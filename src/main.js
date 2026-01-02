@@ -13,6 +13,7 @@ const el = {
   doctorUsage: document.getElementById("doctorUsage"),
   sniperUsage: document.getElementById("sniperUsage"),
   victoryDisplay: document.getElementById("victoryDisplay"),
+  winRateDisplay: document.getElementById("winRateDisplay"),
   playersList: document.getElementById("playersList"),
   nightControls: document.getElementById("nightControls"),
   nightActionType: document.getElementById("nightActionType"),
@@ -27,7 +28,7 @@ const el = {
   voteTarget: document.getElementById("voteTarget"),
   lastWordsInput: document.getElementById("lastWordsInput"),
   runVoteBtn: document.getElementById("runVoteBtn"),
-  logList: document.getElementById("logList"),
+  logText: document.getElementById("logText"),
   lastNight: document.getElementById("lastNight"),
   endView: document.getElementById("endView"),
   endSummary: document.getElementById("endSummary"),
@@ -40,7 +41,7 @@ const translations = {
   en: {
     eyebrow: "Single-Player Social Deduction",
     title: "Night / Day 18",
-    subtitle: "1 human vs 17 AI · deterministic runs",
+    subtitle: "1 human vs 17 AI, deterministic runs",
     newGame: "New Game",
     phase: "Phase",
     day: "Day",
@@ -48,6 +49,7 @@ const translations = {
     doctorUsage: "Doctor injections",
     sniperUsage: "Sniper shots",
     victory: "Victory",
+    winRate: "Win rate",
     players: "Players",
     actions: "Actions",
     nightMove: "Night move",
@@ -56,7 +58,7 @@ const translations = {
     toVote: "Go to Vote",
     publicVote: "Public vote",
     resolveVote: "Resolve Vote",
-    voteNote: "Majority (>50%) executes; fallback to highest votes otherwise.",
+    voteNote: "Majority (>50%) executes; otherwise highest votes execute.",
     gameOver: "Game finished",
     events: "Events",
     chooseTarget: "Choose target",
@@ -72,11 +74,23 @@ const translations = {
     hintVote: "Vote: pick a target for execution.",
     hintEnd: "Game over - start a new seed any time.",
     endSummary: (w, r) => `${w} wins - ${r}`,
+    winRateValue: (r, b) => `Red ~${r}% / Blue ~${b}%`,
+    winRateNone: "n/a",
+    noPrivateIntel: "No private intel yet.",
+    noEventsYet: "No major events yet.",
+    noChat: "No one spoke up.",
+    deadNote: "You are dead; AI will resolve the night.",
+    noNightAction: "No night action for this role.",
+    doctorNote: (used, max) => `Doctor injections: ${used}/${max}. Overdose at 2/2 empties.`,
+    sniperNote: (left) => `Sniper shots left: ${left}.`,
+    riotNote: (left) => `Grenades left: ${left}.`,
+    pickAction: "Pick an action and target.",
+    lastWordsPlaceholder: "Last words (32 English or 16 Chinese chars)",
   },
   zh: {
-    eyebrow: "單人社交推理",
-    title: "夜 / 日 18",
-    subtitle: "1 人類 vs 17 AI · 決定性模擬",
+    eyebrow: "單人社會推理",
+    title: "夜 / 晝 18",
+    subtitle: "1 名玩家對 17 個 AI，決定論迴合",
     newGame: "新遊戲",
     phase: "階段",
     day: "天數",
@@ -84,34 +98,57 @@ const translations = {
     doctorUsage: "醫生注射",
     sniperUsage: "狙擊子彈",
     victory: "勝利",
-    players: "玩家列表",
+    winRate: "紅藍勝率預估",
+    players: "玩家",
     actions: "行動",
-    nightMove: "夜晚行動",
+    nightMove: "夜間行動",
     resolveNight: "結算夜晚",
     discussion: "白天討論",
-    toVote: "前往投票",
+    toVote: "進入投票",
     publicVote: "公開投票",
     resolveVote: "結算投票",
-    voteNote: "多數決（>50%）處決；無多數則最高票處決。",
+    voteNote: "超過 50% 票數直接處決，否則採最高票。",
     gameOver: "遊戲結束",
     events: "事件紀錄",
     chooseTarget: "選擇目標",
-    skipNight: "跳過夜晚行動",
-    noNight: "無夜晚行動",
-    abstain: "棄票",
+    skipNight: "跳過行動",
+    noNight: "無夜間行動",
+    abstain: "棄權",
     phaseNight: "夜晚",
     phaseDay: "白天討論",
     phaseVote: "投票",
     phaseEnd: "結束",
     hintNight: "夜晚：選擇行動後結算。",
-    hintDay: "白天：閱讀對話後進入投票。",
-    hintVote: "投票：選擇要處決的目標。",
-    hintEnd: "遊戲結束 - 隨時可重開。",
+    hintDay: "白天：看完對話再去投票。",
+    hintVote: "投票：挑一個要處決的目標。",
+    hintEnd: "遊戲結束 - 隨時可以開新局。",
     endSummary: (w, r) => `${w} 勝利 - ${r}`,
+    winRateValue: (r, b) => `紅方 ~${r}% / 藍方 ~${b}%`,
+    winRateNone: "暫無數據",
+    noPrivateIntel: "目前沒有私人情報。",
+    noEventsYet: "尚無重大事件。",
+    noChat: "暫時沒有人發言。",
+    deadNote: "你已死亡，AI 會自動結算夜晚。",
+    noNightAction: "此身分沒有夜間行動。",
+    doctorNote: (used, max) => `醫生針數：${used}/${max}。累積 2/2 空針會致死。`,
+    sniperNote: (left) => `狙擊子彈剩餘：${left}。`,
+    riotNote: (left) => `煙霧彈剩餘：${left}。`,
+    pickAction: "選擇行動與目標。",
+    lastWordsPlaceholder: "遺言（英文 32 字 / 中文 16 字內）",
   },
 };
 
 let locale = "zh";
+
+function applyLocaleText() {
+  document.documentElement.lang = locale;
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    const key = node.getAttribute("data-i18n");
+    const val = translations[locale][key];
+    if (typeof val === "string") node.textContent = val;
+  });
+  if (el.lastWordsInput) el.lastWordsInput.placeholder = translations[locale].lastWordsPlaceholder;
+}
 
 function resetGame() {
   const themeId = el.themeSelect?.value || Theme.GOOD_VS_EVIL.id;
@@ -160,29 +197,31 @@ function buildPlayerOptions(filterFn = () => true) {
 function translateLine(line) {
   if (locale !== "zh" || typeof line !== "string") return line;
   const rules = [
-    [/Someone deployed smoke on (.+)\./, "有人對 $1 丟了煙霧彈。"],
-    [/Someone cleansed (.+)\./, "有人淨化了 $1。"],
-    [/Someone kidnapped (.+)\./, "有人綁架了 $1。"],
+    [/Someone deployed smoke on (.+)\./, `有人對 $1 投擲煙霧彈。`],
+    [/Someone cleansed (.+)\./, `有人淨化了 $1。`],
+    [/Someone kidnapped (.+)\./, `有人綁架了 $1。`],
     [/Someone fired a sniper shot\./, "有人開了狙擊槍。"],
-    [/A bomb went off but failed on an ally; the bomber died\./, "炸彈炸到隊友失效，炸彈客自爆身亡。"],
-    [/A bomb detonated on (.+)\./, "炸彈炸向 $1。"],
-    [/Someone fired a risky shot at (.+)\./, "有人對 $1 開了冒險一槍。"],
-    [/A cowboy's chamber clicked on (.+)\./, "牛仔對 $1 空擊。"],
-    [/A cowboy drew a wild bullet\. Chaos ensued\./, "牛仔抽到亂彈，引發混亂。"],
-    [/Someone splashed fuel on (.+)\./, "有人對 $1 潑了汽油。"],
-    [/Someone prepared to ignite marked targets\./, "有人準備引燃已標記目標。"],
+    [/A bomb went off but failed on an ally; the bomber died\./, "炸彈在友方身上失效，炸彈客自爆身亡。"],
+    [/A bomb detonated on (.+)\./, "炸彈在 $1 身上爆炸。"],
+    [/Someone fired a risky shot at (.+)\./, "有人冒險朝 $1 開槍。"],
+    [/A cowboy's chamber clicked on (.+)\./, "牛仔對 $1 開槍空響。"],
+    [/A cowboy drew a wild bullet\. Chaos ensued\./, "牛仔抽到瘋狂子彈，場面大亂。"],
+    [/Someone splashed fuel on (.+)\./, "有人往 $1 潑了汽油。"],
+    [/Someone prepared to ignite marked targets\./, "有人準備點燃所有被標記的目標。"],
     [/Someone saved (.+) from death\./, "有人救下了 $1。"],
-    [/Someone injected (.+) \(dose (\d+)\/(\d+)\)\./, "$1 被注射（第 $2/$3 劑）。"],
-    [/Votes: /, "投票："],
-    [/(.+) was executed by vote.*$/, "$1 被投票處決。"],
-    [/(.+) was executed by highest votes.*$/, "$1 以最高票被處決。"],
-    [/No majority reached\. Nobody was executed\./, "無多數且無處決。"],
-    [/Grudge Beasts entered berserk rage\./, "怨靈暴走。"],
-    [/(.+) turned into a zombie overnight\./, "$1 在夜裡變成殭屍。"],
-    [/(.+) was overwhelmed and turned into a zombie immediately\./, "$1 被群咬當場變成殭屍。"],
-    [/feels off\./, "覺得有點可疑。"],
-    [/seems fine to me\./, "目前看起來沒問題。"],
-    [/What's everyone thinking about (.+)\?/, "大家覺得 $1 如何？"],
+    [/Someone injected (.+) \(dose (\d+)\/(\d+)\)\./, `有人注射 $1（第 $2/$3 針）。`],
+    [/Killers failed to agree on a target\./, "殺手未達成共識。"],
+    [/Police could not agree on a target\./, "警察未達成共識。"],
+    [/Votes:/, "投票："],
+    [/(.+) was executed by vote.*$/, "$1 被處決（過半數）。"],
+    [/(.+) was executed by highest votes.*$/, "$1 被最高票處決。"],
+    [/No majority reached\. Nobody was executed\./, "沒有過半數，無人被處決。"],
+    [/Grudge Beasts entered berserk rage\./, "冤魂獸進入暴走狀態。"],
+    [/(.+) turned into a zombie overnight\./, "$1 在夜裡變成了殭屍。"],
+    [/(.+) was overwhelmed and turned into a zombie immediately\./, "$1 被圍毆立刻變成殭屍。"],
+    [/feels off\./, "不太對勁。"],
+    [/seems fine to me\./, "在我看來沒問題。"],
+    [/What's everyone thinking about (.+)\?/, "大家覺得 $1 怎麼樣？"],
   ];
   let out = line;
   for (const [pat, rep] of rules) {
@@ -312,14 +351,13 @@ function renderPlayers() {
     const li = document.createElement("li");
     li.className = "player-card" + (p.alive ? "" : " dead");
     const name = document.createElement("div");
-    name.textContent = p.name + (p.isHuman ? " (You)" : "");
+    const youTag = p.isHuman ? (locale === "zh" ? "（你）" : " (You)") : "";
+    name.textContent = p.name + youTag;
     const badges = document.createElement("div");
     const roleBadge = document.createElement("span");
     roleBadge.className = "badge role";
     let roleText = "Hidden";
-    if (!p.alive) {
-      roleText = roleMeta(p.role).name;
-    } else if (p.isHuman) {
+    if (!p.alive || p.isHuman) {
       roleText = roleMeta(p.role).name;
     } else {
       const humanRole = engine.human().role;
@@ -360,7 +398,7 @@ function renderLog() {
   }
   if (intelLines.length) {
     const list = document.createElement("ul");
-    intelLines.slice(-5).forEach((entry) => {
+    translateLines(intelLines.slice(-5)).forEach((entry) => {
       const item = document.createElement("li");
       item.textContent = entry;
       list.appendChild(item);
@@ -369,29 +407,17 @@ function renderLog() {
   } else {
     const p = document.createElement("p");
     p.className = "note";
-    p.textContent = "No private intel yet.";
+    p.textContent = translations[locale].noPrivateIntel;
     el.intelBox.appendChild(p);
   }
 
-  el.logList.innerHTML = "";
-  for (const entry of translateLines(engine.state.publicLog)) {
-    const li = document.createElement("li");
-    li.textContent = entry;
-    if (entry.startsWith("Votes:")) {
-      li.classList.add("multiline");
-      li.textContent = "";
-      const lines = translateLines(entry.split("\n"));
-      lines.forEach((ln) => {
-        const div = document.createElement("div");
-        div.textContent = ln;
-        li.appendChild(div);
-      });
-    }
-    el.logList.appendChild(li);
+  const translated = translateLines(engine.state.publicLog);
+  if (el.logText) {
+    el.logText.value = translated.join("\n");
   }
   el.lastNight.innerHTML = "";
   if (engine.state.lastNightSummary.length === 0) {
-    el.lastNight.textContent = locale === "zh" ? "目前無重大事件。" : "No major events yet.";
+    el.lastNight.textContent = translations[locale].noEventsYet;
   } else {
     const list = document.createElement("ul");
     for (const entry of translateLines(engine.state.lastNightSummary)) {
@@ -407,15 +433,11 @@ function renderChat() {
   el.chatLines.innerHTML = "";
   if (!engine.state.dayChat || !engine.state.dayChat.length) {
     const p = document.createElement("p");
-    p.textContent = locale === "zh" ? "沒有人發言。" : "No one spoke up.";
+    p.textContent = translations[locale].noChat;
     el.chatLines.appendChild(p);
     return;
   }
   const translated = translateLines(engine.state.dayChat);
-  if (engine.state.chatLoggedForDay !== engine.state.dayNumber) {
-    translated.forEach((line) => engine.state.publicLog.push(line));
-    engine.state.chatLoggedForDay = engine.state.dayNumber;
-  }
   for (const line of translated) {
     const p = document.createElement("p");
     p.textContent = line;
@@ -439,26 +461,19 @@ function renderControls() {
     const prevAction = el.nightActionType.value;
     const prevTarget = el.nightTarget.value;
     if (!alive) {
-      note = locale === "zh" ? "你已死亡，夜晚由 AI 自動結算。" : "You are dead; AI will resolve the night.";
+      note = translations[locale].deadNote;
     } else if (!choices.length) {
-      note = locale === "zh" ? "此角色無夜晚行動。" : "No night action for this role.";
+      note = translations[locale].noNightAction;
     } else if (roleId === Roles.DOCTOR.id) {
-      note =
-        locale === "zh"
-          ? `醫生注射次數：${engine.state.usage.doctorInjections}/${Roles.DOCTOR.maxInjections}（空針達 2/2 會致死）。`
-          : `Doctor injections: ${engine.state.usage.doctorInjections}/${Roles.DOCTOR.maxInjections}. Overdose at 2/2.`;
+      note = translations[locale].doctorNote(engine.state.usage.doctorInjections, Roles.DOCTOR.maxInjections);
     } else if (roleId === Roles.SNIPER.id) {
-      note =
-        locale === "zh"
-          ? `狙擊剩餘子彈：${Math.max(0, (Roles.SNIPER.maxShots || 0) - engine.state.usage.sniperShots)}。`
-          : `Sniper shots left: ${Math.max(0, (Roles.SNIPER.maxShots || 0) - engine.state.usage.sniperShots)}.`;
+      const left = Math.max(0, (Roles.SNIPER.maxShots || 0) - engine.state.usage.sniperShots);
+      note = translations[locale].sniperNote(left);
     } else if (roleId === Roles.RIOT_POLICE.id) {
-      note =
-        locale === "zh"
-          ? `煙霧彈剩餘：${Math.max(0, (Roles.RIOT_POLICE.maxGrenades || 0) - engine.state.usage.riotGrenades)}。`
-          : `Grenades left: ${Math.max(0, (Roles.RIOT_POLICE.maxGrenades || 0) - engine.state.usage.riotGrenades)}.`;
+      const left = Math.max(0, (Roles.RIOT_POLICE.maxGrenades || 0) - engine.state.usage.riotGrenades);
+      note = translations[locale].riotNote(left);
     } else {
-      note = locale === "zh" ? "選擇行動與目標。" : "Pick an action and target.";
+      note = translations[locale].pickAction;
     }
     el.nightNote.textContent = note;
 
@@ -469,7 +484,6 @@ function renderControls() {
     );
     el.nightActionType.disabled = !choices.length;
 
-    // restore previous selection when possible
     const selected = choices.find((c) => c.value === prevAction);
     if (selected) {
       el.nightActionType.value = prevAction;
@@ -495,36 +509,17 @@ function renderControls() {
           case Roles.SNIPER.id:
             options = buildPlayerOptions((p) => p.id !== human.id);
             break;
-          case Roles.AGENT.id:
-          case Roles.HEAVENLY_FIEND.id:
-            options = buildPlayerOptions(() => true);
-            break;
-          case Roles.TERRORIST.id:
-          case Roles.COWBOY.id:
-          case Roles.KIDNAPPER.id:
-          case Roles.ZOMBIE.id:
-          case Roles.RIOT_POLICE.id:
-          case Roles.ARSONIST.id:
-          case Roles.VINE_DEMON.id:
-          case Roles.NIGHTMARE_DEMON.id:
-          case Roles.EXORCIST.id:
-          case Roles.NECROMANCER.id:
-          case Roles.PURIFIER.id:
-          case Roles.GRUDGE_BEAST.id:
-            options = buildPlayerOptions(() => true);
-            break;
           default:
-            options = [];
+            options = buildPlayerOptions(() => true);
         }
       }
-      buildOptions(el.nightTarget, options, "Choose target");
       buildOptions(el.nightTarget, options, translations[locale].chooseTarget);
       el.nightTarget.disabled = false;
       if (prevTarget && options.some((o) => o.value === prevTarget)) {
         el.nightTarget.value = prevTarget;
       }
     } else {
-      buildOptions(el.nightTarget, [], "No target needed");
+      buildOptions(el.nightTarget, [], translations[locale].noNight);
       el.nightTarget.disabled = true;
     }
   }
@@ -556,6 +551,15 @@ function render() {
   el.doctorUsage.textContent = `${state.usage.doctorInjections}/${Roles.DOCTOR.maxInjections || 0}`;
   el.sniperUsage.textContent = `${state.usage.sniperShots}/${Roles.SNIPER.maxShots || 0}`;
   el.victoryDisplay.textContent = state.victory ? `${state.victory.winner}` : "-";
+  if (el.winRateDisplay) {
+    if (state.winrateHint) {
+      const redPct = Math.round(state.winrateHint.red * 100);
+      const bluePct = Math.round(state.winrateHint.blue * 100);
+      el.winRateDisplay.textContent = translations[locale].winRateValue(redPct, bluePct);
+    } else {
+      el.winRateDisplay.textContent = translations[locale].winRateNone;
+    }
+  }
   el.actionHint.textContent =
     state.phase === Phase.NIGHT
       ? translations[locale].hintNight
@@ -581,15 +585,11 @@ function init() {
     el.localeSelect.value = locale;
     el.localeSelect.addEventListener("change", () => {
       locale = el.localeSelect.value === "en" ? "en" : "zh";
-      // update static labels
-      document.querySelectorAll("[data-i18n]").forEach((node) => {
-        const key = node.getAttribute("data-i18n");
-        const val = translations[locale][key];
-        if (typeof val === "string") node.textContent = val;
-      });
+      applyLocaleText();
       resetGame();
     });
   }
+  applyLocaleText();
   resetGame();
 }
 

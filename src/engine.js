@@ -52,10 +52,20 @@ function trackBlueTarget(targetedByBlue, targetId, actor) {
   targetedByBlue.get(targetId).push(actor.id);
 }
 
+function updateWinrateHint(state) {
+  const counts = factionCounts(state);
+  const totalAlive = alivePlayers(state).length || 1;
+  const contesting = Math.max(1, counts.red + counts.blue);
+  const redPct = Math.max(0, Math.min(1, counts.red / contesting));
+  const bluePct = Math.max(0, Math.min(1, counts.blue / contesting));
+  state.winrateHint = { red: redPct, blue: bluePct, alive: totalAlive };
+}
+
 export class GameEngine {
   constructor(seed = Date.now(), themeId = Theme.GOOD_VS_EVIL.id) {
     this.state = createInitialState(seed, themeId);
     this.state.lastNightSummary = [];
+    updateWinrateHint(this.state);
   }
 
   human() {
@@ -623,6 +633,7 @@ export class GameEngine {
     for (const line of this.state.dayChat) {
       this.state.publicLog.push(line);
     }
+    updateWinrateHint(this.state);
 
     const victory = checkVictory(this.state);
     if (victory) this.state.phase = Phase.END;
@@ -697,6 +708,8 @@ export class GameEngine {
     } else {
       addPublicLog(this.state, "No majority reached. Nobody was executed.");
     }
+
+    updateWinrateHint(this.state);
 
     const victory = checkVictory(this.state);
     if (victory) {

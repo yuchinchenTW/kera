@@ -90,6 +90,7 @@ export function createInitialState(seed = Date.now(), themeId = Theme.GOOD_VS_EV
     chatLoggedForDay: null,
     victory: null,
     lastNightSummary: [],
+    winrateHint: null,
   };
 }
 

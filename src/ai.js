@@ -96,7 +96,7 @@ export function buildAiNightActions(state, opts = {}) {
   // Pre-pick a shared police target to avoid split votes.
   const policeActors = alivePlayers(state).filter((p) => p.role === Roles.POLICE.id && (!p.isHuman || includeHuman));
   let sharedPoliceTarget =
-    Math.random() < 0.45
+    state.rng() < 0.45
       ? null
       : pickGroupTarget(
           state,
@@ -118,7 +118,7 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.POLICE.id: {
         const target =
           sharedPoliceTarget ||
-          (Math.random() < 0.5
+          (state.rng() < 0.5
             ? randomChoice(alivePlayers(state).filter((t) => t.role !== Roles.POLICE.id), state.rng)
             : pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.POLICE.id));
         if (target) actions.push({ actorId: actor.id, type: "POLICE_INVESTIGATE", targetId: target.id });
@@ -318,7 +318,7 @@ export function generateChatLines(state, maxLines = 6) {
         : allCandidates.filter((t) => t.faction === speaker.faction);
 
     const target =
-      Math.random() < 0.5
+      state.rng() < 0.5
         ? randomChoice(accusePool.length ? accusePool : allCandidates, state.rng)
         : pickTargetBySuspicion(
             state,
