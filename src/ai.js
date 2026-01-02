@@ -139,23 +139,53 @@ function pickGroupTarget(state, actors, filterFn = () => true) {
 export function buildAiNightActions(state, opts = {}) {
   const includeHuman = opts.includeHuman === true;
   const humanChoice = opts.humanChoice || null;
+  const humanActionsRaw = opts.humanActions || null;
   const human = state.players.find((p) => p.isHuman);
   ensureSuspicion(state);
   const actions = [];
 
+  const humanActionList = [];
+  if (Array.isArray(humanActionsRaw)) {
+    for (const a of humanActionsRaw) {
+      if (a && typeof a.actorId === "number") humanActionList.push(a);
+    }
+  } else if (humanActionsRaw && typeof humanActionsRaw === "object") {
+    for (const [actorIdStr, a] of Object.entries(humanActionsRaw)) {
+      if (!a) continue;
+      const actorId = a.actorId ?? Number(actorIdStr);
+      humanActionList.push({ ...a, actorId });
+    }
+  }
+
+  const pickHumanTarget = (actionType) => {
+    const candidates = humanActionList.filter(
+      (a) => a.type === actionType && typeof a.targetId === "number"
+    );
+    if (!candidates.length) return null;
+    const choiceIdx = Math.floor(state.rng() * candidates.length);
+    return getPlayer(state, candidates[choiceIdx].targetId) || null;
+  };
+
   // Pre-pick a shared killer target to avoid split votes.
   const killerActors = alivePlayers(state).filter((p) => p.role === Roles.KILLER.id && (!p.isHuman || includeHuman));
-  let sharedKillerTarget =
-    state.rng() < 0.6
-      ? pickGroupTarget(state, killerActors, (t) => t.faction !== Faction.RED && t.role !== Roles.KILLER.id)
-      : null;
+  const humanKillerTarget = pickHumanTarget("KILLER_VOTE");
+  let sharedKillerTarget = humanKillerTarget;
+  if (!sharedKillerTarget) {
+    sharedKillerTarget =
+      state.rng() < 0.6
+        ? pickGroupTarget(state, killerActors, (t) => t.faction !== Faction.RED && t.role !== Roles.KILLER.id)
+        : null;
+  }
   // Pre-pick a shared police target to avoid split votes.
   const policeActors = alivePlayers(state).filter((p) => p.role === Roles.POLICE.id && (!p.isHuman || includeHuman));
-  let sharedPoliceTarget = pickGroupTarget(
-    state,
-    policeActors,
-    (t) => t.role !== Roles.POLICE.id
-  );
+  const humanPoliceTarget = pickHumanTarget("POLICE_INVESTIGATE");
+  let sharedPoliceTarget =
+    humanPoliceTarget ||
+    pickGroupTarget(
+      state,
+      policeActors,
+      (t) => t.role !== Roles.POLICE.id
+    );
   if (!sharedPoliceTarget) {
     sharedPoliceTarget = randomChoice(
       alivePlayers(state).filter((t) => t.role !== Roles.POLICE.id),

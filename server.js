@@ -201,6 +201,11 @@ wss.on("connection", (ws) => {
         }
         const seat = room.connections.get(ws);
         if (!seat) return;
+        const actor = room.engine.state.players[seat.playerId];
+        if (!actor?.alive) {
+          send(ws, { type: "error", message: "You are dead and cannot act." });
+          return;
+        }
         if (!msg.action || !msg.action.type) {
           room.nightActions.delete(seat.playerId);
           return;
@@ -212,6 +217,10 @@ wss.on("connection", (ws) => {
       case "resolve_night": {
         if (!ensureHost(ws)) {
           send(ws, { type: "error", message: "Only host can resolve night." });
+          return;
+        }
+        if (!room.engine || room.engine.state.phase !== "NIGHT") {
+          send(ws, { type: "error", message: "Can only resolve during NIGHT." });
           return;
         }
         if (!room.started || !room.engine) return;
@@ -231,6 +240,11 @@ wss.on("connection", (ws) => {
         }
         const seat = room.connections.get(ws);
         if (!seat) return;
+        const actor = room.engine.state.players[seat.playerId];
+        if (!actor?.alive || (actor.role === "BRAT" && actor.status?.bratRevived)) {
+          send(ws, { type: "error", message: "You cannot vote." });
+          return;
+        }
         if (msg.targetId === undefined || msg.targetId === null) {
           room.voteActions.delete(seat.playerId);
         } else {
@@ -245,6 +259,10 @@ wss.on("connection", (ws) => {
       case "resolve_vote": {
         if (!ensureHost(ws)) {
           send(ws, { type: "error", message: "Only host can resolve vote." });
+          return;
+        }
+        if (!room.engine || room.engine.state.phase !== "VOTE") {
+          send(ws, { type: "error", message: "Can only resolve during VOTE." });
           return;
         }
         if (!room.started || !room.engine) return;

@@ -13,6 +13,7 @@ const els = {
   dayDisplay: document.getElementById("dayDisplay"),
   youDisplay: document.getElementById("youDisplay"),
   timerDisplay: document.getElementById("timerDisplay"),
+  victoryDisplay: document.getElementById("victoryDisplay"),
   nightActionType: document.getElementById("nightActionType"),
   nightTarget: document.getElementById("nightTarget"),
   sendNightAction: document.getElementById("sendNightAction"),
@@ -26,6 +27,7 @@ const els = {
   restartBtn: document.getElementById("restartBtn"),
   playersList: document.getElementById("playersList"),
   logText: document.getElementById("logText"),
+  endBanner: document.getElementById("endBanner"),
 };
 
 let ws = null;
@@ -216,16 +218,23 @@ function renderView() {
   els.phaseDisplay.textContent = v.phase || "-";
   els.dayDisplay.textContent = v.dayNumber || "-";
   els.youDisplay.textContent = v.you ? `${v.you.name} (${v.you.role})` : "-";
+  els.victoryDisplay.textContent = v.victory ? `${v.victory.winner} (${v.victory.reason})` : "-";
   // Players list
   els.playersList.innerHTML = "";
   (v.players || []).forEach((p) => {
     const li = document.createElement("div");
     li.className = "player-card" + (p.alive ? "" : " dead");
+    if (!p.alive) {
+      if (p.faction === "BLUE") li.style.color = "#1e90ff";
+      else if (p.faction === "RED") li.style.color = "#e74c3c";
+      else if (p.faction === "GREEN") li.style.color = "#27ae60";
+    }
     li.textContent = `${p.name} | ${p.alive ? "Alive" : "Dead"} | Role: ${p.role} | Faction: ${p.faction}`;
     els.playersList.appendChild(li);
   });
   // Logs
-  const mergedLogs = [...(v.publicLog || [])];
+  const intelLines = (v.privateIntel || []).map((l) => `[INTEL] ${l}`);
+  const mergedLogs = [...intelLines, ...(v.publicLog || [])];
   els.logText.value = mergedLogs.join("\n");
   // Action controls
   const you = v.you;
@@ -241,7 +250,20 @@ function renderView() {
   buildOptions(els.voteTarget, voteOptions, "Abstain");
   // Host controls visibility
   document.getElementById("hostControls").style.display = isHost ? "block" : "none";
+  // Enable/disable controls based on phase/alive
+  const alive = v.you?.alive;
+  const phase = v.phase;
+  const ended = !!v.victory;
+  document.getElementById("nightControls").style.display = phase === "NIGHT" && alive && !ended ? "block" : "none";
+  document.getElementById("voteControls").style.display = phase === "VOTE" && alive && !ended ? "block" : "none";
+  document.getElementById("chatControls").style.display = phase === "DAY" && alive && !ended ? "block" : "none";
+  els.sendNightAction.disabled = !(phase === "NIGHT" && alive && !ended);
+  els.sendVote.disabled = !(phase === "VOTE" && alive && !ended);
+  els.sendChat.disabled = !(phase === "DAY" && alive && !ended);
+  els.resolveNight.disabled = !(isHost && phase === "NIGHT" && !ended);
+  els.resolveVote.disabled = !(isHost && phase === "VOTE" && !ended);
   renderTimer();
+  renderEndBanner();
 }
 
 function renderTimer() {
@@ -252,6 +274,20 @@ function renderTimer() {
   }
   const secs = Math.max(0, Math.round((timerState.msLeft || 0) / 1000));
   els.timerDisplay.textContent = `${timerState.phase} ${secs}s`;
+}
+
+function renderEndBanner() {
+  if (!els.endBanner) return;
+  if (latestView && latestView.victory) {
+    els.endBanner.classList.remove("hidden");
+    els.endBanner.style.fontSize = "32px";
+    els.endBanner.style.fontWeight = "800";
+    els.endBanner.style.color = "#f1c40f";
+    els.endBanner.textContent = `Game Over: ${latestView.victory.winner} - ${latestView.victory.reason}`;
+  } else {
+    els.endBanner.classList.add("hidden");
+    els.endBanner.textContent = "";
+  }
 }
 
 // Event handlers

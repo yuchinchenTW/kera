@@ -104,6 +104,7 @@ export class GameEngine {
     const actions = buildAiNightActions(this.state, {
       includeHuman: opts.includeHuman === true,
       humanChoice: humanAction,
+      humanActions: opts.humanActions,
     });
 
     const humanActionsList = [];
@@ -734,10 +735,11 @@ export class GameEngine {
 
     for (const hv of humanVotesList) {
       if (hv.targetId === null || hv.targetId === undefined) continue;
-      votes[hv.targetId] = (votes[hv.targetId] || 0) + 1;
       const actor = getPlayer(this.state, hv.actorId);
+      if (!actor?.alive || (actor.role === Roles.BRAT.id && actor.status.bratRevived)) continue;
       const target = getPlayer(this.state, hv.targetId);
-      if (actor && target) {
+      if (target) {
+        votes[hv.targetId] = (votes[hv.targetId] || 0) + 1;
         votePairs.push(`${actor.name} -> ${target.name}`);
         voteOrder.push({ actorId: actor.id, targetId: target.id });
       }

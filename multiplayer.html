@@ -30,6 +30,8 @@
         <h2>Lobby</h2>
       </div>
       <ul id="seatsList" class="players-list"></ul>
+      <p class="label">Log</p>
+      <textarea id="logText" class="log-text" readonly></textarea>
     </section>
 
     <section class="panel status">
@@ -52,6 +54,10 @@
         <div>
           <p class="label">Timer</p>
           <p id="timerDisplay" class="value small"></p>
+        </div>
+        <div>
+          <p class="label">Victory</p>
+          <p id="victoryDisplay" class="value small"></p>
         </div>
       </div>
     </section>
@@ -100,8 +106,8 @@
       <div class="panel-header">
         <h2>Game View</h2>
       </div>
+      <div id="endBanner" class="note hidden"></div>
       <div id="playersList" class="last-night"></div>
-      <textarea id="logText" class="log-text" readonly></textarea>
     </section>
   </main>
 
