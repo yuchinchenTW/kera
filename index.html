@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deduction 18 | Single-Player</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <p class="eyebrow" data-i18n="eyebrow">單人社交推理 / Single-Player</p>
+      <h1 data-i18n="title">夜 / 日 18</h1>
+      <p class="sub" data-i18n="subtitle">1 人類 vs 17 AI · 決定性模擬</p>
+    </div>
+    <div class="actions">
+      <select id="localeSelect">
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+      </select>
+      <select id="themeSelect"></select>
+      <button id="restartBtn" data-i18n="newGame">New Game</button>
+      <span id="seedDisplay" class="pill"></span>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="panel status">
+      <div class="status-row">
+        <div>
+          <p class="label" data-i18n="phase">Phase</p>
+          <p id="phaseDisplay" class="value"></p>
+        </div>
+        <div>
+          <p class="label" data-i18n="day">Day</p>
+          <p id="dayDisplay" class="value"></p>
+        </div>
+        <div>
+          <p class="label" data-i18n="youAre">You are</p>
+          <p id="roleDisplay" class="value"></p>
+        </div>
+      </div>
+      <div class="status-row">
+        <div>
+          <p class="label" data-i18n="doctorUsage">Doctor injections</p>
+          <p id="doctorUsage" class="value small"></p>
+        </div>
+        <div>
+          <p class="label" data-i18n="sniperUsage">Sniper shots</p>
+          <p id="sniperUsage" class="value small"></p>
+        </div>
+        <div>
+          <p class="label" data-i18n="victory">Victory</p>
+          <p id="victoryDisplay" class="value small"></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel players">
+      <div class="panel-header">
+        <h2 data-i18n="players">玩家列表</h2>
+      </div>
+      <ul id="playersList" class="players-list"></ul>
+    </section>
+
+    <section class="panel actions">
+      <div class="panel-header">
+        <h2 data-i18n="actions">行動</h2>
+        <span id="actionHint" class="hint"></span>
+      </div>
+      <div id="nightControls" class="controls hidden">
+        <p class="label" data-i18n="nightMove">夜晚行動</p>
+        <div class="control-row">
+          <select id="nightActionType"></select>
+          <select id="nightTarget"></select>
+          <button id="runNightBtn" data-i18n="resolveNight">Resolve Night</button>
+        </div>
+        <p id="nightNote" class="note"></p>
+      </div>
+
+      <div id="dayView" class="controls hidden">
+        <p class="label" data-i18n="discussion">白天討論</p>
+        <div id="chatLines" class="chat"></div>
+        <button id="toVoteBtn" data-i18n="toVote">Go to Vote</button>
+      </div>
+
+      <div id="voteControls" class="controls hidden">
+        <p class="label" data-i18n="publicVote">公開投票</p>
+        <div class="control-row">
+          <select id="voteTarget"></select>
+          <input id="lastWordsInput" placeholder="遺言（若被處決時使用）" maxlength="64" />
+          <button id="runVoteBtn" data-i18n="resolveVote">結算投票</button>
+        </div>
+        <p class="note" data-i18n="voteNote">多數決（>50%）處決；無多數則執行最高票。</p>
+      </div>
+
+      <div id="endView" class="controls hidden">
+        <p class="label" data-i18n="gameOver">遊戲結束</p>
+        <p id="endSummary"></p>
+      </div>
+    </section>
+
+    <section class="panel log">
+      <div class="panel-header">
+        <h2 data-i18n="events">事件紀錄</h2>
+      </div>
+      <div id="intelBox" class="intel"></div>
+      <div id="lastNight" class="last-night"></div>
+      <ol id="logList" class="log-list"></ol>
+    </section>
+  </main>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
