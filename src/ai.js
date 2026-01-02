@@ -14,7 +14,8 @@ function ensureSuspicion(state) {
       if (targetId === p.id) continue;
       const target = getPlayer(state, targetId);
       const sameFaction = target?.faction === p.faction;
-      const base = 0.35 + state.rng() * 0.4 - (sameFaction ? 0.2 : 0);
+      const baseStart = p.faction === Faction.BLUE ? 0.4 : 0.35;
+      const base = baseStart + state.rng() * 0.35 - (sameFaction ? 0.15 : 0);
       if (p.aiMemory.suspicion[targetId] === undefined) {
         p.aiMemory.suspicion[targetId] = clamp(base, 0.05, 0.95);
       } else {
@@ -80,29 +81,23 @@ export function buildAiNightActions(state, opts = {}) {
 
   // Pre-pick a shared killer target to avoid split votes.
   const killerActors = alivePlayers(state).filter((p) => p.role === Roles.KILLER.id && (!p.isHuman || includeHuman));
-  let sharedKillerTarget = pickGroupTarget(
-    state,
-    killerActors,
-    (t) => t.faction !== Faction.RED && t.role !== Roles.KILLER.id
-  );
-  if (
-    humanChoice &&
-    human?.role === Roles.KILLER.id &&
-    typeof humanChoice.targetId === "number" &&
-    state.rng() < 0.75
-  ) {
-    sharedKillerTarget = getPlayer(state, humanChoice.targetId) || sharedKillerTarget;
-  }
+  let sharedKillerTarget =
+    state.rng() < 0.6
+      ? pickGroupTarget(state, killerActors, (t) => t.faction !== Faction.RED && t.role !== Roles.KILLER.id)
+      : null;
   // Pre-pick a shared police target to avoid split votes.
   const policeActors = alivePlayers(state).filter((p) => p.role === Roles.POLICE.id && (!p.isHuman || includeHuman));
-  let sharedPoliceTarget =
-    state.rng() < 0.45
-      ? null
-      : pickGroupTarget(
-          state,
-          policeActors,
-          (t) => t.role !== Roles.POLICE.id
-        );
+  let sharedPoliceTarget = pickGroupTarget(
+    state,
+    policeActors,
+    (t) => t.role !== Roles.POLICE.id
+  );
+  if (!sharedPoliceTarget) {
+    sharedPoliceTarget = randomChoice(
+      alivePlayers(state).filter((t) => t.role !== Roles.POLICE.id),
+      state.rng
+    );
+  }
   if (
     humanChoice &&
     human?.role === Roles.POLICE.id &&
@@ -118,9 +113,7 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.POLICE.id: {
         const target =
           sharedPoliceTarget ||
-          (state.rng() < 0.5
-            ? randomChoice(alivePlayers(state).filter((t) => t.role !== Roles.POLICE.id), state.rng)
-            : pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.POLICE.id));
+          pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.POLICE.id);
         if (target) actions.push({ actorId: actor.id, type: "POLICE_INVESTIGATE", targetId: target.id });
         break;
       }
@@ -265,13 +258,20 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     // if police found a red, only police use it to focus vote
     if (state.policeRevealedRed !== null && actor.role === Roles.POLICE.id) {
       const redTarget = getPlayer(state, state.policeRevealedRed);
-      if (redTarget?.alive && state.rng() < 0.99) {
+      if (redTarget?.alive) {
+        votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
+        return;
+      }
+    }
+    if (state.policeRevealedRed !== null && actor.faction === Faction.BLUE && actor.role !== Roles.POLICE.id) {
+      const redTarget = getPlayer(state, state.policeRevealedRed);
+      if (redTarget?.alive && state.rng() < 0.7) {
         votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
         return;
       }
     }
     const pruned =
-      actor.faction === Faction.RED && state.rng() >= 0.15
+      actor.faction === Faction.RED && state.rng() >= 0.05
         ? everyone.filter((t) => t.faction !== Faction.RED)
         : everyone;
     const candidates = pruned.length ? pruned : everyone;
@@ -304,7 +304,7 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
 export function generateChatLines(state, maxLines = 6) {
   const lines = [];
   const living = alivePlayers(state).filter((p) => !p.isHuman);
-  const redFound = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
+    const redFound = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
   for (const speaker of living) {
     if (lines.length >= maxLines) break;
     const allCandidates = alivePlayers(state).filter((t) => t.id !== speaker.id);

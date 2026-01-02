@@ -12,7 +12,7 @@ export const Roles = {
     name: "Doctor",
     faction: Faction.BLUE,
     hasNightAction: true,
-    maxInjections: 4,
+    maxInjections: 6,
     emptyKillsAt: 2,
     revivableCauses: ["KILLER_MURDER", "KIDNAP_EXECUTION", "EXORCIST_PETRIFY"],
     nonRevivableCauses: ["SNIPER_HEADSHOT", "TERROR_BOMB", "ARSON_BURN", "ZOMBIE_FATAL"],

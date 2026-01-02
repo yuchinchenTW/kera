@@ -368,7 +368,7 @@ export class GameEngine {
     const killersAlive = alivePlayers(this.state).filter((p) => p.role === Roles.KILLER.id && !actorBlocked(p)).length;
     const killerNeeded = Math.floor(killersAlive / 2) + 1;
     let killerDecision = majorityTarget(killerVotes, killerNeeded);
-    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.3) {
+    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.2) {
       const pool = alivePlayers(this.state).filter(
         (p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id && !isUntargetable(p) && !p.status.purified
       );
@@ -376,7 +376,7 @@ export class GameEngine {
         killerDecision = { targetId: pool[0].id, count: killerNeeded };
       }
     }
-    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.3) {
+    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.2) {
       const pool = alivePlayers(this.state).filter((p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id);
       if (pool.length) killerDecision = { targetId: pool[0].id, count: killerNeeded };
     }
