@@ -262,6 +262,16 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     const roll = state.rng();
     const jitter = (val) => clamp(val + (state.rng() - 0.5) * 0.3, 0, 1);
     const everyone = alivePlayers(state).filter((t) => t.id !== actor.id && t.alive && t.id !== humanVoteTargetId);
+    // if police found a red, blues prefer to vote them
+    if (state.policeRevealedRed !== null) {
+      const redTarget = getPlayer(state, state.policeRevealedRed);
+      if (redTarget?.alive) {
+        if (actor.faction === Faction.BLUE && state.rng() < 0.99) {
+          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
+          return;
+        }
+      }
+    }
     const pruned =
       actor.faction === Faction.RED ? everyone.filter((t) => t.faction !== Faction.RED) : everyone;
     const candidates = pruned.length ? pruned : everyone;
@@ -294,6 +304,7 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
 export function generateChatLines(state, maxLines = 6) {
   const lines = [];
   const living = alivePlayers(state).filter((p) => !p.isHuman);
+  const redFound = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
   for (const speaker of living) {
     if (lines.length >= maxLines) break;
     const allCandidates = alivePlayers(state).filter((t) => t.id !== speaker.id);
@@ -314,14 +325,18 @@ export function generateChatLines(state, maxLines = 6) {
             speaker,
             (t) => t.alive && t.id !== speaker.id && (accusePool.includes(t) || accusePool.length === 0)
           );
-    const suspicion = speaker.aiMemory?.suspicion?.[target?.id] ?? 0.5;
+    let useTarget = target;
+    if (redFound?.alive && speaker.faction === Faction.BLUE && state.rng() < 0.99) {
+      useTarget = redFound;
+    }
+    const suspicion = speaker.aiMemory?.suspicion?.[useTarget?.id] ?? 0.5;
     const tone = suspicion > 0.7 ? "accuses" : suspicion < 0.3 && defendPool.length ? "defends" : "wonders";
     const line =
       tone === "accuses"
-        ? `${speaker.name}: ${target?.name ?? "someone"} feels off.`
+        ? `${speaker.name}: ${useTarget?.name ?? "someone"} feels off.`
         : tone === "defends"
-        ? `${speaker.name}: ${(defendPool[0]?.name ?? target?.name) || "someone"} seems fine to me.`
-        : `${speaker.name}: What's everyone thinking about ${target?.name ?? "this"}?`;
+        ? `${speaker.name}: ${(defendPool[0]?.name ?? useTarget?.name) || "someone"} seems fine to me.`
+        : `${speaker.name}: What's everyone thinking about ${useTarget?.name ?? "this"}?`;
     lines.push(line);
   }
   return lines;

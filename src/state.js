@@ -86,6 +86,7 @@ export function createInitialState(seed = Date.now(), themeId = Theme.GOOD_VS_EV
       berserk: false,
       triggerFaction: null,
     },
+    policeRevealedRed: null,
     victory: null,
     lastNightSummary: [],
   };
@@ -120,6 +121,7 @@ export function markDeath(state, playerId, cause) {
   player.deathCause = cause;
   state.aliveIds = state.players.filter((p) => p.alive).map((p) => p.id);
   if (!state.deadIds.includes(playerId)) state.deadIds.push(playerId);
+  if (state.policeRevealedRed === playerId) state.policeRevealedRed = null;
   addPublicLog(state, `${player.name} died (${formatDeathCause(cause)}).`);
 }
 

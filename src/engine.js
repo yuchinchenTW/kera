@@ -411,6 +411,9 @@ export class GameEngine {
           "police",
           `Investigation result: ${target.name} is ${target.faction === Faction.RED ? "RED" : target.faction === Faction.GREEN ? "GREEN" : "BLUE"}`
         );
+        if (target.faction === Faction.RED && target.alive) {
+          this.state.policeRevealedRed = target.id;
+        }
         // Kidnapper ransom kill
         const kidnapVictim = kidnapMap[target.id];
         if (kidnapVictim !== undefined) {
