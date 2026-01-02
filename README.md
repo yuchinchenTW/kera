@@ -14,22 +14,32 @@ python -m http.server 8000
 2) Open `http://localhost:8000/` and click **New Game**.
 
 ## Multiplayer (experimental)
-- Centralized WebSocket server; humans connect, empty seats are filled by **hard** AI.
-- Install deps and start server:
-  ```bash
-  npm install
-  npm run start   # ws://localhost:3001
-  ```
-- Web lobby: host the repo statically (same as single-player) and open `multiplayer.html`. Enter server URL + name -> Join. Host clicks Start.
-- Client protocol (JSON over ws) for manual testing:
-  - `{"type":"join","name":"Alice"}` joins lobby (first join becomes host).
-  - Host: `{"type":"start","theme":"GOOD_VS_EVIL"}` start; seats lock.
-  - Night action: `{"type":"night_action","action":{"type":"POLICE_INVESTIGATE","targetId":3}}`
-  - Vote: `{"type":"vote","targetId":5,"lastWords":"gg"}` (omit `targetId` to abstain).
-  - Host resolves: `{"type":"resolve_night"}` / `{"type":"resolve_vote"}`.
-  - Day chat: `{"type":"chat","text":"..."}` (only during DAY).
-- Server pushes per-player masked views: `{"type":"view", view}`, plus `lobby`, `started`, `phase` events.
-- Max 18 seats; restart: host sends `{"type":"restart"}` then `start` again.
+- Centralized WebSocket server; humans connect,空位由 **hard** AI 補滿。
+- Host 準備：
+  1) 開裁判伺服器：  
+     ```bash
+     npm install
+     npm run start   # 預設 ws://<host>:3001
+     ```
+  2) 開靜態檔案（供所有玩家開網頁）：  
+     ```bash
+     python -m http.server 8000
+     ```  
+     玩家用瀏覽器開 `http://<host>:8000/multiplayer.html`。
+- 玩家加入：
+  1) 在頁面輸入 WS URL（例如 `ws://<host>:3001`）與名字。  
+  2) 按 Join。第一個加入者自動成為 Host。  
+  3) Host 選擇 Theme，按 Start 開局。  
+  4) 夜晚送夜行動；白天聊天；投票階段送投票/遺言。倒數結束會自動結算（Host 也可手動 Resolve）。  
+  5) 遊戲結束後可由 Host 按 Restart，再按 Start 重開。
+- 備註：請確保 3001 (WS) 與 8000 (靜態頁) 允許 LAN/FW 通行；最多 18 人，座位鎖定後缺席者自動補 AI。
+- 若要手動測試協議（無 UI）：JSON over ws
+  - `{"type":"join","name":"Alice"}`
+  - Host: `{"type":"start","theme":"GOOD_VS_EVIL"}`
+  - 夜行動：`{"type":"night_action","action":{"type":"POLICE_INVESTIGATE","targetId":3}}`
+  - 投票：`{"type":"vote","targetId":5,"lastWords":"gg"}`
+  - Host 結算：`{"type":"resolve_night"}` / `{"type":"resolve_vote"}`
+  - 白天聊天：`{"type":"chat","text":"hi"}` (DAY)
 
 ## Gameplay Highlights
 - 18 players fixed: 1 human + 17 AI.
