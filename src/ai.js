@@ -13,6 +13,7 @@ function ensureSuspicion(state) {
   const humanFaction = human?.faction || null;
   const opposingFaction =
     humanFaction === Faction.RED ? Faction.BLUE : humanFaction === Faction.BLUE ? Faction.RED : null;
+  const revealedRed = state.policeRevealedRed;
   const lastVoteHist = state.history?.votes?.[state.history.votes.length - 1] || null;
   const mentionMax = lastVoteHist?.mentions ? Math.max(1, ...Object.values(lastVoteHist.mentions)) : 1;
   const flipSet = new Set(lastVoteHist?.flips || []);
@@ -62,15 +63,14 @@ function ensureSuspicion(state) {
         const bandwagon = tallyScore / maxTally;
         delta += 0.08 * bandwagon * diffScale;
       }
-      // Difficulty-based bias toward opposing the human
-      if (humanFaction) {
-        if (state.difficulty === "hard") {
-          if (target?.faction === humanFaction) delta += 0.05 * diffScale;
-          else if (opposingFaction && target?.faction === opposingFaction) delta -= 0.02 * diffScale;
-        } else if (state.difficulty === "nightmare") {
-          if (target?.faction === humanFaction) delta += 0.12 * diffScale;
-          else if (opposingFaction && target?.faction === opposingFaction) delta -= 0.05 * diffScale;
-        }
+      // Police investigation: if a red is revealed, boost suspicion for blue-side actors
+      if (revealedRed && targetId === revealedRed && p.faction === Faction.BLUE) {
+        delta += 0.25 * diffScale;
+      }
+      // Difficulty-based bias toward opposing the human (only on nightmare)
+      if (humanFaction && target?.faction && state.difficulty === "nightmare") {
+        if (target.faction === humanFaction) delta += 0.12 * diffScale;
+        else if (opposingFaction && target.faction === opposingFaction) delta -= 0.05 * diffScale;
       }
       p.aiMemory.suspicion[targetId] = clamp(p.aiMemory.suspicion[targetId] + delta, 0.01, 0.99);
     }
@@ -343,7 +343,7 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
     if (state.policeRevealedRed !== null && actor.faction === Faction.BLUE && actor.role !== Roles.POLICE.id) {
       const redTarget = getPlayer(state, state.policeRevealedRed);
-      if (redTarget?.alive && state.rng() < 0.38) {
+      if (redTarget?.alive && state.rng() < 0.7) {
         votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
         return;
       }
@@ -363,17 +363,10 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         const base = jitter(actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
         const chatBonus = actor.role !== Roles.POLICE.id ? chatWeight(t.id) * 0.05 : 0;
         let s = clamp(base + chatBonus, 0, 1);
-        // Nightmare bias: opposing faction gets more focus on the human side
+        // Difficulty bias: opposing the human only on nightmare
         const human = state.players.find((p) => p.isHuman);
         if (human) {
-          if (state.difficulty === "hard") {
-            if (actor.faction !== human.faction && t.faction === human.faction) {
-              s += 0.05;
-            }
-            if (actor.faction === human.faction && t.faction === actor.faction) {
-              s -= 0.02;
-            }
-          } else if (state.difficulty === "nightmare") {
+          if (state.difficulty === "nightmare") {
             if (actor.faction !== human.faction && t.faction === human.faction) {
               s += 0.1;
             }
