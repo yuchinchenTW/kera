@@ -62,8 +62,8 @@ function updateWinrateHint(state) {
 }
 
 export class GameEngine {
-  constructor(seed = Date.now(), themeId = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
-    this.state = createInitialState(seed, themeId, difficulty);
+  constructor(seed = Date.now(), themeId = Theme.GOOD_VS_EVIL.id, difficulty = "normal", opts = {}) {
+    this.state = createInitialState(seed, themeId, difficulty, opts);
     this.state.lastNightSummary = [];
     updateWinrateHint(this.state);
   }
@@ -105,8 +105,34 @@ export class GameEngine {
       includeHuman: opts.includeHuman === true,
       humanChoice: humanAction,
     });
+
+    const humanActionsList = [];
     if (humanAction) {
-      actions.push({ ...humanAction, actorId: this.human()?.id });
+      const singleHuman = this.human();
+      const actorId = humanAction.actorId ?? singleHuman?.id;
+      if (actorId !== undefined && actorId !== null) {
+        humanActionsList.push({ ...humanAction, actorId });
+      }
+    }
+    if (opts.humanActions) {
+      if (Array.isArray(opts.humanActions)) {
+        for (const entry of opts.humanActions) {
+          if (!entry) continue;
+          const actorId = entry.actorId ?? null;
+          if (actorId !== null && actorId !== undefined) {
+            humanActionsList.push({ ...entry, actorId });
+          }
+        }
+      } else {
+        for (const [actorIdStr, entry] of Object.entries(opts.humanActions)) {
+          if (!entry) continue;
+          const actorId = entry.actorId ?? Number(actorIdStr);
+          humanActionsList.push({ ...entry, actorId });
+        }
+      }
+    }
+    for (const ha of humanActionsList) {
+      if (ha && typeof ha.actorId === "number") actions.push(ha);
     }
 
     const controlActions = [];
@@ -683,17 +709,41 @@ export class GameEngine {
       }
     }
 
+    const lastWordsByPlayer = opts.lastWordsByPlayer || {};
+    const humanVotesList = [];
     const human = this.human();
     if (human?.alive && humanVoteTargetId !== null) {
-      votes[humanVoteTargetId] = (votes[humanVoteTargetId] || 0) + 1;
-      const target = getPlayer(this.state, humanVoteTargetId);
-      if (target) {
-        votePairs.push(`${human.name} -> ${target.name}`);
-        voteOrder.push({ actorId: human.id, targetId: target.id });
+      humanVotesList.push({ actorId: human.id, targetId: humanVoteTargetId });
+    }
+    if (opts.humanVotes) {
+      if (Array.isArray(opts.humanVotes)) {
+        for (const v of opts.humanVotes) {
+          if (v && typeof v.actorId === "number" && v.targetId !== undefined) {
+            humanVotesList.push({ actorId: v.actorId, targetId: v.targetId });
+          }
+        }
+      } else {
+        for (const [actorIdStr, targetId] of Object.entries(opts.humanVotes)) {
+          const actorId = Number(actorIdStr);
+          if (!Number.isNaN(actorId)) {
+            humanVotesList.push({ actorId, targetId });
+          }
+        }
       }
     }
 
-    const aiVotes = buildAiVoteActions(this.state, humanVoteTargetId, { includeHuman: opts.includeHuman === true });
+    for (const hv of humanVotesList) {
+      if (hv.targetId === null || hv.targetId === undefined) continue;
+      votes[hv.targetId] = (votes[hv.targetId] || 0) + 1;
+      const actor = getPlayer(this.state, hv.actorId);
+      const target = getPlayer(this.state, hv.targetId);
+      if (actor && target) {
+        votePairs.push(`${actor.name} -> ${target.name}`);
+        voteOrder.push({ actorId: actor.id, targetId: target.id });
+      }
+    }
+
+    const aiVotes = buildAiVoteActions(this.state, null, { includeHuman: opts.includeHuman === true });
     for (const v of aiVotes) {
       votes[v.targetId] = (votes[v.targetId] || 0) + 1;
       const actor = getPlayer(this.state, v.actorId);
@@ -759,9 +809,12 @@ export class GameEngine {
           target.status.bratRevived = true;
           target.status.bratRevealed = true;
           addPublicLog(this.state, `${target.name} revealed as Brat and revived (loses voting power).`);
-        } else if (target.isHuman && humanLastWords?.trim() && target.deathCause !== DeathCause.TERROR_BOMB) {
-          target.lastWords = humanLastWords.trim().slice(0, 64);
-          addPublicLog(this.state, `Last words: "${target.lastWords}"`);
+        } else if (target.isHuman) {
+          const candidate = lastWordsByPlayer[target.id] ?? humanLastWords;
+          if (typeof candidate === "string" && candidate.trim() && target.deathCause !== DeathCause.TERROR_BOMB) {
+            target.lastWords = candidate.trim().slice(0, 64);
+            addPublicLog(this.state, `Last words: "${target.lastWords}"`);
+          }
         }
       }
     } else {
