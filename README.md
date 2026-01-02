@@ -1,3 +1,14 @@
+## Disclaimer
+This project is an original, non-commercial technical prototype for learning and experimentation.
+It does not use or include any assets, code, data, or materials from any existing commercial games.
+Any similarities are purely coincidental.
+
+
+## 聲明
+本專案為原創、非商業之技術試作與學習用途，
+未使用任何現有商業遊戲之素材、程式碼或資料，
+與任何既有作品無任何關聯。
+
 # Night / Day 18 (Single-Player)
 
 Single-player social deduction: 1 human + 17 AI, multiple themes/roles, deterministic night/day loop.
