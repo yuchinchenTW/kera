@@ -87,6 +87,7 @@ export function createInitialState(seed = Date.now(), themeId = Theme.GOOD_VS_EV
       triggerFaction: null,
     },
     policeRevealedRed: null,
+    chatLoggedForDay: null,
     victory: null,
     lastNightSummary: [],
   };

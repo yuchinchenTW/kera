@@ -377,6 +377,16 @@ function renderLog() {
   for (const entry of translateLines(engine.state.publicLog)) {
     const li = document.createElement("li");
     li.textContent = entry;
+    if (entry.startsWith("Votes:")) {
+      li.classList.add("multiline");
+      li.textContent = "";
+      const lines = translateLines(entry.split("\n"));
+      lines.forEach((ln) => {
+        const div = document.createElement("div");
+        div.textContent = ln;
+        li.appendChild(div);
+      });
+    }
     el.logList.appendChild(li);
   }
   el.lastNight.innerHTML = "";
@@ -401,7 +411,12 @@ function renderChat() {
     el.chatLines.appendChild(p);
     return;
   }
-  for (const line of translateLines(engine.state.dayChat)) {
+  const translated = translateLines(engine.state.dayChat);
+  if (engine.state.chatLoggedForDay !== engine.state.dayNumber) {
+    translated.forEach((line) => engine.state.publicLog.push(line));
+    engine.state.chatLoggedForDay = engine.state.dayNumber;
+  }
+  for (const line of translated) {
     const p = document.createElement("p");
     p.textContent = line;
     el.chatLines.appendChild(p);

@@ -358,7 +358,7 @@ export class GameEngine {
     const killersAlive = alivePlayers(this.state).filter((p) => p.role === Roles.KILLER.id && !actorBlocked(p)).length;
     const killerNeeded = Math.floor(killersAlive / 2) + 1;
     let killerDecision = majorityTarget(killerVotes, killerNeeded);
-    if (!killerDecision && killersAlive > 0) {
+    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.3) {
       const pool = alivePlayers(this.state).filter(
         (p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id && !isUntargetable(p) && !p.status.purified
       );
@@ -366,7 +366,7 @@ export class GameEngine {
         killerDecision = { targetId: pool[0].id, count: killerNeeded };
       }
     }
-    if (!killerDecision && killersAlive > 0) {
+    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.3) {
       const pool = alivePlayers(this.state).filter((p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id);
       if (pool.length) killerDecision = { targetId: pool[0].id, count: killerNeeded };
     }
@@ -619,6 +619,10 @@ export class GameEngine {
 
     this.state.phase = Phase.DAY;
     this.state.dayChat = generateChatLines(this.state);
+    this.state.chatLoggedForDay = this.state.dayNumber;
+    for (const line of this.state.dayChat) {
+      this.state.publicLog.push(line);
+    }
 
     const victory = checkVictory(this.state);
     if (victory) this.state.phase = Phase.END;
@@ -648,7 +652,7 @@ export class GameEngine {
     }
 
     if (votePairs.length) {
-      addPublicLog(this.state, `Votes: ${votePairs.join(", ")}`);
+      addPublicLog(this.state, `Votes:\n${votePairs.map((v) => `- ${v}`).join("\n")}`);
     }
 
     let result = majorityTarget(votes, needed);

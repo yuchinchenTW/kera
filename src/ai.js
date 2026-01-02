@@ -262,18 +262,18 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     const roll = state.rng();
     const jitter = (val) => clamp(val + (state.rng() - 0.5) * 0.3, 0, 1);
     const everyone = alivePlayers(state).filter((t) => t.id !== actor.id && t.alive && t.id !== humanVoteTargetId);
-    // if police found a red, blues prefer to vote them
-    if (state.policeRevealedRed !== null) {
+    // if police found a red, only police use it to focus vote
+    if (state.policeRevealedRed !== null && actor.role === Roles.POLICE.id) {
       const redTarget = getPlayer(state, state.policeRevealedRed);
-      if (redTarget?.alive) {
-        if (actor.faction === Faction.BLUE && state.rng() < 0.99) {
-          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
-          return;
-        }
+      if (redTarget?.alive && state.rng() < 0.99) {
+        votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
+        return;
       }
     }
     const pruned =
-      actor.faction === Faction.RED ? everyone.filter((t) => t.faction !== Faction.RED) : everyone;
+      actor.faction === Faction.RED && state.rng() >= 0.15
+        ? everyone.filter((t) => t.faction !== Faction.RED)
+        : everyone;
     const candidates = pruned.length ? pruned : everyone;
     let target = null;
     if (roll < 0.6) {
@@ -326,8 +326,12 @@ export function generateChatLines(state, maxLines = 6) {
             (t) => t.alive && t.id !== speaker.id && (accusePool.includes(t) || accusePool.length === 0)
           );
     let useTarget = target;
-    if (redFound?.alive && speaker.faction === Faction.BLUE && state.rng() < 0.99) {
+    if (redFound?.alive && speaker.role === Roles.POLICE.id && state.rng() < 0.8) {
       useTarget = redFound;
+    }
+    if (speaker.faction === Faction.RED && state.rng() < 0.75) {
+      const nonRed = allCandidates.filter((t) => t.faction !== Faction.RED);
+      if (nonRed.length) useTarget = randomChoice(nonRed, state.rng);
     }
     const suspicion = speaker.aiMemory?.suspicion?.[useTarget?.id] ?? 0.5;
     const tone = suspicion > 0.7 ? "accuses" : suspicion < 0.3 && defendPool.length ? "defends" : "wonders";
