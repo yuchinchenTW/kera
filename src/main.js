@@ -30,6 +30,18 @@ const el = {
   runVoteBtn: document.getElementById("runVoteBtn"),
   playerChatInput: document.getElementById("playerChatInput"),
   sendChatBtn: document.getElementById("sendChatBtn"),
+  killerChatBox: document.getElementById("killerChatBox"),
+  killerChatLines: document.getElementById("killerChatLines"),
+  killerChatInput: document.getElementById("killerChatInput"),
+  sendKillerChatBtn: document.getElementById("sendKillerChatBtn"),
+  policeChatBox: document.getElementById("policeChatBox"),
+  policeChatLines: document.getElementById("policeChatLines"),
+  policeChatInput: document.getElementById("policeChatInput"),
+  sendPoliceChatBtn: document.getElementById("sendPoliceChatBtn"),
+  policeChatBox: document.getElementById("policeChatBox"),
+  policeChatLines: document.getElementById("policeChatLines"),
+  policeChatInput: document.getElementById("policeChatInput"),
+  sendPoliceChatBtn: document.getElementById("sendPoliceChatBtn"),
   logText: document.getElementById("logText"),
   lastNight: document.getElementById("lastNight"),
   endView: document.getElementById("endView"),
@@ -62,6 +74,12 @@ const translations = {
     resolveNight: "Resolve Night",
     discussion: "Discussion",
     sendChat: "Send",
+    killerChat: "Killer channel (private)",
+    sendKillerChat: "Send (killers)",
+    killerChatPlaceholder: "Private killer chat...",
+    policeChat: "Police channel (private)",
+    sendPoliceChat: "Send (police)",
+    policeChatPlaceholder: "Private police chat...",
     chatPlaceholder: "Say something...",
     diffEasy: "Easy",
     diffNormal: "Normal",
@@ -120,6 +138,12 @@ const translations = {
     resolveNight: "結算夜晚",
     discussion: "白天討論",
     sendChat: "發言",
+    killerChat: "殺手頻道（私聊）",
+    sendKillerChat: "發送（殺手）",
+    killerChatPlaceholder: "殺手私聊訊息...",
+    policeChat: "警察頻道（私聊）",
+    sendPoliceChat: "發送（警察）",
+    policeChatPlaceholder: "警察私聊訊息...",
     chatPlaceholder: "輸入你的發言…",
     diffEasy: "簡單",
     diffNormal: "一般",
@@ -469,6 +493,48 @@ function renderChat() {
   }
 }
 
+function renderKillerChat() {
+  if (!el.killerChatBox) return;
+  const human = engine.human();
+  const isKiller = human?.role === Roles.KILLER.id && human.alive;
+  el.killerChatBox.classList.toggle("hidden", !(engine.state.phase === Phase.DAY && isKiller));
+  if (!isKiller) return;
+  const lines = engine.state.killerChat || [];
+  el.killerChatLines.innerHTML = "";
+  if (!lines.length) {
+    const p = document.createElement("p");
+    p.textContent = translations[locale].noChat;
+    el.killerChatLines.appendChild(p);
+    return;
+  }
+  for (const line of lines.slice(-10)) {
+    const p = document.createElement("p");
+    p.textContent = line;
+    el.killerChatLines.appendChild(p);
+  }
+}
+
+function renderPoliceChat() {
+  if (!el.policeChatBox) return;
+  const human = engine.human();
+  const isPolice = human?.role === Roles.POLICE.id && human.alive;
+  el.policeChatBox.classList.toggle("hidden", !(engine.state.phase === Phase.DAY && isPolice));
+  if (!isPolice) return;
+  const lines = engine.state.policeChat || [];
+  el.policeChatLines.innerHTML = "";
+  if (!lines.length) {
+    const p = document.createElement("p");
+    p.textContent = translations[locale].noChat;
+    el.policeChatLines.appendChild(p);
+    return;
+  }
+  for (const line of lines.slice(-10)) {
+    const p = document.createElement("p");
+    p.textContent = line;
+    el.policeChatLines.appendChild(p);
+  }
+}
+
 function sendPlayerChat() {
   const input = el.playerChatInput;
   if (!input || engine.state.phase !== Phase.DAY) return;
@@ -478,6 +544,38 @@ function sendPlayerChat() {
   const line = `${human.name}: ${text}`;
   engine.state.dayChat.push(line);
   engine.state.publicLog.push(line);
+  input.value = "";
+  render();
+}
+
+function sendKillerChat() {
+  const input = el.killerChatInput;
+  if (!input || engine.state.phase !== Phase.DAY) return;
+  const human = engine.human();
+  if (!human || human.role !== Roles.KILLER.id || !human.alive) return;
+  const text = (input.value || "").trim();
+  if (!text) return;
+  const line = `${human.name}: ${text}`;
+  engine.state.killerChat = engine.state.killerChat || [];
+  engine.state.killerChat.push(line);
+  engine.state.privateLogs.killer = engine.state.privateLogs.killer || [];
+  engine.state.privateLogs.killer.push(line);
+  input.value = "";
+  render();
+}
+
+function sendPoliceChat() {
+  const input = el.policeChatInput;
+  if (!input || engine.state.phase !== Phase.DAY) return;
+  const human = engine.human();
+  if (!human || human.role !== Roles.POLICE.id || !human.alive) return;
+  const text = (input.value || "").trim();
+  if (!text) return;
+  const line = `${human.name}: ${text}`;
+  engine.state.policeChat = engine.state.policeChat || [];
+  engine.state.policeChat.push(line);
+  engine.state.privateLogs.police = engine.state.privateLogs.police || [];
+  engine.state.privateLogs.police.push(line);
   input.value = "";
   render();
 }
@@ -495,6 +593,14 @@ function renderControls() {
   }
   if (el.sendChatBtn) {
     el.sendChatBtn.disabled = phase !== Phase.DAY || !alive;
+  }
+  if (el.sendKillerChatBtn) {
+    const canKillerChat = phase === Phase.DAY && alive && human?.role === Roles.KILLER.id;
+    el.sendKillerChatBtn.disabled = !canKillerChat;
+  }
+  if (el.sendPoliceChatBtn) {
+    const canPoliceChat = phase === Phase.DAY && alive && human?.role === Roles.POLICE.id;
+    el.sendPoliceChatBtn.disabled = !canPoliceChat;
   }
 
   if (phase === Phase.NIGHT) {
@@ -569,6 +675,8 @@ function renderControls() {
 
   if (phase === Phase.DAY) {
     renderChat();
+    renderKillerChat();
+    renderPoliceChat();
   }
 
   if (phase === Phase.VOTE) {
@@ -645,6 +753,8 @@ function init() {
       resetGame();
     });
   }
+  if (el.sendKillerChatBtn) el.sendKillerChatBtn.addEventListener("click", sendKillerChat);
+  if (el.sendPoliceChatBtn) el.sendPoliceChatBtn.addEventListener("click", sendPoliceChat);
   applyLocaleText();
   resetGame();
 }

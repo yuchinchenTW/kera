@@ -84,6 +84,10 @@ export function createInitialState(
       killer: [],
       grudge: [],
     },
+    killerChat: [],
+    policeChat: [],
+    killerChat: [],
+    killerChat: [],
     pendingActions: {
       night: [],
       vote: [],

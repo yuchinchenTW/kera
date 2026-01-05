@@ -55,6 +55,8 @@ export function buildPlayerView(state, playerId) {
     players,
     publicLog: [...state.publicLog],
     lastNightSummary: [...state.lastNightSummary],
+    killerChat: viewer.role === Roles.KILLER.id ? [...(state.killerChat || [])] : [],
+    policeChat: viewer.role === Roles.POLICE.id ? [...(state.policeChat || [])] : [],
     privateIntel,
     winrateHint: state.winrateHint,
     usage: { ...state.usage },

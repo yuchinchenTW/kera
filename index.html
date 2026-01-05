@@ -94,6 +94,18 @@
         <div id="chatLines" class="chat"></div>
         <textarea id="playerChatInput" class="chat-input" rows="3" placeholder="Say something..."></textarea>
         <button id="sendChatBtn" data-i18n="sendChat">Send</button>
+        <div id="killerChatBox" class="controls hidden">
+          <p class="label" data-i18n="killerChat">Killer channel (private)</p>
+          <div id="killerChatLines" class="chat"></div>
+          <textarea id="killerChatInput" class="chat-input" rows="2" placeholder="Private killer chat..."></textarea>
+          <button id="sendKillerChatBtn" data-i18n="sendKillerChat">Send (killers)</button>
+        </div>
+        <div id="policeChatBox" class="controls hidden">
+          <p class="label" data-i18n="policeChat">Police channel (private)</p>
+          <div id="policeChatLines" class="chat"></div>
+          <textarea id="policeChatInput" class="chat-input" rows="2" placeholder="Private police chat..."></textarea>
+          <button id="sendPoliceChatBtn" data-i18n="sendPoliceChat">Send (police)</button>
+        </div>
         <button id="toVoteBtn" data-i18n="toVote">Go to Vote</button>
       </div>
 

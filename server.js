@@ -332,8 +332,8 @@ wss.on("connection", (ws) => {
         break;
       }
       case "chat": {
-        if (!room.started || !room.engine || room.engine.state.phase !== "DAY") {
-          send(ws, { type: "error", message: "Chat only allowed in day discussion." });
+        if (!room.started || !room.engine || (room.engine.state.phase !== "DAY" && room.engine.state.phase !== "NIGHT")) {
+          send(ws, { type: "error", message: "Chat only allowed in day or night discussion." });
           return;
         }
         const seat = room.connections.get(ws);
@@ -345,6 +345,50 @@ wss.on("connection", (ws) => {
         room.engine.state.dayChat.push(line);
         room.engine.state.publicLog.push(line);
         broadcast({ type: "chat", line });
+        break;
+      }
+      case "killer_chat": {
+        if (!room.started || !room.engine || (room.engine.state.phase !== "DAY" && room.engine.state.phase !== "NIGHT")) {
+          send(ws, { type: "error", message: "Killer chat only allowed in day or night." });
+          return;
+        }
+        const seat = room.connections.get(ws);
+        if (!seat) return;
+        const actor = room.engine.state.players[seat.playerId];
+        if (!actor?.alive || actor.role !== "KILLER") {
+          send(ws, { type: "error", message: "Only alive killers can use killer chat." });
+          return;
+        }
+        const text = (msg.text || "").trim();
+        if (!text) return;
+        const line = `${actor.name}: ${text.slice(0, 120)}`;
+        room.engine.state.killerChat = room.engine.state.killerChat || [];
+        room.engine.state.killerChat.push(line);
+        room.engine.state.privateLogs.killer = room.engine.state.privateLogs.killer || [];
+        room.engine.state.privateLogs.killer.push(line);
+        broadcastViews();
+        break;
+      }
+      case "police_chat": {
+        if (!room.started || !room.engine || (room.engine.state.phase !== "DAY" && room.engine.state.phase !== "NIGHT")) {
+          send(ws, { type: "error", message: "Police chat only allowed in day or night." });
+          return;
+        }
+        const seat = room.connections.get(ws);
+        if (!seat) return;
+        const actor = room.engine.state.players[seat.playerId];
+        if (!actor?.alive || actor.role !== "POLICE") {
+          send(ws, { type: "error", message: "Only alive police can use police chat." });
+          return;
+        }
+        const text = (msg.text || "").trim();
+        if (!text) return;
+        const line = `${actor.name}: ${text.slice(0, 120)}`;
+        room.engine.state.policeChat = room.engine.state.policeChat || [];
+        room.engine.state.policeChat.push(line);
+        room.engine.state.privateLogs.police = room.engine.state.privateLogs.police || [];
+        room.engine.state.privateLogs.police.push(line);
+        broadcastViews();
         break;
       }
       case "restart": {

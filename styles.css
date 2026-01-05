@@ -261,6 +261,9 @@ input {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 120px;
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .chat p {

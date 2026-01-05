@@ -90,10 +90,26 @@
       </div>
 
       <div id="chatControls" class="controls">
-        <p class="label" data-i18n="dayChat">Day chat</p>
+        <p class="label" data-i18n="dayChat">Chat</p>
         <div class="control-row">
           <input id="chatInput" placeholder="Message" maxlength="120" />
           <button id="sendChat" data-i18n="sendChat">Send</button>
+        </div>
+        <div id="killerChatBox" class="controls hidden">
+          <p class="label" data-i18n="killerChat">Killer chat (private)</p>
+          <div id="killerChatLines" class="chat"></div>
+          <div class="control-row">
+            <input id="killerChatInput" placeholder="Killer chat (private)" maxlength="120" />
+            <button id="sendKillerChat" data-i18n="sendKillerChat">Send (killers)</button>
+          </div>
+        </div>
+        <div id="policeChatBox" class="controls hidden">
+          <p class="label" data-i18n="policeChat">Police chat (private)</p>
+          <div id="policeChatLines" class="chat"></div>
+          <div class="control-row">
+            <input id="policeChatInput" placeholder="Police chat (private)" maxlength="120" />
+            <button id="sendPoliceChat" data-i18n="sendPoliceChat">Send (police)</button>
+          </div>
         </div>
       </div>
 

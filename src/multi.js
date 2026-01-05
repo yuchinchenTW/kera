@@ -23,6 +23,14 @@ const els = {
   sendVote: document.getElementById("sendVote"),
   chatInput: document.getElementById("chatInput"),
   sendChat: document.getElementById("sendChat"),
+  killerChatBox: document.getElementById("killerChatBox"),
+  killerChatLines: document.getElementById("killerChatLines"),
+  killerChatInput: document.getElementById("killerChatInput"),
+  sendKillerChat: document.getElementById("sendKillerChat"),
+  policeChatBox: document.getElementById("policeChatBox"),
+  policeChatLines: document.getElementById("policeChatLines"),
+  policeChatInput: document.getElementById("policeChatInput"),
+  sendPoliceChat: document.getElementById("sendPoliceChat"),
   resolveNight: document.getElementById("resolveNight"),
   resolveVote: document.getElementById("resolveVote"),
   restartBtn: document.getElementById("restartBtn"),
@@ -58,7 +66,13 @@ const translations = {
     phaseEnd: "End",
     nightAction: "Night action",
     vote: "Vote",
-    dayChat: "Day chat",
+    dayChat: "Chat",
+    killerChat: "Killer chat (private)",
+    sendKillerChat: "Send (killers)",
+    killerChatPlaceholder: "Private killer chat...",
+    policeChat: "Police chat (private)",
+    sendPoliceChat: "Send (police)",
+    policeChatPlaceholder: "Private police chat...",
     hostOnly: "Host only",
     gameView: "Game View",
     sendNightAction: "Send",
@@ -156,7 +170,13 @@ const translations = {
     },
     nightAction: "夜行動",
     vote: "投票",
-    dayChat: "白天聊天",
+    dayChat: "聊天",
+    killerChat: "殺手私聊",
+    sendKillerChat: "發送（殺手）",
+    killerChatPlaceholder: "殺手私聊訊息...",
+    policeChat: "警察私聊",
+    sendPoliceChat: "發送（警察）",
+    policeChatPlaceholder: "警察私聊訊息...",
     hostOnly: "僅房主",
     gameView: "遊戲畫面",
     sendNightAction: "送出",
@@ -517,18 +537,62 @@ function renderView() {
     .filter((p) => p.alive)
     .map((p) => ({ value: String(p.id), label: p.name }));
   buildOptions(els.voteTarget, voteOptions, t("abstain"));
-  // Host controls visibility
-  document.getElementById("hostControls").style.display = isHost ? "block" : "none";
-  // Enable/disable controls based on phase/alive
   const alive = v.you?.alive;
   const phase = v.phase;
   const ended = !!v.victory;
+  // Killer chat
+  if (els.killerChatBox) {
+    const isKiller = you && you.role === Roles.KILLER.id && you.alive;
+    els.killerChatBox.classList.toggle("hidden", !(isKiller && !ended));
+    const lines = (v.killerChat || []).slice(-10);
+    els.killerChatLines.innerHTML = "";
+    if (!lines.length) {
+      const p = document.createElement("p");
+      p.textContent = t("noChat");
+      els.killerChatLines.appendChild(p);
+    } else {
+      lines.forEach((line) => {
+        const p = document.createElement("p");
+        p.textContent = line;
+        els.killerChatLines.appendChild(p);
+      });
+    }
+    if (els.killerChatInput) els.killerChatInput.placeholder = t("killerChatPlaceholder");
+    if (els.sendKillerChat) els.sendKillerChat.disabled = !(isKiller && !ended);
+  }
+  // Police chat
+  if (els.policeChatBox) {
+    const isPolice = you && you.role === Roles.POLICE.id && you.alive;
+    els.policeChatBox.classList.toggle("hidden", !(isPolice && !ended));
+    const plines = (v.policeChat || []).slice(-10);
+    els.policeChatLines.innerHTML = "";
+    if (!plines.length) {
+      const p = document.createElement("p");
+      p.textContent = t("noChat");
+      els.policeChatLines.appendChild(p);
+    } else {
+      plines.forEach((line) => {
+        const p = document.createElement("p");
+        p.textContent = line;
+        els.policeChatLines.appendChild(p);
+      });
+    }
+    if (els.policeChatInput) els.policeChatInput.placeholder = t("policeChatPlaceholder");
+  }
+  // Host controls visibility
+  document.getElementById("hostControls").style.display = isHost ? "block" : "none";
+  // Enable/disable controls based on phase/alive
   document.getElementById("nightControls").style.display = phase === "NIGHT" && alive && !ended ? "block" : "none";
   document.getElementById("voteControls").style.display = phase === "VOTE" && alive && !ended ? "block" : "none";
-  document.getElementById("chatControls").style.display = phase === "DAY" && alive && !ended ? "block" : "none";
+  document.getElementById("chatControls").style.display =
+    (phase === "DAY" || phase === "NIGHT") && alive && !ended ? "block" : "none";
   els.sendNightAction.disabled = !(phase === "NIGHT" && alive && !ended);
   els.sendVote.disabled = !(phase === "VOTE" && alive && !ended);
-  els.sendChat.disabled = !(phase === "DAY" && alive && !ended);
+  els.sendChat.disabled = !((phase === "DAY" || phase === "NIGHT") && alive && !ended);
+  const canKillerChat = (phase === "DAY" || phase === "NIGHT") && alive && you?.role === Roles.KILLER.id && !ended;
+  const canPoliceChat = (phase === "DAY" || phase === "NIGHT") && alive && you?.role === Roles.POLICE.id && !ended;
+  if (els.sendKillerChat) els.sendKillerChat.disabled = !canKillerChat;
+  if (els.sendPoliceChat) els.sendPoliceChat.disabled = !canPoliceChat;
   els.resolveNight.disabled = !(isHost && phase === "NIGHT" && !ended);
   els.resolveVote.disabled = !(isHost && phase === "VOTE" && !ended);
   renderTimer();
@@ -610,6 +674,22 @@ els.sendChat.addEventListener("click", () => {
   send({ type: "chat", text });
   els.chatInput.value = "";
 });
+if (els.sendKillerChat) {
+  els.sendKillerChat.addEventListener("click", () => {
+    const text = els.killerChatInput.value;
+    if (!text) return;
+    send({ type: "killer_chat", text });
+    els.killerChatInput.value = "";
+  });
+}
+if (els.sendPoliceChat) {
+  els.sendPoliceChat.addEventListener("click", () => {
+    const text = els.policeChatInput.value;
+    if (!text) return;
+    send({ type: "police_chat", text });
+    els.policeChatInput.value = "";
+  });
+}
 els.resolveNight.addEventListener("click", () => send({ type: "resolve_night" }));
 els.resolveVote.addEventListener("click", () => send({ type: "resolve_vote" }));
 els.restartBtn.addEventListener("click", () => send({ type: "restart" }));
