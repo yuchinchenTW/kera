@@ -63,6 +63,33 @@ export function buildPlayerView(state, playerId) {
   };
 }
 
+export function buildSpectatorView(state) {
+  const players = state.players.map((p) => ({
+    id: p.id,
+    name: p.name,
+    alive: p.alive,
+    role: p.alive ? "HIDDEN" : p.role,
+    faction: p.alive ? "UNKNOWN" : p.faction,
+    isYou: false,
+    bratRevealed: p.status?.bratRevealed || false,
+  }));
+  return {
+    phase: state.phase,
+    dayNumber: state.dayNumber,
+    theme: state.theme,
+    victory: state.victory,
+    you: null,
+    players,
+    publicLog: [...state.publicLog],
+    lastNightSummary: [...state.lastNightSummary],
+    privateIntel: [],
+    winrateHint: state.winrateHint,
+    usage: { ...state.usage },
+    killerChat: [...(state.killerChat || [])],
+    policeChat: [...(state.policeChat || [])],
+  };
+}
+
 export function availableActionTargets(state, actorId) {
   const actor = getPlayer(state, actorId);
   if (!actor || !actor.alive) return [];

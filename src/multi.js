@@ -3,6 +3,7 @@ import { Roles, Theme } from "./roles.js";
 const els = {
   wsUrl: document.getElementById("wsUrl"),
   playerName: document.getElementById("playerName"),
+  spectatorToggle: document.getElementById("spectatorToggle"),
   connectBtn: document.getElementById("connectBtn"),
   themeSelect: document.getElementById("themeSelect"),
   startBtn: document.getElementById("startBtn"),
@@ -46,6 +47,7 @@ const translations = {
     language: "Language",
     localeEn: "English",
     localeZh: "中文",
+    spectator: "Spectator",
     join: "Join",
     startHost: "Start (host)",
     yourName: "Your name",
@@ -117,6 +119,7 @@ const translations = {
     language: "語言",
     localeEn: "英文",
     localeZh: "中文",
+    spectator: "觀戰",
     join: "加入",
     startHost: "開始 (房主)",
     yourName: "你的名字",
@@ -325,7 +328,8 @@ function connect() {
   ws = new WebSocket(els.wsUrl.value || "ws://localhost:3001");
   ws.onopen = () => {
     const name = (els.playerName.value || "Player").slice(0, 32);
-    ws.send(JSON.stringify({ type: "join", name }));
+    const spectator = !!els.spectatorToggle?.checked;
+    ws.send(JSON.stringify({ type: "join", name, spectator }));
     log(">> join as " + name);
   };
   ws.onclose = () => {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { GameEngine } from "./src/engine.js";
-import { buildPlayerView } from "./src/view.js";
+import { buildPlayerView, buildSpectatorView } from "./src/view.js";
 import { Theme, Phase } from "./src/roles.js";
 
 const PORT = process.env.PORT || 3001;
@@ -59,7 +59,12 @@ function send(ws, payload) {
 function broadcastViews() {
   if (!room.engine) return;
   for (const [ws, seat] of room.connections.entries()) {
-    const view = buildPlayerView(room.engine.state, seat.playerId);
+    let view = null;
+    if (seat && seat.playerId !== undefined && seat.playerId !== null) {
+      view = buildPlayerView(room.engine.state, seat.playerId);
+    } else {
+      view = buildSpectatorView(room.engine.state);
+    }
     send(ws, { type: "view", view });
   }
 }
@@ -216,6 +221,23 @@ wss.on("connection", (ws) => {
 
     switch (msg.type) {
       case "join": {
+        const wantsSpectator = !!msg.spectator;
+        if (room.started && !wantsSpectator) {
+          send(ws, { type: "error", message: "Game already started." });
+          return;
+        }
+        if (wantsSpectator) {
+          const name = (msg.name || `Spectator`).slice(0, 32);
+          room.connections.set(ws, { spectator: true, name });
+          if (!room.host && room.seats.length > 0) {
+            const hostSeat = room.connections.keys().next().value;
+            room.host = hostSeat || ws;
+          }
+          send(ws, { type: "joined", spectator: true, host: ensureHost(ws) });
+          broadcastViews();
+          log("Spectator joined", name);
+          break;
+        }
         if (room.started) {
           send(ws, { type: "error", message: "Game already started." });
           return;
@@ -254,7 +276,7 @@ wss.on("connection", (ws) => {
           return;
         }
         const seat = room.connections.get(ws);
-        if (!seat) return;
+        if (!seat || seat.spectator) return;
         const actor = room.engine.state.players[seat.playerId];
         if (!actor?.alive) {
           send(ws, { type: "error", message: "You are dead and cannot act." });
@@ -293,7 +315,7 @@ wss.on("connection", (ws) => {
           return;
         }
         const seat = room.connections.get(ws);
-        if (!seat) return;
+        if (!seat || seat.spectator) return;
         const actor = room.engine.state.players[seat.playerId];
         if (!actor?.alive || (actor.role === "BRAT" && actor.status?.bratRevived)) {
           send(ws, { type: "error", message: "You cannot vote." });
@@ -337,7 +359,7 @@ wss.on("connection", (ws) => {
           return;
         }
         const seat = room.connections.get(ws);
-        if (!seat) return;
+        if (!seat || seat.spectator) return;
         const text = (msg.text || "").trim();
         if (!text) return;
         const line = `${room.engine.state.players[seat.playerId]?.name || "Player"}: ${text.slice(0, 120)}`;
@@ -353,7 +375,7 @@ wss.on("connection", (ws) => {
           return;
         }
         const seat = room.connections.get(ws);
-        if (!seat) return;
+        if (!seat || seat.spectator) return;
         const actor = room.engine.state.players[seat.playerId];
         if (!actor?.alive || actor.role !== "KILLER") {
           send(ws, { type: "error", message: "Only alive killers can use killer chat." });
@@ -375,7 +397,7 @@ wss.on("connection", (ws) => {
           return;
         }
         const seat = room.connections.get(ws);
-        if (!seat) return;
+        if (!seat || seat.spectator) return;
         const actor = room.engine.state.players[seat.playerId];
         if (!actor?.alive || actor.role !== "POLICE") {
           send(ws, { type: "error", message: "Only alive police can use police chat." });
@@ -412,17 +434,18 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     const seat = room.connections.get(ws);
     room.connections.delete(ws);
-    if (seat && !room.started) {
+    if (seat && seat.playerId !== undefined && !room.started) {
       room.seats = room.seats.filter((s) => s.playerId !== seat.playerId);
       broadcast({ type: "lobby", seats: room.seats });
     }
-        if (room.host === ws) {
-          room.host = room.connections.keys().next().value || null;
-          if (room.host) send(room.host, { type: "host", value: true });
-        }
-        log("Connection closed", seat?.playerId ?? "?");
-      });
-    });
+    if (room.host === ws) {
+      const newHost = Array.from(room.connections.entries()).find(([, meta]) => meta && meta.playerId !== undefined);
+      room.host = newHost ? newHost[0] : null;
+      if (room.host) send(room.host, { type: "host", value: true });
+    }
+    log("Connection closed", seat?.playerId ?? (seat?.spectator ? "spectator" : "?"));
+  });
+});
 
 server.listen(PORT, () => {
   log(`Server listening on ${PORT}`);
