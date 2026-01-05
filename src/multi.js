@@ -529,6 +529,9 @@ function renderView() {
     const youRole = roleLabel(v.you.role);
     const youFaction = factionLabel(v.you.faction || v.you.role);
     els.youDisplay.textContent = `${v.you.name} (${youRole}${youFaction ? ` / ${youFaction}` : ""})`;
+    if (v.you.aiTakenOver) {
+      log("AI has taken over your seat (disconnected).");
+    }
   } else {
     els.youDisplay.textContent = "-";
   }

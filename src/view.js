@@ -40,6 +40,8 @@ export function buildPlayerView(state, playerId) {
   if (viewer.role === Roles.KILLER.id) privateIntel = privateIntel.concat(state.privateLogs.killer || []);
   if (viewer.role === Roles.GRUDGE_BEAST.id) privateIntel = privateIntel.concat(state.privateLogs.grudge || []);
 
+  const aiTakenOver = !viewer.isHuman && state.started;
+
   return {
     phase: state.phase,
     dayNumber: state.dayNumber,
@@ -51,6 +53,8 @@ export function buildPlayerView(state, playerId) {
       role: viewer.role,
       faction: viewer.faction,
       alive: viewer.alive,
+      isHuman: viewer.isHuman,
+      aiTakenOver,
     },
     players,
     publicLog: [...state.publicLog],

@@ -434,14 +434,33 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     const seat = room.connections.get(ws);
     room.connections.delete(ws);
-    if (seat && seat.playerId !== undefined && !room.started) {
-      room.seats = room.seats.filter((s) => s.playerId !== seat.playerId);
-      broadcast({ type: "lobby", seats: room.seats });
+    if (seat && seat.playerId !== undefined) {
+      const player = room.engine?.state?.players?.[seat.playerId];
+      if (room.started && player) {
+        player.isHuman = false; // AI takes over on disconnect
+        if (!player.name.endsWith(" (AI)")) {
+          player.name = `${player.name} (AI)`;
+        }
+        log("Player disconnected, AI taking over seat", seat.playerId, player.name);
+      } else if (!room.started) {
+        room.seats = room.seats.filter((s) => s.playerId !== seat.playerId);
+        broadcast({ type: "lobby", seats: room.seats });
+      }
     }
     if (room.host === ws) {
-      const newHost = Array.from(room.connections.entries()).find(([, meta]) => meta && meta.playerId !== undefined);
-      room.host = newHost ? newHost[0] : null;
-      if (room.host) send(room.host, { type: "host", value: true });
+      const nextPlayer = Array.from(room.connections.entries()).find(([, meta]) => meta && meta.playerId !== undefined);
+      room.host = nextPlayer ? nextPlayer[0] : null;
+      if (room.host) {
+        send(room.host, { type: "host", value: true });
+      } else {
+        // no human players left; end game
+        room.started = false;
+        room.engine = null;
+        room.nightActions.clear();
+        room.voteActions.clear();
+        room.lastWords.clear();
+        broadcast({ type: "lobby", seats: room.seats });
+      }
     }
     log("Connection closed", seat?.playerId ?? (seat?.spectator ? "spectator" : "?"));
   });
