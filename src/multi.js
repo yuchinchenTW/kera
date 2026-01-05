@@ -8,6 +8,7 @@ const els = {
   startBtn: document.getElementById("startBtn"),
   seatInfo: document.getElementById("seatInfo"),
   hostBadge: document.getElementById("hostBadge"),
+  localeSelect: document.getElementById("localeSelect"),
   seatsList: document.getElementById("seatsList"),
   phaseDisplay: document.getElementById("phaseDisplay"),
   dayDisplay: document.getElementById("dayDisplay"),
@@ -29,6 +30,251 @@ const els = {
   logText: document.getElementById("logText"),
   endBanner: document.getElementById("endBanner"),
 };
+
+const translations = {
+  en: {
+    eyebrow: "Multiplayer Lobby",
+    subtitle: "WebSocket client for host/players",
+    language: "Language",
+    localeEn: "English",
+    localeZh: "中文",
+    join: "Join",
+    startHost: "Start (host)",
+    yourName: "Your name",
+    lobby: "Lobby",
+    seatLabel: "Seat",
+    host: "Host",
+    log: "Log",
+    status: "Status",
+    phase: "Phase",
+    day: "Day",
+    you: "You",
+    timer: "Timer",
+    victory: "Victory",
+    actions: "Actions",
+    phaseNight: "Night",
+    phaseDay: "Day",
+    phaseVote: "Vote",
+    phaseEnd: "End",
+    nightAction: "Night action",
+    vote: "Vote",
+    dayChat: "Day chat",
+    hostOnly: "Host only",
+    gameView: "Game View",
+    sendNightAction: "Send",
+    sendVote: "Send vote",
+    sendChat: "Send",
+    resolveNight: "Resolve Night",
+    resolveVote: "Resolve Vote",
+    restart: "Restart",
+    votePlaceholder: "Last words (optional)",
+    chatPlaceholder: "Message",
+    pickAction: "Pick action",
+    noNightAction: "No night action",
+    chooseTarget: "Choose target",
+    abstain: "Abstain",
+    actionsMap: {
+      POLICE_INVESTIGATE: "Investigate",
+      KILLER_VOTE: "Murder vote",
+      DOCTOR_INJECT: "Inject",
+      SNIPER_SHOT: "Sniper shot",
+      AGENT_PROTECT: "Protect",
+      FIEND_PROTECT: "Absorb protect",
+      FIEND_SHOOT: "Charge shot",
+      TERROR_BOMB: "Bomb",
+      COWBOY_GAMBLE: "Gamble shot",
+      KIDNAP: "Kidnap",
+      ZOMBIE_BITE: "Bite",
+      RIOT_SMOKE: "Smoke grenade",
+      ARSON_MARK: "Mark with fuel",
+      ARSON_IGNITE: "Ignite all marks",
+      VINE_SEED: "Plant seed",
+      NIGHTMARE_ATTACK: "Nightmare strike",
+      EXORCIST_STRIKE: "Exorcist strike",
+      NECROMANCER_CURSE: "Curse",
+      PURIFY: "Cleanse",
+      GRUDGE_JUDGE: "Judge",
+      GRUDGE_KILL_VOTE: "Berserk kill vote",
+    },
+  },
+  zh: {
+    eyebrow: "多人連線大廳",
+    subtitle: "主機/玩家 WebSocket 用戶端",
+    language: "語言",
+    localeEn: "英文",
+    localeZh: "中文",
+    join: "加入",
+    startHost: "開始 (房主)",
+    yourName: "你的名字",
+    lobby: "大廳",
+    seatLabel: "座位",
+    host: "房主",
+    log: "紀錄",
+    status: "狀態",
+    phase: "階段",
+    day: "天數",
+    you: "你",
+    timer: "計時",
+    victory: "勝利",
+    actions: "行動",
+    alive: "存活",
+    dead: "死亡",
+    role: "角色",
+    faction: "陣營",
+    phaseNight: "夜",
+    phaseDay: "白天",
+    phaseVote: "投票",
+    phaseEnd: "結束",
+    roleMap: {
+      POLICE: "警察",
+      KILLER: "殺手",
+      DOCTOR: "醫生",
+      SNIPER: "狙擊手",
+      AGENT: "特務",
+      TERRORIST: "恐怖分子",
+      COWBOY: "牛仔",
+      KIDNAPPER: "綁匯",
+      ZOMBIE: "死靈",
+      RIOT_POLICE: "防暴警",
+      ARSONIST: "縫火犯",
+      HEAVENLY_FIEND: "天罰使",
+      VINE_DEMON: "藤妖",
+      BRAT: "熊孩子",
+      NIGHTMARE_DEMON: "夢魃",
+      EXORCIST: "驅魔人",
+      NECROMANCER: "死靈師",
+      PURIFIER: "淨化者",
+      GRUDGE_BEAST: "怨鬥獸",
+      CIVILIAN: "平民",
+      HIDDEN: "隱藏",
+    },
+    factionMap: {
+      BLUE: "藍",
+      RED: "紅",
+      GREEN: "綠",
+      UNKNOWN: "未知",
+    },
+    nightAction: "夜行動",
+    vote: "投票",
+    dayChat: "白天聊天",
+    hostOnly: "僅房主",
+    gameView: "遊戲畫面",
+    sendNightAction: "送出",
+    sendVote: "送出投票",
+    sendChat: "送出",
+    resolveNight: "結算夜晚",
+    resolveVote: "結算投票",
+    restart: "重新開始",
+    votePlaceholder: "遺言 (可選)",
+    chatPlaceholder: "訊息",
+    pickAction: "選擇行動",
+    noNightAction: "沒有夜行動",
+    chooseTarget: "選擇目標",
+    abstain: "棄權",
+    actionsMap: {
+      POLICE_INVESTIGATE: "調查",
+      KILLER_VOTE: "殺人投票",
+      DOCTOR_INJECT: "注射",
+      SNIPER_SHOT: "狙擊",
+      AGENT_PROTECT: "守護",
+      FIEND_PROTECT: "吸收守護",
+      FIEND_SHOOT: "充能射擊",
+      TERROR_BOMB: "炸彈",
+      COWBOY_GAMBLE: "賭命開槍",
+      KIDNAP: "綁架",
+      ZOMBIE_BITE: "咬擊",
+      RIOT_SMOKE: "煙霧",
+      ARSON_MARK: "潑油標記",
+      ARSON_IGNITE: "點燃標記",
+      VINE_SEED: "種子交換",
+      NIGHTMARE_ATTACK: "惡夢斬擊",
+      EXORCIST_STRIKE: "驅魔鎖鏈",
+      NECROMANCER_CURSE: "詛咒",
+      PURIFY: "淨化",
+      GRUDGE_JUDGE: "審判",
+      GRUDGE_KILL_VOTE: "狂暴斬殺票",
+    },
+  },
+};
+
+let locale = "en";
+
+function t(key) {
+  return translations[locale]?.[key] ?? key;
+}
+
+function actionLabel(actionType) {
+  const map = translations[locale]?.actionsMap || {};
+  return map[actionType] || actionType;
+}
+
+function roleLabel(roleId) {
+  const map = translations[locale]?.roleMap || {};
+  return map[roleId] || roleId;
+}
+
+function factionLabel(faction) {
+  const map = translations[locale]?.factionMap || {};
+  return map[faction] || faction;
+}
+
+function translateLine(line) {
+  if (locale !== "zh" || typeof line !== "string") return line;
+  const rules = [
+    [/Someone deployed smoke on (.+)\./, `有人對 $1 丟了煙霧彈。`],
+    [/Someone cleansed (.+)\./, `有人淨化了 $1。`],
+    [/Someone kidnapped (.+)\./, `有人綁架了 $1。`],
+    [/Someone fired a sniper shot\./, "有人開了一發狙擊。"],
+    [/A bomb went off but failed on an ally; the bomber died\./, "炸彈炸到同伴失敗，炸彈客當場死亡。"],
+    [/A bomb detonated on (.+)\./, "炸彈在 $1 引爆。"],
+    [/Someone fired a risky shot at (.+)\./, "有人冒險對 $1 開了一槍。"],
+    [/A cowboy's chamber clicked on (.+)\./, "牛仔的子彈在 $1 身上空響。"],
+    [/A cowboy drew a wild bullet\. Chaos ensued\./, "牛仔抽出亂彈，引發混亂。"],
+    [/Someone splashed fuel on (.+)\./, "有人對 $1 潑了燃料。"],
+    [/Someone prepared to ignite marked targets\./, "有人準備點燃所有已標記目標。"],
+    [/Someone saved (.+) from death\./, "有人救回了 $1。"],
+    [/Someone injected (.+) \(dose (\d+)\/(\d+)\)\./, `有人對 $1 注射（${"$2"}/${"$3"} 劑）。`],
+    [/Killers failed to agree on a target\./, "殺手未能達成共識。"],
+    [/Police could not agree on a target\./, "警察未能達成共識。"],
+    [/Votes:/, "投票："],
+    [/(.+) was executed by vote.*$/, "$1 被票決處決。"],
+    [/(.+) was executed by highest votes.*$/, "$1 因最高票被處決。"],
+    [/No majority reached\. Nobody was executed\./, "未達多數，無人被處決。"],
+    [/Grudge Beasts entered berserk rage\./, "怨魂獸進入狂暴狀態。"],
+    [/(.+) turned into a zombie overnight\./, "$1 在夜裡變成殭屍。"],
+    [/(.+) was overwhelmed and turned into a zombie immediately\./, "$1 被壓制，立刻變成殭屍。"],
+    [/feels off\./, "讓人起疑。"],
+    [/seems fine to me\./, "看起來沒問題。"],
+    [/What's everyone thinking about (.+)\?/, "大家覺得 $1 如何？"],
+  ];
+  let out = line;
+  for (const [pat, rep] of rules) {
+    if (pat.test(out)) {
+      out = out.replace(pat, rep);
+      break;
+    }
+  }
+  return out;
+}
+
+function translateLines(list) {
+  return list.map((l) => translateLine(l));
+}
+
+function applyLocaleText() {
+  document.documentElement.lang = locale;
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    const key = node.getAttribute("data-i18n");
+    const val = translations[locale]?.[key];
+    if (typeof val === "string") node.textContent = val;
+  });
+  if (els.playerName) els.playerName.placeholder = t("yourName");
+  if (els.chatInput) els.chatInput.placeholder = t("chatPlaceholder");
+  if (els.lastWordsInput) els.lastWordsInput.placeholder = t("votePlaceholder");
+  if (els.localeSelect) els.localeSelect.value = locale;
+  if (els.seatInfo && seatId !== null) els.seatInfo.textContent = `${t("seatLabel")} ${seatId + 1}`;
+  if (els.hostBadge) els.hostBadge.textContent = isHost ? t("host") : "";
+}
 
 let ws = null;
 let isHost = false;
@@ -91,19 +337,19 @@ function handleMessage(msg) {
     case "joined":
       seatId = msg.playerId;
       isHost = !!msg.host;
-      els.seatInfo.textContent = `Seat ${seatId + 1}`;
-      els.hostBadge.textContent = isHost ? "Host" : "";
+      els.seatInfo.textContent = `${t("seatLabel")} ${seatId + 1}`;
+      els.hostBadge.textContent = isHost ? t("host") : "";
       log("Joined seat " + (seatId + 1) + (isHost ? " (host)" : ""));
       break;
     case "host":
       isHost = !!msg.value;
-      els.hostBadge.textContent = isHost ? "Host" : "";
+      els.hostBadge.textContent = isHost ? t("host") : "";
       break;
     case "lobby":
       lobbySeats = msg.seats || [];
       renderLobby();
       latestView = null;
-      els.phaseDisplay.textContent = "Lobby";
+      els.phaseDisplay.textContent = t("lobby");
       els.dayDisplay.textContent = "-";
       els.youDisplay.textContent = "-";
       log("Lobby reset (waiting to start)");
@@ -140,58 +386,59 @@ function renderLobby() {
     const li = document.createElement("li");
     li.className = "player-card";
     const name = document.createElement("div");
-    name.textContent = `Seat ${s.playerId + 1}: ${s.name}`;
+    name.textContent = `${t("seatLabel")} ${s.playerId + 1}: ${s.name}`;
     li.appendChild(name);
     els.seatsList.appendChild(li);
   });
+  applyLocaleText();
 }
 
 function roleActionChoices(roleId) {
   switch (roleId) {
     case Roles.POLICE.id:
-      return [{ value: "POLICE_INVESTIGATE", label: "Investigate", needsTarget: true }];
+      return [{ value: "POLICE_INVESTIGATE", label: actionLabel("POLICE_INVESTIGATE"), needsTarget: true }];
     case Roles.KILLER.id:
-      return [{ value: "KILLER_VOTE", label: "Murder vote", needsTarget: true }];
+      return [{ value: "KILLER_VOTE", label: actionLabel("KILLER_VOTE"), needsTarget: true }];
     case Roles.DOCTOR.id:
-      return [{ value: "DOCTOR_INJECT", label: "Inject", needsTarget: true }];
+      return [{ value: "DOCTOR_INJECT", label: actionLabel("DOCTOR_INJECT"), needsTarget: true }];
     case Roles.SNIPER.id:
-      return [{ value: "SNIPER_SHOT", label: "Sniper shot", needsTarget: true }];
+      return [{ value: "SNIPER_SHOT", label: actionLabel("SNIPER_SHOT"), needsTarget: true }];
     case Roles.AGENT.id:
-      return [{ value: "AGENT_PROTECT", label: "Protect", needsTarget: true }];
+      return [{ value: "AGENT_PROTECT", label: actionLabel("AGENT_PROTECT"), needsTarget: true }];
     case Roles.HEAVENLY_FIEND.id:
       return [
-        { value: "FIEND_PROTECT", label: "Absorb protect", needsTarget: true },
-        { value: "FIEND_SHOOT", label: "Charge shot", needsTarget: true },
+        { value: "FIEND_PROTECT", label: actionLabel("FIEND_PROTECT"), needsTarget: true },
+        { value: "FIEND_SHOOT", label: actionLabel("FIEND_SHOOT"), needsTarget: true },
       ];
     case Roles.TERRORIST.id:
-      return [{ value: "TERROR_BOMB", label: "Bomb", needsTarget: true }];
+      return [{ value: "TERROR_BOMB", label: actionLabel("TERROR_BOMB"), needsTarget: true }];
     case Roles.COWBOY.id:
-      return [{ value: "COWBOY_GAMBLE", label: "Gamble shot", needsTarget: true }];
+      return [{ value: "COWBOY_GAMBLE", label: actionLabel("COWBOY_GAMBLE"), needsTarget: true }];
     case Roles.KIDNAPPER.id:
-      return [{ value: "KIDNAP", label: "Kidnap", needsTarget: true }];
+      return [{ value: "KIDNAP", label: actionLabel("KIDNAP"), needsTarget: true }];
     case Roles.ZOMBIE.id:
-      return [{ value: "ZOMBIE_BITE", label: "Bite", needsTarget: true }];
+      return [{ value: "ZOMBIE_BITE", label: actionLabel("ZOMBIE_BITE"), needsTarget: true }];
     case Roles.RIOT_POLICE.id:
-      return [{ value: "RIOT_SMOKE", label: "Smoke grenade", needsTarget: true }];
+      return [{ value: "RIOT_SMOKE", label: actionLabel("RIOT_SMOKE"), needsTarget: true }];
     case Roles.ARSONIST.id:
       return [
-        { value: "ARSON_MARK", label: "Mark with fuel", needsTarget: true },
-        { value: "ARSON_IGNITE", label: "Ignite all marks", needsTarget: false },
+        { value: "ARSON_MARK", label: actionLabel("ARSON_MARK"), needsTarget: true },
+        { value: "ARSON_IGNITE", label: actionLabel("ARSON_IGNITE"), needsTarget: false },
       ];
     case Roles.VINE_DEMON.id:
-      return [{ value: "VINE_SEED", label: "Plant seed", needsTarget: true }];
+      return [{ value: "VINE_SEED", label: actionLabel("VINE_SEED"), needsTarget: true }];
     case Roles.NIGHTMARE_DEMON.id:
-      return [{ value: "NIGHTMARE_ATTACK", label: "Nightmare strike", needsTarget: true }];
+      return [{ value: "NIGHTMARE_ATTACK", label: actionLabel("NIGHTMARE_ATTACK"), needsTarget: true }];
     case Roles.EXORCIST.id:
-      return [{ value: "EXORCIST_STRIKE", label: "Exorcist strike", needsTarget: true }];
+      return [{ value: "EXORCIST_STRIKE", label: actionLabel("EXORCIST_STRIKE"), needsTarget: true }];
     case Roles.NECROMANCER.id:
-      return [{ value: "NECROMANCER_CURSE", label: "Curse", needsTarget: true }];
+      return [{ value: "NECROMANCER_CURSE", label: actionLabel("NECROMANCER_CURSE"), needsTarget: true }];
     case Roles.PURIFIER.id:
-      return [{ value: "PURIFY", label: "Cleanse", needsTarget: true }];
+      return [{ value: "PURIFY", label: actionLabel("PURIFY"), needsTarget: true }];
     case Roles.GRUDGE_BEAST.id:
       return [
-        { value: "GRUDGE_JUDGE", label: "Judge", needsTarget: true },
-        { value: "GRUDGE_KILL_VOTE", label: "Berserk kill vote", needsTarget: true },
+        { value: "GRUDGE_JUDGE", label: actionLabel("GRUDGE_JUDGE"), needsTarget: true },
+        { value: "GRUDGE_KILL_VOTE", label: actionLabel("GRUDGE_KILL_VOTE"), needsTarget: true },
       ];
     default:
       return [];
@@ -215,9 +462,27 @@ function buildOptions(selectEl, options, placeholder = "Select") {
 function renderView() {
   const v = latestView;
   if (!v) return;
-  els.phaseDisplay.textContent = v.phase || "-";
+  const phaseLabel =
+    v.phase === "NIGHT"
+      ? t("phaseNight")
+      : v.phase === "DAY"
+      ? t("phaseDay")
+      : v.phase === "VOTE"
+      ? t("phaseVote")
+      : v.phase === "END"
+      ? t("phaseEnd")
+      : v.phase === "Lobby"
+      ? t("lobby")
+      : v.phase || "-";
+  els.phaseDisplay.textContent = phaseLabel;
   els.dayDisplay.textContent = v.dayNumber || "-";
-  els.youDisplay.textContent = v.you ? `${v.you.name} (${v.you.role})` : "-";
+  if (v.you) {
+    const youRole = roleLabel(v.you.role);
+    const youFaction = factionLabel(v.you.faction || v.you.role);
+    els.youDisplay.textContent = `${v.you.name} (${youRole}${youFaction ? ` / ${youFaction}` : ""})`;
+  } else {
+    els.youDisplay.textContent = "-";
+  }
   els.victoryDisplay.textContent = v.victory ? `${v.victory.winner} (${v.victory.reason})` : "-";
   // Players list
   els.playersList.innerHTML = "";
@@ -229,25 +494,29 @@ function renderView() {
       else if (p.faction === "RED") li.style.color = "#e74c3c";
       else if (p.faction === "GREEN") li.style.color = "#27ae60";
     }
-    li.textContent = `${p.name} | ${p.alive ? "Alive" : "Dead"} | Role: ${p.role} | Faction: ${p.faction}`;
+    const aliveText = p.alive ? t("alive") : t("dead");
+    const roleText = roleLabel(p.role);
+    const factionText = factionLabel(p.faction);
+    li.textContent = `${p.name} | ${aliveText} | ${t("role")}: ${roleText} | ${t("faction")}: ${factionText}`;
     els.playersList.appendChild(li);
   });
   // Logs
   const intelLines = (v.privateIntel || []).map((l) => `[INTEL] ${l}`);
   const mergedLogs = [...intelLines, ...(v.publicLog || [])];
-  els.logText.value = mergedLogs.join("\n");
+  const displayLogs = locale === "zh" ? translateLines(mergedLogs) : mergedLogs;
+  els.logText.value = displayLogs.join("\n");
   // Action controls
   const you = v.you;
   const choices = you ? roleActionChoices(you.role) : [];
-  buildOptions(els.nightActionType, choices, choices.length ? "Pick action" : "No night action");
+  buildOptions(els.nightActionType, choices, choices.length ? t("pickAction") : t("noNightAction"));
   const targetOptions = (v.players || [])
     .filter((p) => p.id !== you?.id && p.alive)
     .map((p) => ({ value: String(p.id), label: p.name }));
-  buildOptions(els.nightTarget, targetOptions, "Choose target");
+  buildOptions(els.nightTarget, targetOptions, t("chooseTarget"));
   const voteOptions = (v.players || [])
     .filter((p) => p.alive)
     .map((p) => ({ value: String(p.id), label: p.name }));
-  buildOptions(els.voteTarget, voteOptions, "Abstain");
+  buildOptions(els.voteTarget, voteOptions, t("abstain"));
   // Host controls visibility
   document.getElementById("hostControls").style.display = isHost ? "block" : "none";
   // Enable/disable controls based on phase/alive
@@ -264,6 +533,7 @@ function renderView() {
   els.resolveVote.disabled = !(isHost && phase === "VOTE" && !ended);
   renderTimer();
   renderEndBanner();
+  applyLocaleText();
 }
 
 function renderTimer() {
@@ -273,7 +543,17 @@ function renderTimer() {
     return;
   }
   const secs = Math.max(0, Math.round((timerState.msLeft || 0) / 1000));
-  els.timerDisplay.textContent = `${timerState.phase} ${secs}s`;
+  const phaseLabel =
+    timerState.phase === "NIGHT"
+      ? t("phaseNight")
+      : timerState.phase === "DAY"
+      ? t("phaseDay")
+      : timerState.phase === "VOTE"
+      ? t("phaseVote")
+      : timerState.phase === "END"
+      ? t("phaseEnd")
+      : timerState.phase;
+  els.timerDisplay.textContent = `${phaseLabel} ${secs}s`;
 }
 
 function renderEndBanner() {
@@ -291,6 +571,19 @@ function renderEndBanner() {
 }
 
 // Event handlers
+if (els.localeSelect && els.localeSelect.value === "zh") {
+  locale = "zh";
+}
+applyLocaleText();
+if (els.localeSelect) {
+  els.localeSelect.addEventListener("change", () => {
+    locale = els.localeSelect.value === "zh" ? "zh" : "en";
+    applyLocaleText();
+    renderLobby();
+    renderView();
+    if (!latestView) els.phaseDisplay.textContent = t("lobby");
+  });
+}
 els.connectBtn.addEventListener("click", connect);
 els.startBtn.addEventListener("click", () => {
   send({ type: "start", theme: els.themeSelect.value || Theme.GOOD_VS_EVIL.id });

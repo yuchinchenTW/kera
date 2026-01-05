@@ -14,9 +14,10 @@
       <p class="sub" data-i18n="subtitle">1 human vs 17 AI, deterministic runs</p>
     </div>
     <div class="actions">
-      <select id="localeSelect">
-        <option value="zh">中文</option>
-        <option value="en">English</option>
+      <label class="label" for="localeSelect" data-i18n="language">Language</label>
+      <select id="localeSelect" aria-label="Language">
+        <option value="zh" data-i18n="localeZh">中文</option>
+        <option value="en" data-i18n="localeEn">English</option>
       </select>
       <select id="themeSelect"></select>
       <select id="difficultySelect">
