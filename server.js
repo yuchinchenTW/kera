@@ -38,6 +38,34 @@ function log(...args) {
   console.log("[server]", ...args);
 }
 
+function normalizeName(str) {
+  return (str || "").trim().toLowerCase();
+}
+
+function makeUniqueName(rawName) {
+  const baseRaw = (rawName || "Player").trim() || "Player";
+  const allNames = [
+    ...room.seats.map((s) => s.name),
+    ...Array.from(room.connections.values())
+      .map((m) => m?.name)
+      .filter(Boolean),
+  ];
+  const targetBase = normalizeName(baseRaw.slice(0, 32));
+  let maxIndex = 0;
+  for (const existing of allNames) {
+    const match = existing.match(/^(.*?)(?: \((\d+)\))?$/);
+    const base = normalizeName(match ? match[1] : existing);
+    const idx = match && match[2] ? Number(match[2]) : 0;
+    if (base === targetBase) {
+      maxIndex = Math.max(maxIndex, idx || 1);
+    }
+  }
+  const nextIndex = maxIndex + 1;
+  const suffix = ` (${nextIndex})`;
+  const baseLimited = baseRaw.slice(0, Math.max(1, 32 - suffix.length));
+  return `${baseLimited}${suffix}`;
+}
+
 function nextSeatId() {
   for (let i = 0; i < MAX_PLAYERS; i++) {
     if (!room.seats.find((s) => s.playerId === i)) return i;
@@ -54,6 +82,18 @@ function broadcast(payload) {
 
 function send(ws, payload) {
   ws.send(JSON.stringify(payload));
+}
+
+function resetRoomState(clearSeats = false) {
+  clearTimer();
+  room.started = false;
+  room.engine = null;
+  room.nightActions.clear();
+  room.voteActions.clear();
+  room.lastWords.clear();
+  if (clearSeats) {
+    room.seats = [];
+  }
 }
 
 function broadcastViews() {
@@ -209,6 +249,40 @@ const server = http.createServer((req, res) => {
 });
 const wss = new WebSocketServer({ server });
 
+function promoteWaitingSpectator() {
+  const waiterEntry = Array.from(room.connections.entries()).find(
+    ([, meta]) => meta?.spectator && meta.waitForStart
+  );
+  if (!waiterEntry) return false;
+  const [waiterWs, meta] = waiterEntry;
+  resetRoomState(true);
+  const seatId = nextSeatId();
+  const seat = { playerId: seatId, name: meta.name };
+  room.seats.push(seat);
+  room.connections.set(waiterWs, { playerId: seatId, name: meta.name, waitForStart: false });
+  room.host = waiterWs;
+  send(waiterWs, { type: "joined", playerId: seatId, host: true });
+  send(waiterWs, { type: "host", value: true });
+  broadcast({ type: "lobby", seats: room.seats });
+  log("Promoted waiting spectator to host", seatId, seat.name);
+  return true;
+}
+
+function handleHostVacancy() {
+  const nextPlayer = Array.from(room.connections.entries()).find(
+    ([, meta]) => meta && meta.playerId !== undefined
+  );
+  if (nextPlayer) {
+    room.host = nextPlayer[0];
+    send(room.host, { type: "host", value: true });
+    return;
+  }
+  if (promoteWaitingSpectator()) return;
+  resetRoomState(true);
+  room.host = null;
+  broadcast({ type: "lobby", seats: room.seats });
+}
+
 wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     let msg = null;
@@ -227,8 +301,9 @@ wss.on("connection", (ws) => {
           return;
         }
         if (wantsSpectator) {
-          const name = (msg.name || `Spectator`).slice(0, 32);
-          room.connections.set(ws, { spectator: true, name });
+          const name = makeUniqueName((msg.name || `Spectator`).slice(0, 32));
+          const waitForStart = !!msg.waitForStart;
+          room.connections.set(ws, { spectator: true, name, waitForStart });
           if (!room.host && room.seats.length > 0) {
             const hostSeat = room.connections.keys().next().value;
             room.host = hostSeat || ws;
@@ -247,7 +322,7 @@ wss.on("connection", (ws) => {
           send(ws, { type: "error", message: "Room is full." });
           return;
         }
-        const name = (msg.name || `Player ${seatId + 1}`).slice(0, 32);
+        const name = makeUniqueName((msg.name || `Player ${seatId + 1}`).slice(0, 32));
         const seat = { playerId: seatId, name };
         room.seats.push(seat);
         room.connections.set(ws, seat);
@@ -448,19 +523,8 @@ wss.on("connection", (ws) => {
       }
     }
     if (room.host === ws) {
-      const nextPlayer = Array.from(room.connections.entries()).find(([, meta]) => meta && meta.playerId !== undefined);
-      room.host = nextPlayer ? nextPlayer[0] : null;
-      if (room.host) {
-        send(room.host, { type: "host", value: true });
-      } else {
-        // no human players left; end game
-        room.started = false;
-        room.engine = null;
-        room.nightActions.clear();
-        room.voteActions.clear();
-        room.lastWords.clear();
-        broadcast({ type: "lobby", seats: room.seats });
-      }
+      room.host = null;
+      handleHostVacancy();
     }
     log("Connection closed", seat?.playerId ?? (seat?.spectator ? "spectator" : "?"));
   });
