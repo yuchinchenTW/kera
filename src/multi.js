@@ -4,6 +4,7 @@ const els = {
   wsUrl: document.getElementById("wsUrl"),
   playerName: document.getElementById("playerName"),
   spectatorToggle: document.getElementById("spectatorToggle"),
+  spectatorWait: document.getElementById("spectatorWait"),
   connectBtn: document.getElementById("connectBtn"),
   themeSelect: document.getElementById("themeSelect"),
   startBtn: document.getElementById("startBtn"),
@@ -48,6 +49,7 @@ const translations = {
     localeEn: "English",
     localeZh: "中文",
     spectator: "Spectator",
+    spectatorWait: "Wait for start",
     join: "Join",
     startHost: "Start (host)",
     yourName: "Your name",
@@ -120,6 +122,7 @@ const translations = {
     localeEn: "英文",
     localeZh: "中文",
     spectator: "觀戰",
+    spectatorWait: "等待下一局",
     join: "加入",
     startHost: "開始 (房主)",
     yourName: "你的名字",
@@ -302,6 +305,7 @@ function applyLocaleText() {
 let ws = null;
 let isHost = false;
 let seatId = null;
+let isSpectator = false;
 let latestView = null;
 let lobbySeats = [];
 let timerState = null;
@@ -329,8 +333,16 @@ function connect() {
   ws.onopen = () => {
     const name = (els.playerName.value || "Player").slice(0, 32);
     const spectator = !!els.spectatorToggle?.checked;
-    ws.send(JSON.stringify({ type: "join", name, spectator }));
-    log(">> join as " + name);
+    const waitForStart = !!els.spectatorWait?.checked;
+    ws.send(JSON.stringify({ type: "join", name, spectator, waitForStart }));
+    log(">> join as " + name + (spectator ? " (spectator)" : ""));
+    if (spectator && waitForStart) {
+      log("Waiting for next start as spectator.");
+    }
+    if (spectator) {
+      seatId = null;
+      isSpectator = true;
+    }
   };
   ws.onclose = () => {
     log("Connection closed.");
@@ -360,10 +372,18 @@ function handleMessage(msg) {
   switch (msg.type) {
     case "joined":
       seatId = msg.playerId;
+      isSpectator = !!msg.spectator;
       isHost = !!msg.host;
-      els.seatInfo.textContent = `${t("seatLabel")} ${seatId + 1}`;
-      els.hostBadge.textContent = isHost ? t("host") : "";
-      log("Joined seat " + (seatId + 1) + (isHost ? " (host)" : ""));
+      if (!isSpectator) {
+        els.seatInfo.textContent = `${t("seatLabel")} ${seatId + 1}`;
+        els.hostBadge.textContent = isHost ? t("host") : "";
+        log("Joined seat " + (seatId + 1) + (isHost ? " (host)" : ""));
+      } else {
+        seatId = null;
+        els.seatInfo.textContent = t("spectator");
+        els.hostBadge.textContent = "";
+        log("Joined as spectator");
+      }
       break;
     case "host":
       isHost = !!msg.value;
@@ -377,6 +397,11 @@ function handleMessage(msg) {
       els.dayDisplay.textContent = "-";
       els.youDisplay.textContent = "-";
       log("Lobby reset (waiting to start)");
+      if (isSpectator && seatId === null && els.spectatorWait?.checked) {
+        const name = (els.playerName.value || "Player").slice(0, 32);
+        log("Auto-joining lobby as player from spectator wait.");
+        send({ type: "join", name, spectator: false, waitForStart: false });
+      }
       break;
     case "started":
       log("Game started. Humans: " + msg.humans);
@@ -693,6 +718,16 @@ if (els.sendPoliceChat) {
     send({ type: "police_chat", text });
     els.policeChatInput.value = "";
   });
+}
+const spectatorWaitLabel = document.getElementById("spectatorWaitLabel");
+if (els.spectatorToggle && spectatorWaitLabel) {
+  const updateWaitVisibility = () => {
+    const show = !!els.spectatorToggle.checked;
+    spectatorWaitLabel.classList.toggle("hidden", !show);
+    spectatorWaitLabel.style.display = show ? "inline-flex" : "none";
+  };
+  els.spectatorToggle.addEventListener("change", updateWaitVisibility);
+  updateWaitVisibility();
 }
 els.resolveNight.addEventListener("click", () => send({ type: "resolve_night" }));
 els.resolveVote.addEventListener("click", () => send({ type: "resolve_vote" }));
