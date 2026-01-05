@@ -1,4 +1,7 @@
 import http from "node:http";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { GameEngine } from "./src/engine.js";
 import { buildPlayerView } from "./src/view.js";
@@ -147,7 +150,58 @@ function ensureHost(ws) {
   return ws === room.host;
 }
 
-const server = http.createServer();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const baseDir = path.resolve(__dirname);
+
+function contentTypeFor(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".js":
+      return "application/javascript; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+async function serveStatic(req, res) {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405);
+    res.end("Method Not Allowed");
+    return;
+  }
+  const urlPath = new URL(req.url, "http://localhost").pathname;
+  const normalized = path.normalize(urlPath);
+  const filePath = path.resolve(baseDir, normalized === "/" ? "index.html" : "." + normalized);
+  if (!filePath.startsWith(baseDir)) {
+    res.writeHead(403);
+    res.end("Forbidden");
+    return;
+  }
+  try {
+    const data = await fs.readFile(filePath);
+    res.writeHead(200, { "Content-Type": contentTypeFor(filePath) });
+    if (req.method === "GET") res.end(data);
+    else res.end();
+  } catch (err) {
+    res.writeHead(404);
+    res.end("Not found");
+  }
+}
+
+const server = http.createServer((req, res) => {
+  serveStatic(req, res);
+});
 const wss = new WebSocketServer({ server });
 
 wss.on("connection", (ws) => {
