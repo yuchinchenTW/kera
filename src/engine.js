@@ -471,7 +471,7 @@ export class GameEngine {
         addPrivateLog(
           this.state,
           "police",
-          `Investigation result: ${target.name} is ${target.faction === Faction.RED ? "RED" : target.faction === Faction.GREEN ? "GREEN" : "BLUE"}`
+          `Investigation result: ${target.name} is ${target.faction === Faction.RED ? "RED" : target.faction === Faction.GREEN ? "GREEN" : "BLUE"} (${target.role})`
         );
         if (target.faction === Faction.RED && target.alive) {
           this.state.policeRevealedRed = target.id;
@@ -573,6 +573,19 @@ export class GameEngine {
         }
         filteredKills.splice(0, filteredKills.length, ...remaining);
         if (overdoseKill) filteredKills.push(overdoseKill);
+        if (overdoseKill && target?.role === Roles.TERRORIST.id && doctor.alive) {
+          filteredKills.push({
+            targetId: doctor.id,
+            cause: DeathCause.TERROR_BOMB,
+            killerId: target.id,
+            timing: "instant",
+            blockable: false,
+            unstoppable: true,
+            noLastWords: true,
+            requiresAliveActor: null,
+          });
+          addPublicLog(this.state, `${doctor.name} was caught in a bomb backlash.`);
+        }
       }
     }
 
