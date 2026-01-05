@@ -7,39 +7,33 @@ Any similarities are purely coincidental.
 Single-player social deduction: 1 human + 17 AI, multiple themes/roles, deterministic night/day loop.
 
 ## Quick Play (single-player)
-1) Serve files locally (avoid `file://`):
+1) Start the built-in static server + referee:
 ```bash
-python -m http.server 8000
+npm install
+npm start   # serves http/ws on :3001
 ```
-2) Open `http://localhost:8000/` and click **New Game**.
+2) Open `http://localhost:3001/` and click **New Game**.
 
 ## Multiplayer (experimental)
-- Centralized WebSocket server; humans connect,空位由 **hard** AI 補滿。
-- Host 準備：
-  1) 開裁判伺服器：  
-     ```bash
-     npm install
-     npm run start   # 預設 ws://<host>:3001
-     ```
-  2) 開靜態檔案（供所有玩家開網頁）：  
-     ```bash
-     python -m http.server 8000
-     ```  
-     玩家用瀏覽器開 `http://<host>:8000/multiplayer.html`。
-- 玩家加入：
-  1) 在頁面輸入 WS URL（例如 `ws://<host>:3001`）與名字。  
-  2) 按 Join。第一個加入者自動成為 Host。  
-  3) Host 選擇 Theme，按 Start 開局。  
-  4) 夜晚送夜行動；白天聊天；投票階段送投票/遺言。倒數結束會自動結算（Host 也可手動 Resolve）。  
-  5) 遊戲結束後可由 Host 按 Restart，再按 Start 重開。
-- 備註：請確保 3001 (WS) 與 8000 (靜態頁) 允許 LAN/FW 通行；最多 18 人，座位鎖定後缺席者自動補 AI。
-- 若要手動測試協議（無 UI）：JSON over ws
-  - `{"type":"join","name":"Alice"}`
-  - Host: `{"type":"start","theme":"GOOD_VS_EVIL"}`
-  - 夜行動：`{"type":"night_action","action":{"type":"POLICE_INVESTIGATE","targetId":3}}`
-  - 投票：`{"type":"vote","targetId":5,"lastWords":"gg"}`
-  - Host 結算：`{"type":"resolve_night"}` / `{"type":"resolve_vote"}`
-  - 白天聊天：`{"type":"chat","text":"hi"}` (DAY)
+- One process serves both WebSocket and pages:
+  ```bash
+  npm install
+  npm start   # http://<host>:3001 , ws://<host>:3001
+  ```
+- Open `http://<host>:3001/multiplayer.html`
+- In-page steps:
+  1) Set WS URL to `ws://<host>:3001` (use `wss://` if behind https).
+  2) Enter a name, click **Join** (first joiner becomes Host).
+  3) Host picks a theme, clicks **Start**.
+  4) Night: send night actions. Day: chat. Vote: send vote/last words; timers auto-resolve or Host can click Resolve.
+  5) After game end, Host clicks **Restart** then **Start** for a new match.
+- Ports: only 3001 needed (http + ws). Up to 18 seats; empty seats auto-filled by AI.
+
+### Render deploy example
+- If deployed at `https://kera.onrender.com`:
+  - Open `https://kera.onrender.com/multiplayer.html`
+  - WS URL: `wss://kera.onrender.com`
+  - Join and start as above.
 
 ## Gameplay Highlights
 - 18 players fixed: 1 human + 17 AI.
