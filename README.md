@@ -14,6 +14,13 @@ npm start   # serves http/ws on :3001
 ```
 2) Open `http://localhost:3001/` and click **New Game**.
 
+## 中文快速指引
+- 安裝與啟動：先跑 `npm install`，再 `npm start`（HTTP/WS 皆在 3001 埠）。
+- 單人遊玩：瀏覽 `http://localhost:3001/`，點「New Game」即可開局。
+- 多人遊玩：開 `http://<host>:3001/multiplayer.html`，輸入 WS URL（例：`ws://<host>:3001`），輸入暱稱加入；第一位是房主，選主題後點 Start，夜晚送出夜行動，白天聊天，投票階段送出投票/遺言，房主可手動 Resolve。
+- 佈署範例：若部署在 `https://kera.onrender.com`，連線用 `wss://kera.onrender.com`，步驟同上。
+- 全 AI 勝率模擬：`node tests/simulate.js 500`（數字可調，預設標準主題）。
+
 ## Multiplayer (experimental)
 - One process serves both WebSocket and pages:
   ```bash
