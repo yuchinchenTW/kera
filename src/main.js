@@ -244,30 +244,91 @@ function buildPlayerOptions(filterFn = () => true) {
 
 function translateLine(line) {
   if (locale !== "zh" || typeof line !== "string") return line;
+  const factionMap = {
+    BLUE: "藍方",
+    RED: "紅方",
+    GREEN: "綠方",
+  };
+  const roleMap = {
+    POLICE: "警察",
+    KILLER: "殺手",
+    DOCTOR: "醫生",
+    SNIPER: "狙擊手",
+    AGENT: "特工",
+    TERRORIST: "恐怖份子",
+    COWBOY: "牛仔",
+    KIDNAPPER: "綁匭",
+    ZOMBIE: "殘屍",
+    RIOT_POLICE: "防暴警",
+    ARSONIST: "縱火犯",
+    HEAVENLY_FIEND: "天罰者",
+    VINE_DEMON: "藤蔓魔",
+    BRAT: "熊孩子",
+    NIGHTMARE_DEMON: "夢鬜魔",
+    EXORCIST: "驅魔人",
+    NECROMANCER: "死靈法師",
+    PURIFIER: "淨化者",
+    GRUDGE_BEAST: "怨獸",
+    CIVILIAN: "平民",
+  };
+  const deathMap = {
+    "murdered during the night": "晚上被謀殺",
+    "sniper headshot": "遭到狙擊爆頭",
+    "fatal overdose": "醫療過量致死",
+    "executed by vote": "被公投處決",
+    "died in a bomb blast": "死於炸彈爆炸",
+    "burned by arson": "被縱火燒死",
+    "executed by ransom": "被綁匭處決",
+    "killed by infection": "死於感染",
+    "choked in smoke": "窮息於濃煙",
+    "died with their agent": "與特工連命而死",
+    "shot by a cowboy": "被牛仔射殺",
+    "cowboy backfire": "牛仔反噬身亡",
+    "petrified by an exorcist": "被驅魔鎖魂",
+    "cursed by a necromancer": "遭死靈諼咒",
+    "smited by a heavenly fiend": "被天罰擊殺",
+    "slain by nightmare demon": "被夢鬜擊殺",
+    "cut down by grudge beasts": "被怨獸撕裂",
+    "sacrificed by vine seed": "為藤種換命",
+    "unknown": "未知原因",
+  };
+  const intelMatch = line.match(/(\[INTEL\]\s*)?Investigation result: (.+) is (RED|GREEN|BLUE) \((.+)\)/);
+  if (intelMatch) {
+    const [, prefix = "", name, faction, role] = intelMatch;
+    const factionText = factionMap[faction] || faction;
+    const roleText = roleMap[role] || role;
+    return `${prefix}${name} ? ${factionText} (${roleText})`;
+  }
+  const deathMatch = line.match(/^(.+) died \((.+)\)\.$/);
+  if (deathMatch) {
+    const [, name, causeEn] = deathMatch;
+    const causeZh = deathMap[causeEn] || causeEn;
+    return `${name} ?? (${causeZh})`;
+  }
   const rules = [
-    [/Someone deployed smoke on (.+)\./, `有人對 $1 投擲煙霧彈。`],
-    [/Someone cleansed (.+)\./, `有人淨化了 $1。`],
-    [/Someone kidnapped (.+)\./, `有人綁架了 $1。`],
-    [/Someone fired a sniper shot\./, "有人開了狙擊槍。"],
-    [/A bomb went off but failed on an ally; the bomber died\./, "炸彈在友方身上失效，炸彈客自爆身亡。"],
+[/Someone deployed smoke on (.+)\./, "有人對 $1 投擲了煙霧彈。"],
+    [/Someone cleansed (.+)\./, "有人淨化了 $1。"],
+    [/Someone kidnapped (.+)\./, "有人綁架了 $1。"],
+    [/Someone fired a sniper shot\./, "有人開了一槍狙擊。"],
+    [/A bomb went off but failed on an ally; the bomber died\./, "炸彈引爆但擊中同陣營，炸彈客身亡。"],
     [/A bomb detonated on (.+)\./, "炸彈在 $1 身上爆炸。"],
-    [/Someone fired a risky shot at (.+)\./, "有人冒險朝 $1 開槍。"],
-    [/A cowboy's chamber clicked on (.+)\./, "牛仔對 $1 開槍空響。"],
+    [/Someone fired a risky shot at (.+)\./, "有人冒險射擊了 $1。"],
+    [/A cowboy\'s chamber clicked on (.+)\./, "牛仔對 $1 空包彈。"],
     [/A cowboy drew a wild bullet\. Chaos ensued\./, "牛仔抽到瘋狂子彈，場面大亂。"],
-    [/Someone splashed fuel on (.+)\./, "有人往 $1 潑了汽油。"],
-    [/Someone prepared to ignite marked targets\./, "有人準備點燃所有被標記的目標。"],
-    [/Someone saved (.+) from death\./, "有人救下了 $1。"],
-    [/Someone injected (.+) \(dose (\d+)\/(\d+)\)\./, `有人注射 $1（第 $2/$3 針）。`],
-    [/Killers failed to agree on a target\./, "殺手未達成共識。"],
-    [/Police could not agree on a target\./, "警察未達成共識。"],
-    [/Votes:/, "投票："],
-    [/(.+) was executed by vote.*$/, "$1 被處決（過半數）。"],
-    [/(.+) was executed by highest votes.*$/, "$1 被最高票處決。"],
-    [/No majority reached\. Nobody was executed\./, "沒有過半數，無人被處決。"],
-    [/Grudge Beasts entered berserk rage\./, "冤魂獸進入暴走狀態。"],
-    [/(.+) turned into a zombie overnight\./, "$1 在夜裡變成了殭屍。"],
-    [/(.+) was overwhelmed and turned into a zombie immediately\./, "$1 被圍毆立刻變成殭屍。"],
-    [/feels off\./, "不太對勁。"],
+    [/Someone splashed fuel on (.+)\./, "有人對 $1 潑上汽油。"],
+    [/Someone prepared to ignite marked targets\./, "有人準備點燃已標記的目標。"],
+    [/Someone saved (.+) from death\./, "有人救回了 $1。"],
+    [/Someone injected (.+) \(dose (\d+)\/(\d+)\)\./, "有人注射 $1（第 $2/$3 劑）。"],
+    [/Killers failed to agree on a target\./, "殺手未能達成共識。"],
+    [/Police could not agree on a target\./, "警察未能達成共識。"],
+    [/Votes:/, "投票結果："],
+    [/(.+) was executed by vote.*$/, "$1 被多數票處決。"],
+    [/(.+) was executed by highest votes.*$/, "$1 因最高票被處決。"],
+    [/No majority reached\. Nobody was executed\./, "無人過半，暫不處決。"],
+    [/Grudge Beasts entered berserk rage\./, "怨獸進入狂暴狀態。"],
+    [/(.+) turned into a zombie overnight\./, "$1 在夜裡變成了殘屍。"],
+    [/(.+) was overwhelmed and turned into a zombie immediately\./, "$1 被壓制後立刻變成殘屍。"],
+    [/feels off\./, "覺得不對動。"],
     [/seems fine to me\./, "在我看來沒問題。"],
     [/What's everyone thinking about (.+)\?/, "大家覺得 $1 怎麼樣？"],
   ];
@@ -280,6 +341,7 @@ function translateLine(line) {
   }
   return out;
 }
+
 
 function translateLines(list) {
   return list.map((l) => translateLine(l));
