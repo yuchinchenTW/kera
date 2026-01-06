@@ -26,6 +26,8 @@ const room = {
     endsAt: null,
     phase: null,
   },
+  restartHandle: null,
+  restartLogged: false,
 };
 
 const DURATIONS = {
@@ -91,6 +93,11 @@ function resetRoomState(clearSeats = false) {
   room.nightActions.clear();
   room.voteActions.clear();
   room.lastWords.clear();
+  if (room.restartHandle) {
+    clearTimeout(room.restartHandle);
+    room.restartHandle = null;
+  }
+  room.restartLogged = false;
   if (clearSeats) {
     room.seats = [];
   }
@@ -107,9 +114,15 @@ function broadcastViews() {
     }
     send(ws, { type: "view", view });
   }
+  scheduleRestartAfterVictory();
 }
 
 function startGame(theme = Theme.GOOD_VS_EVIL.id) {
+  if (room.restartHandle) {
+    clearTimeout(room.restartHandle);
+    room.restartHandle = null;
+  }
+  room.restartLogged = false;
   const humanIds = room.seats.map((s) => s.playerId);
   room.theme = theme;
   room.engine = new GameEngine(Date.now(), theme, "hard", { humanIds });
@@ -161,6 +174,7 @@ function scheduleNightTimer() {
     broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
     broadcastViews();
     if (room.engine.state.phase !== Phase.END) scheduleDayToVote();
+    scheduleRestartAfterVictory();
   });
 }
 
@@ -188,6 +202,7 @@ function scheduleVoteTimer() {
     broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
     broadcastViews();
     if (room.engine.state.phase !== Phase.END) scheduleNightTimer();
+    scheduleRestartAfterVictory();
   });
 }
 
@@ -249,6 +264,45 @@ const server = http.createServer((req, res) => {
 });
 const wss = new WebSocketServer({ server });
 
+function scheduleRestartAfterVictory() {
+  if (!room.engine) return;
+  const victory = !!room.engine.state?.victory;
+  const isEndPhase = room.engine.state.phase === Phase.END;
+  if (!victory && !isEndPhase) return;
+  if (room.restartHandle) return;
+  if (!room.restartLogged) {
+    log(
+      victory
+        ? "Victory detected, preparing auto-restart."
+        : "END phase detected without victory payload; preparing auto-restart."
+    );
+    room.restartLogged = true;
+  }
+  if (!isEndPhase) {
+    log("Phase not END; forcing END for restart.");
+    room.engine.state.phase = Phase.END;
+  }
+  promoteWaitingSpectatorsToSeats();
+  const themeToUse = room.theme;
+  clearTimer();
+  log("Auto-restart scheduled in 3s");
+  room.restartHandle = setTimeout(() => {
+    room.restartHandle = null;
+    if (!room.engine) return;
+    log("Auto-restart firing");
+    startGame(themeToUse);
+  }, 3000);
+}
+
+// Fallback guard: poll for victory and ensure restart is scheduled.
+setInterval(() => {
+  try {
+    scheduleRestartAfterVictory();
+  } catch (err) {
+    log("Auto-restart poll error:", err);
+  }
+}, 1000);
+
 function promoteWaitingSpectator() {
   const waiterEntry = Array.from(room.connections.entries()).find(
     ([, meta]) => meta?.spectator && meta.waitForStart
@@ -281,6 +335,23 @@ function handleHostVacancy() {
   resetRoomState(true);
   room.host = null;
   broadcast({ type: "lobby", seats: room.seats });
+}
+
+function promoteWaitingSpectatorsToSeats() {
+  let changed = false;
+  for (const [ws, meta] of Array.from(room.connections.entries())) {
+    if (!meta?.spectator || !meta.waitForStart) continue;
+    const seatId = nextSeatId();
+    if (seatId === null) break;
+    const seat = { playerId: seatId, name: meta.name };
+    room.seats.push(seat);
+    room.connections.set(ws, { playerId: seatId, name: meta.name, waitForStart: false });
+    send(ws, { type: "joined", playerId: seatId, host: ensureHost(ws) });
+    changed = true;
+  }
+  if (changed) {
+    broadcast({ type: "lobby", seats: room.seats });
+  }
 }
 
 wss.on("connection", (ws) => {
@@ -382,6 +453,7 @@ wss.on("connection", (ws) => {
         broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
         broadcastViews();
         if (room.engine.state.phase !== Phase.END) scheduleDayToVote();
+        scheduleRestartAfterVictory();
         break;
       }
       case "vote": {
@@ -426,6 +498,7 @@ wss.on("connection", (ws) => {
         broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
         broadcastViews();
         if (room.engine.state.phase !== Phase.END) scheduleNightTimer();
+        scheduleRestartAfterVictory();
         break;
       }
       case "chat": {

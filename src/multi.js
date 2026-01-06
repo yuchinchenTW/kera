@@ -35,7 +35,6 @@ const els = {
   sendPoliceChat: document.getElementById("sendPoliceChat"),
   resolveNight: document.getElementById("resolveNight"),
   resolveVote: document.getElementById("resolveVote"),
-  restartBtn: document.getElementById("restartBtn"),
   playersList: document.getElementById("playersList"),
   logText: document.getElementById("logText"),
   endBanner: document.getElementById("endBanner"),
@@ -84,7 +83,6 @@ const translations = {
     sendChat: "Send",
     resolveNight: "Resolve Night",
     resolveVote: "Resolve Vote",
-    restart: "Restart",
     votePlaceholder: "Last words (optional)",
     chatPlaceholder: "Message",
     pickAction: "Pick action",
@@ -190,7 +188,6 @@ const translations = {
     sendChat: "送出",
     resolveNight: "結算夜晚",
     resolveVote: "結算投票",
-    restart: "重新開始",
     votePlaceholder: "遺言 (可選)",
     chatPlaceholder: "訊息",
     pickAction: "選擇行動",
@@ -329,7 +326,7 @@ function setupThemeOptions() {
 
 function connect() {
   if (ws) ws.close();
-  ws = new WebSocket(els.wsUrl.value || "ws://localhost:3001");
+  ws = new WebSocket(els.wsUrl.value || "wss://kera.onrender.com");
   ws.onopen = () => {
     const name = (els.playerName.value || "Player").slice(0, 32);
     const spectator = !!els.spectatorToggle?.checked;
@@ -734,6 +731,5 @@ if (els.spectatorToggle && spectatorWaitLabel) {
 }
 els.resolveNight.addEventListener("click", () => send({ type: "resolve_night" }));
 els.resolveVote.addEventListener("click", () => send({ type: "resolve_vote" }));
-els.restartBtn.addEventListener("click", () => send({ type: "restart" }));
 
 setupThemeOptions();
