@@ -9,6 +9,7 @@ import { Theme, Phase } from "./src/roles.js";
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 18;
+const RESTART_DELAY_MS = 8000;
 
 const room = {
   started: false,
@@ -289,13 +290,14 @@ function scheduleRestartAfterVictory() {
   promoteWaitingSpectatorsToSeats();
   const themeToUse = room.theme;
   clearTimer();
-  log("Auto-restart scheduled in 3s");
-  room.restartHandle = setTimeout(() => {
+  log(`Auto-restart scheduled in ${RESTART_DELAY_MS / 1000}s`);
+  room.restartHandle = true;
+  startTimer("RESTART", RESTART_DELAY_MS, () => {
     room.restartHandle = null;
     if (!room.engine) return;
     log("Auto-restart firing");
     startGame(themeToUse);
-  }, 3000);
+  });
 }
 
 // Fallback guard: poll for victory and ensure restart is scheduled.

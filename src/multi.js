@@ -73,6 +73,7 @@ const translations = {
     phaseDay: "Day",
     phaseVote: "Vote",
     phaseEnd: "End",
+    phaseRestart: "Restarting",
     nightAction: "Night action",
     vote: "Vote",
     dayChat: "Chat",
@@ -154,6 +155,7 @@ const translations = {
     phaseDay: "白天",
     phaseVote: "投票",
     phaseEnd: "結束",
+    phaseRestart: "重開倒數",
     roleMap: {
       POLICE: "警察",
       KILLER: "殺手",
@@ -193,9 +195,9 @@ const translations = {
     sendPoliceChat: "發送（警察）",
     policeChatPlaceholder: "警察私聊訊息...",
     hostOnly: "僅房主",
-    spectatorChat: "Spectator chat (spectators)",
-    sendSpectatorChat: "Send (spectators/dead)",
-    spectatorChatPlaceholder: "Spectator chat...",
+    spectatorChat: "觀戰者聊天窗（觀戰者）",
+    sendSpectatorChat: "送出（觀戰者／死亡）",
+    spectatorChatPlaceholder: "觀戰者聊天訊息...",
     noChat: "No chat yet",
     gameView: "遊戲畫面",
     sendNightAction: "送出",
@@ -785,6 +787,8 @@ function renderTimer() {
       ? t("phaseVote")
       : timerState.phase === "END"
       ? t("phaseEnd")
+      : timerState.phase === "RESTART"
+      ? t("phaseRestart")
       : timerState.phase;
   els.timerDisplay.textContent = `${phaseLabel} ${secs}s`;
 }
