@@ -349,6 +349,9 @@ function connect() {
     if (spectator && waitForStart) {
       log("Waiting for next start as spectator.");
     }
+    if (!spectator && waitForStart) {
+      log("Current game in progress: you will spectate and auto-join next start.");
+    }
     if (spectator) {
       seatId = null;
       isSpectator = true;
@@ -723,9 +726,7 @@ function renderEndBanner() {
 }
 
 // Event handlers
-if (els.localeSelect && els.localeSelect.value === "zh") {
-  locale = "zh";
-}
+locale = "zh";
 applyLocaleText();
 if (els.localeSelect) {
   els.localeSelect.addEventListener("change", () => {

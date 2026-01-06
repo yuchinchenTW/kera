@@ -372,12 +372,13 @@ wss.on("connection", (ws) => {
       case "join": {
         const wantsSpectator = !!msg.spectator;
         if (room.started && !wantsSpectator) {
-          send(ws, { type: "error", message: "Game already started." });
-          return;
+          // Auto-convert to spectator waiting for next game.
+          msg.spectator = true;
+          msg.waitForStart = true;
         }
-        if (wantsSpectator) {
+        if (wantsSpectator || msg.spectator) {
           const name = makeUniqueName((msg.name || `Spectator`).slice(0, 32));
-          const waitForStart = !!msg.waitForStart;
+          const waitForStart = room.started ? true : !!msg.waitForStart;
           room.connections.set(ws, { spectator: true, name, waitForStart });
           if (!room.host && room.seats.length > 0) {
             const hostSeat = room.connections.keys().next().value;
