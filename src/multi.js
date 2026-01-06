@@ -653,7 +653,26 @@ function renderView() {
       ? allies.map((p) => (p.alive ? p.name : `${p.name} (dead)`)).join(", ")
       : "-";
   }
-  els.victoryDisplay.textContent = v.victory ? `${v.victory.winner} (${v.victory.reason})` : "-";
+  if (v.victory) {
+    const winner = v.victory.winner || "";
+    const reason = v.victory.reason || "";
+    const winnerZhMap = { RED: "紅方", BLUE: "藍方", ZOMBIE: "殭屍", GRUDGE: "怨獸" };
+    const reasonZhMap = {
+      "Grudge Beasts finished their rage condition.": "怨獸完成狂暴條件。",
+      "Grudge Beasts survive without berserk.": "怨獸存活即獲勝。",
+      "Zombies outnumber the living.": "殭屍數量過半，感染全場。",
+      "Red faction satisfied elimination condition.": "紅方達成淘汰條件。",
+      "All killers eliminated.": "所有殺手被清除。",
+    };
+    const colorMap = { RED: "#e74c3c", BLUE: "#1e90ff", ZOMBIE: "#27ae60", GRUDGE: "#9b59b6" };
+    const winnerText = locale === "zh" ? winnerZhMap[winner] || winner : winner;
+    const reasonText = locale === "zh" ? reasonZhMap[reason] || reason : reason;
+    els.victoryDisplay.style.color = colorMap[winner] || "#333";
+    els.victoryDisplay.textContent = `${winnerText} (${reasonText})`;
+  } else {
+    els.victoryDisplay.style.color = "#333";
+    els.victoryDisplay.textContent = "-";
+  }
   // Players list
   els.playersList.innerHTML = "";
   (v.players || []).forEach((p) => {
@@ -799,8 +818,26 @@ function renderEndBanner() {
     els.endBanner.classList.remove("hidden");
     els.endBanner.style.fontSize = "32px";
     els.endBanner.style.fontWeight = "800";
-    els.endBanner.style.color = "#f1c40f";
-    els.endBanner.textContent = `Game Over: ${latestView.victory.winner} - ${latestView.victory.reason}`;
+    const winner = latestView.victory.winner || "";
+    const reason = latestView.victory.reason || "";
+    const colorMap = { RED: "#e74c3c", BLUE: "#1e90ff", ZOMBIE: "#27ae60", GRUDGE: "#9b59b6" };
+    const winnerColor = colorMap[winner] || "#f1c40f";
+    els.endBanner.style.color = winnerColor;
+    if (locale === "zh") {
+      const winnerZhMap = { RED: "紅方", BLUE: "藍方", ZOMBIE: "殭屍", GRUDGE: "怨獸" };
+      const reasonZhMap = {
+        "Grudge Beasts finished their rage condition.": "怨獸完成狂暴條件。",
+        "Grudge Beasts survive without berserk.": "怨獸存活即獲勝。",
+        "Zombies outnumber the living.": "殭屍數量過半，感染全場。",
+        "Red faction satisfied elimination condition.": "紅方達成淘汰條件。",
+        "All killers eliminated.": "所有殺手被清除。",
+      };
+      const winnerText = winnerZhMap[winner] || winner;
+      const reasonText = reasonZhMap[reason] || reason;
+      els.endBanner.textContent = `遊戲結束：${winnerText} - ${reasonText}`;
+    } else {
+      els.endBanner.textContent = `Game Over: ${winner} - ${reason}`;
+    }
   } else {
     els.endBanner.classList.add("hidden");
     els.endBanner.textContent = "";
