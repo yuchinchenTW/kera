@@ -675,13 +675,14 @@ function renderView() {
   }
   // Players list
   els.playersList.innerHTML = "";
+  const ended = !!v.victory;
   (v.players || []).forEach((p) => {
     const li = document.createElement("div");
     li.className = "player-card" + (p.alive ? "" : " dead");
-    if (!p.alive) {
-      if (p.faction === "BLUE") li.style.color = "#1e90ff";
-      else if (p.faction === "RED") li.style.color = "#e74c3c";
-      else if (p.faction === "GREEN") li.style.color = "#27ae60";
+    const factionColor =
+      p.faction === "BLUE" ? "#1e90ff" : p.faction === "RED" ? "#e74c3c" : p.faction === "GREEN" ? "#27ae60" : null;
+    if (!p.alive || ended) {
+      if (factionColor) li.style.color = factionColor;
     }
     const aliveText = p.alive ? t("alive") : t("dead");
     const roleText = roleLabel(p.role);
@@ -708,7 +709,6 @@ function renderView() {
   buildOptions(els.voteTarget, voteOptions, t("abstain"));
   const alive = v.you?.alive;
   const phase = v.phase;
-  const ended = !!v.victory;
   const canSpectatorChat = !you || !you.alive;
   // Killer chat
   if (els.killerChatBox) {
