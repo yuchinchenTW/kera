@@ -15,6 +15,7 @@ const els = {
   phaseDisplay: document.getElementById("phaseDisplay"),
   dayDisplay: document.getElementById("dayDisplay"),
   youDisplay: document.getElementById("youDisplay"),
+  alliesDisplay: document.getElementById("alliesDisplay"),
   timerDisplay: document.getElementById("timerDisplay"),
   victoryDisplay: document.getElementById("victoryDisplay"),
   nightActionType: document.getElementById("nightActionType"),
@@ -65,6 +66,7 @@ const translations = {
     day: "Day",
     you: "You",
     timer: "Timer",
+    allies: "Allies",
     victory: "Victory",
     actions: "Actions",
     phaseNight: "Night",
@@ -141,6 +143,7 @@ const translations = {
     day: "天數",
     you: "你",
     timer: "計時",
+    allies: "\u968a\u53cb",
     victory: "勝利",
     actions: "行動",
     alive: "存活",
@@ -572,6 +575,19 @@ function renderView() {
     }
   } else {
     els.youDisplay.textContent = "-";
+  }
+  if (els.alliesDisplay) {
+    const you = v.you;
+    const players = v.players || [];
+    let allies = [];
+    if (you?.role === Roles.POLICE.id) {
+      allies = players.filter((p) => p.role === Roles.POLICE.id && p.id !== you.id);
+    } else if (you?.role === Roles.KILLER.id) {
+      allies = players.filter((p) => p.role === Roles.KILLER.id && p.id !== you.id);
+    }
+    els.alliesDisplay.textContent = allies.length
+      ? allies.map((p) => (p.alive ? p.name : `${p.name} (dead)`)).join(", ")
+      : "-";
   }
   els.victoryDisplay.textContent = v.victory ? `${v.victory.winner} (${v.victory.reason})` : "-";
   // Players list

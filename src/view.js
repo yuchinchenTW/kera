@@ -3,7 +3,6 @@ import { Roles } from "./roles.js";
 
 function canSeeRole(viewer, target) {
   if (!viewer || !target) return false;
-  if (!target.alive) return true;
   if (viewer.id === target.id) return true;
   if (viewer.role === Roles.POLICE.id && target.role === Roles.POLICE.id) return true;
   if (viewer.role === Roles.KILLER.id && target.role === Roles.KILLER.id) return true;
@@ -16,10 +15,10 @@ function visibleRole(viewer, target) {
 
 function visibleFaction(viewer, target) {
   if (!viewer || !target) return "UNKNOWN";
-  if (!target.alive || viewer.id === target.id) return target.faction;
+  if (viewer.id === target.id) return target.faction;
   if (viewer.role === Roles.POLICE.id && target.role === Roles.POLICE.id) return target.faction;
   if (viewer.role === Roles.KILLER.id && target.role === Roles.KILLER.id) return target.faction;
-  return target.alive ? "UNKNOWN" : target.faction;
+  return "UNKNOWN";
 }
 
 export function buildPlayerView(state, playerId) {
@@ -73,8 +72,8 @@ export function buildSpectatorView(state) {
     id: p.id,
     name: p.name,
     alive: p.alive,
-    role: p.alive ? "HIDDEN" : p.role,
-    faction: p.alive ? "UNKNOWN" : p.faction,
+    role: "HIDDEN",
+    faction: "UNKNOWN",
     isYou: false,
     bratRevealed: p.status?.bratRevealed || false,
   }));
