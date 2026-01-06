@@ -84,6 +84,7 @@ export function createInitialState(
       killer: [],
       grudge: [],
     },
+    spectatorChat: [],
     killerChat: [],
     policeChat: [],
     killerChat: [],

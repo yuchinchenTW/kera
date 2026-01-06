@@ -61,6 +61,7 @@ export function buildPlayerView(state, playerId) {
     lastNightSummary: [...state.lastNightSummary],
     killerChat: viewer.role === Roles.KILLER.id ? [...(state.killerChat || [])] : [],
     policeChat: viewer.role === Roles.POLICE.id ? [...(state.policeChat || [])] : [],
+    spectatorChat: !viewer.alive ? [...(state.spectatorChat || [])] : [],
     privateIntel,
     winrateHint: state.winrateHint,
     usage: { ...state.usage },
@@ -91,6 +92,7 @@ export function buildSpectatorView(state) {
     usage: { ...state.usage },
     killerChat: [...(state.killerChat || [])],
     policeChat: [...(state.policeChat || [])],
+    spectatorChat: [...(state.spectatorChat || [])],
   };
 }
 

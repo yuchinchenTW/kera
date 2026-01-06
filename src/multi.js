@@ -33,6 +33,10 @@ const els = {
   policeChatLines: document.getElementById("policeChatLines"),
   policeChatInput: document.getElementById("policeChatInput"),
   sendPoliceChat: document.getElementById("sendPoliceChat"),
+  spectatorChatBox: document.getElementById("spectatorChatBox"),
+  spectatorChatLines: document.getElementById("spectatorChatLines"),
+  spectatorChatInput: document.getElementById("spectatorChatInput"),
+  sendSpectatorChat: document.getElementById("sendSpectatorChat"),
   resolveNight: document.getElementById("resolveNight"),
   resolveVote: document.getElementById("resolveVote"),
   playersList: document.getElementById("playersList"),
@@ -76,6 +80,10 @@ const translations = {
     policeChat: "Police chat (private)",
     sendPoliceChat: "Send (police)",
     policeChatPlaceholder: "Private police chat...",
+    spectatorChat: "Spectator chat",
+    sendSpectatorChat: "Send (spectators/dead)",
+    spectatorChatPlaceholder: "Spectator chat...",
+    noChat: "No chat yet",
     hostOnly: "Host only",
     gameView: "Game View",
     sendNightAction: "Send",
@@ -182,6 +190,10 @@ const translations = {
     sendPoliceChat: "發送（警察）",
     policeChatPlaceholder: "警察私聊訊息...",
     hostOnly: "僅房主",
+    spectatorChat: "Spectator chat (spectators)",
+    sendSpectatorChat: "Send (spectators/dead)",
+    spectatorChatPlaceholder: "Spectator chat...",
+    noChat: "No chat yet",
     gameView: "遊戲畫面",
     sendNightAction: "送出",
     sendVote: "送出投票",
@@ -294,6 +306,7 @@ function applyLocaleText() {
   if (els.playerName) els.playerName.placeholder = t("yourName");
   if (els.chatInput) els.chatInput.placeholder = t("chatPlaceholder");
   if (els.lastWordsInput) els.lastWordsInput.placeholder = t("votePlaceholder");
+  if (els.spectatorChatInput) els.spectatorChatInput.placeholder = t("spectatorChatPlaceholder");
   if (els.localeSelect) els.localeSelect.value = locale;
   if (els.seatInfo && seatId !== null) els.seatInfo.textContent = `${t("seatLabel")} ${seatId + 1}`;
   if (els.hostBadge) els.hostBadge.textContent = isHost ? t("host") : "";
@@ -569,6 +582,7 @@ function renderView() {
   const alive = v.you?.alive;
   const phase = v.phase;
   const ended = !!v.victory;
+  const canSpectatorChat = !you || !you.alive;
   // Killer chat
   if (els.killerChatBox) {
     const isKiller = you && you.role === Roles.KILLER.id && you.alive;
@@ -608,13 +622,33 @@ function renderView() {
     }
     if (els.policeChatInput) els.policeChatInput.placeholder = t("policeChatPlaceholder");
   }
+  // Spectator chat (spectators or dead players)
+  if (els.spectatorChatBox) {
+    const showSpectator = canSpectatorChat;
+    els.spectatorChatBox.classList.toggle("hidden", !showSpectator);
+    const slines = (v.spectatorChat || []).slice(-20);
+    els.spectatorChatLines.innerHTML = "";
+    if (!slines.length) {
+      const p = document.createElement("p");
+      p.textContent = t("noChat");
+      els.spectatorChatLines.appendChild(p);
+    } else {
+      slines.forEach((line) => {
+        const p = document.createElement("p");
+        p.textContent = line;
+        els.spectatorChatLines.appendChild(p);
+      });
+    }
+    if (els.spectatorChatInput) els.spectatorChatInput.placeholder = t("spectatorChatPlaceholder");
+    if (els.sendSpectatorChat) els.sendSpectatorChat.disabled = !showSpectator;
+  }
   // Host controls visibility
   document.getElementById("hostControls").style.display = isHost ? "block" : "none";
   // Enable/disable controls based on phase/alive
   document.getElementById("nightControls").style.display = phase === "NIGHT" && alive && !ended ? "block" : "none";
   document.getElementById("voteControls").style.display = phase === "VOTE" && alive && !ended ? "block" : "none";
-  document.getElementById("chatControls").style.display =
-    (phase === "DAY" || phase === "NIGHT") && alive && !ended ? "block" : "none";
+  const showChatControls = ((phase === "DAY" || phase === "NIGHT") && alive && !ended) || canSpectatorChat;
+  document.getElementById("chatControls").style.display = showChatControls ? "block" : "none";
   els.sendNightAction.disabled = !(phase === "NIGHT" && alive && !ended);
   els.sendVote.disabled = !(phase === "VOTE" && alive && !ended);
   els.sendChat.disabled = !((phase === "DAY" || phase === "NIGHT") && alive && !ended);
@@ -717,6 +751,14 @@ if (els.sendPoliceChat) {
     if (!text) return;
     send({ type: "police_chat", text });
     els.policeChatInput.value = "";
+  });
+}
+if (els.sendSpectatorChat) {
+  els.sendSpectatorChat.addEventListener("click", () => {
+    const text = els.spectatorChatInput.value;
+    if (!text) return;
+    send({ type: "spectator_chat", text });
+    els.spectatorChatInput.value = "";
   });
 }
 const spectatorWaitLabel = document.getElementById("spectatorWaitLabel");

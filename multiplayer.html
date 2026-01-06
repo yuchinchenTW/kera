@@ -97,6 +97,14 @@
           <input id="chatInput" placeholder="Message" maxlength="120" />
           <button id="sendChat" data-i18n="sendChat">Send</button>
         </div>
+        <div id="spectatorChatBox" class="controls hidden">
+          <p class="label" data-i18n="spectatorChat">Spectator chat</p>
+          <div id="spectatorChatLines" class="chat"></div>
+          <div class="control-row">
+            <input id="spectatorChatInput" placeholder="Spectator chat..." maxlength="120" />
+            <button id="sendSpectatorChat" data-i18n="sendSpectatorChat">Send (spectators/dead)</button>
+          </div>
+        </div>
         <div id="killerChatBox" class="controls hidden">
           <p class="label" data-i18n="killerChat">Killer chat (private)</p>
           <div id="killerChatLines" class="chat"></div>

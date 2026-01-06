@@ -28,6 +28,7 @@ const room = {
   },
   restartHandle: null,
   restartLogged: false,
+  spectatorChat: [],
 };
 
 const DURATIONS = {
@@ -98,6 +99,7 @@ function resetRoomState(clearSeats = false) {
     room.restartHandle = null;
   }
   room.restartLogged = false;
+  room.spectatorChat = [];
   if (clearSeats) {
     room.seats = [];
   }
@@ -123,9 +125,11 @@ function startGame(theme = Theme.GOOD_VS_EVIL.id) {
     room.restartHandle = null;
   }
   room.restartLogged = false;
+  room.spectatorChat = [];
   const humanIds = room.seats.map((s) => s.playerId);
   room.theme = theme;
   room.engine = new GameEngine(Date.now(), theme, "hard", { humanIds });
+  room.engine.state.spectatorChat = room.spectatorChat;
   for (const seat of room.seats) {
     const p = room.engine.state.players[seat.playerId];
     if (p) {
@@ -536,6 +540,29 @@ wss.on("connection", (ws) => {
         room.engine.state.killerChat.push(line);
         room.engine.state.privateLogs.killer = room.engine.state.privateLogs.killer || [];
         room.engine.state.privateLogs.killer.push(line);
+        broadcastViews();
+        break;
+      }
+      case "spectator_chat": {
+        const text = (msg.text || "").trim();
+        if (!text) return;
+        const meta = room.connections.get(ws) || {};
+        const seat = room.connections.get(ws);
+        const player =
+          seat && seat.playerId !== undefined && seat.playerId !== null
+            ? room.engine?.state?.players?.[seat.playerId]
+            : null;
+        const canChat = meta.spectator === true || (player && !player.alive);
+        if (!canChat) {
+          send(ws, { type: "error", message: "Only spectators or dead players can use spectator chat." });
+          return;
+        }
+        const name = player?.name || meta.name || "Spectator";
+        const line = `${name}: ${text.slice(0, 120)}`;
+        room.spectatorChat.push(line);
+        if (room.engine?.state) {
+          room.engine.state.spectatorChat = room.spectatorChat;
+        }
         broadcastViews();
         break;
       }
