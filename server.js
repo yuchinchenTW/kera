@@ -437,7 +437,40 @@ wss.on("connection", (ws) => {
           return;
         }
         room.nightActions.set(seat.playerId, { ...msg.action, actorId: seat.playerId });
-        send(ws, { type: "acked", action: "night_action" });
+        const targetName =
+          typeof msg.action.targetId === "number"
+            ? room.engine.state.players?.[msg.action.targetId]?.name || null
+            : null;
+        const actorName = room.engine.state.players?.[seat.playerId]?.name || seat.name || `Player ${seat.playerId + 1}`;
+        send(ws, {
+          type: "acked",
+          action: "night_action",
+          actorName,
+          role: room.engine.state.players?.[seat.playerId]?.role || null,
+          targetId: msg.action.targetId,
+          targetName,
+        });
+        if (msg.action.type === "KILLER_VOTE") {
+          const line = `${actorName} targets ${targetName || "abstain"}`;
+          for (const [otherWs, meta] of room.connections.entries()) {
+            const pid = meta?.playerId;
+            if (pid === undefined || pid === null) continue;
+            const p = room.engine?.state?.players?.[pid];
+            if (p?.role === "KILLER" && p.alive) {
+              send(otherWs, { type: "action_log_killer", text: line });
+            }
+          }
+        } else if (msg.action.type === "POLICE_INVESTIGATE") {
+          const line = `${actorName} investigates ${targetName || "abstain"}`;
+          for (const [otherWs, meta] of room.connections.entries()) {
+            const pid = meta?.playerId;
+            if (pid === undefined || pid === null) continue;
+            const p = room.engine?.state?.players?.[pid];
+            if (p?.role === "POLICE" && p.alive) {
+              send(otherWs, { type: "action_log_police", text: line });
+            }
+          }
+        }
         break;
       }
       case "resolve_night": {
@@ -480,7 +513,21 @@ wss.on("connection", (ws) => {
         if (typeof msg.lastWords === "string") {
           room.lastWords.set(seat.playerId, msg.lastWords);
         }
-        send(ws, { type: "acked", action: "vote" });
+        const actorName = room.engine.state.players?.[seat.playerId]?.name || seat.name || `Player ${seat.playerId + 1}`;
+        const targetName =
+          msg.targetId !== undefined && msg.targetId !== null
+            ? room.engine.state.players?.[msg.targetId]?.name || null
+            : null;
+        send(ws, {
+          type: "acked",
+          action: "vote",
+          actorName,
+          role: room.engine.state.players?.[seat.playerId]?.role || null,
+          targetId: msg.targetId,
+          targetName,
+        });
+        const logLine = `${actorName} vote -> ${targetName || "abstain"}`;
+        broadcast({ type: "action_log", text: logLine });
         break;
       }
       case "resolve_vote": {

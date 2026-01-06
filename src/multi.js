@@ -379,6 +379,10 @@ function send(payload) {
 }
 
 function handleMessage(msg) {
+  if ((msg?.type === "action_log_killer" || msg?.type === "action_log_police") && msg.text) {
+    log(msg.text);
+    return;
+  }
   switch (msg.type) {
     case "joined":
       seatId = msg.playerId;
@@ -392,12 +396,33 @@ function handleMessage(msg) {
         seatId = null;
         els.seatInfo.textContent = t("spectator");
         els.hostBadge.textContent = "";
-        log("Joined as spectator");
-      }
+      log("Joined as spectator");
+    }
       break;
     case "host":
       isHost = !!msg.value;
       els.hostBadge.textContent = isHost ? t("host") : "";
+      break;
+    case "acked": {
+      if (msg.action === "night_action") {
+        const roleText = msg.role ? roleLabel(msg.role) : t("you");
+        const actorText = msg.actorName ? `${msg.actorName}` : "";
+        const targetText = msg.targetName || t("abstain");
+        log(`Ack: ${roleText}${actorText ? ` (${actorText})` : ""} -> ${targetText}`);
+      } else if (msg.action === "vote") {
+        const actorText = msg.actorName || t("you");
+        const targetText = msg.targetName || t("abstain");
+        log(`Ack: ${actorText} vote -> ${targetText}`);
+      } else {
+        log("Ack: " + JSON.stringify(msg));
+      }
+      break;
+    }
+    case "action_log":
+      if (msg.text) log(msg.text);
+      break;
+    case "action_log_killer":
+      if (msg.text) log(msg.text);
       break;
     case "lobby":
       lobbySeats = msg.seats || [];
