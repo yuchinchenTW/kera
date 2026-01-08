@@ -76,13 +76,17 @@ export class GameEngine {
     this.state.lastNightSummary = [];
 
     // Convert pending zombie infections before actions.
+    let pendingZombieCount = 0;
     for (const p of this.state.players) {
       if (p.alive && p.status.pendingZombieConversion) {
         p.status.pendingZombieConversion = false;
         p.role = Roles.ZOMBIE.id;
         p.faction = Faction.GREEN;
-        addPublicLog(this.state, `${p.name} turned into a zombie overnight.`);
+        pendingZombieCount += 1;
       }
+    }
+    if (pendingZombieCount > 0) {
+      addPublicLog(this.state, `Someone turned into a zombie overnight.`);
     }
 
     // Reset nightly transient flags.
@@ -731,6 +735,10 @@ export class GameEngine {
     this.state.chatLoggedForDay = this.state.dayNumber;
     for (const line of this.state.dayChat) {
       this.state.publicLog.push(line);
+    }
+    const countsNow = factionCounts(this.state);
+    if (countsNow.zombies > 4) {
+      addPublicLog(this.state, "The place is surrounded by zombies.");
     }
     updateWinrateHint(this.state);
 
