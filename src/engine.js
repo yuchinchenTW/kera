@@ -24,7 +24,6 @@ function majorityTarget(votes, needed) {
 }
 
 const UnblockableCauses = new Set([
-  DeathCause.SNIPER_HEADSHOT,
   DeathCause.TERROR_BOMB,
   DeathCause.ARSON_BURN,
   DeathCause.ZOMBIE_FATAL,
@@ -240,7 +239,7 @@ export class GameEngine {
           if (this.state.usage.sniperShots >= (Roles.SNIPER.maxShots || 0)) break;
           if (isUntargetable(target)) break;
           this.state.usage.sniperShots += 1;
-          addKill(target.id, DeathCause.SNIPER_HEADSHOT, { killerId: actor.id, unstoppable: true, noLastWords: true });
+          addKill(target.id, DeathCause.SNIPER_HEADSHOT, { killerId: actor.id, unstoppable: false, noLastWords: true });
           addPublicLog(this.state, `Someone fired a sniper shot.`);
           break;
         case "AGENT_PROTECT":
@@ -435,11 +434,11 @@ export class GameEngine {
     if (killerDecision) {
       const tgt = getPlayer(this.state, killerDecision.targetId);
       if (tgt && !tgt.status.purified && !isUntargetable(tgt)) {
-        addKill(tgt.id, DeathCause.KILLER_MURDER, { killerId: null });
-        addPrivateLog(this.state, "killer", `Killers targeted ${tgt.name}.`);
-      }
-    } else if (killersAlive > 0) {
-      addPrivateLog(this.state, "killer", "Killers failed to agree on a target.");
+    addKill(tgt.id, DeathCause.KILLER_MURDER, { killerId: null });
+    addPrivateLog(this.state, "killer", `Killers targeted ${tgt.name}.`);
+  }
+} else if (killersAlive > 0) {
+  addPrivateLog(this.state, "killer", "Killers failed to agree on a target.");
     }
 
     if (this.state.grudgeState.berserk) {
@@ -468,18 +467,22 @@ export class GameEngine {
     if (policeDecision) {
       const target = getPlayer(this.state, policeDecision.targetId);
       if (target) {
+        const apparentFaction =
+          target.role === Roles.TERRORIST.id ? Faction.BLUE : target.faction;
         addPrivateLog(
           this.state,
           "police",
-          `Investigation result: ${target.name} is ${target.faction === Faction.RED ? "RED" : target.faction === Faction.GREEN ? "GREEN" : "BLUE"} (${target.role})`
+          `Investigation result: ${target.name} is ${apparentFaction === Faction.RED ? "RED" : apparentFaction === Faction.GREEN ? "GREEN" : "BLUE"} (${target.role})`
         );
-        if (target.faction === Faction.RED && target.alive) {
+        if (apparentFaction === Faction.RED && target.alive) {
           this.state.policeRevealedRed = target.id;
         }
-        // Kidnapper ransom kill
-        const kidnapVictim = kidnapMap[target.id];
-        if (kidnapVictim !== undefined) {
-          addKill(kidnapVictim, DeathCause.KIDNAP_EXECUTION, { killerId: target.id, blockable: true });
+        // Kidnapper ransom kill: if police investigate a kidnapper, hostage dies (one execution per kidnapper).
+        const hostageId = kidnapMap[target.id];
+        const kidnapper = getPlayer(this.state, target.id);
+        if (hostageId !== undefined && kidnapper && !kidnapper.kidnapExecutionUsed) {
+          addKill(hostageId, DeathCause.KIDNAP_EXECUTION, { killerId: target.id, blockable: true });
+          kidnapper.kidnapExecutionUsed = true;
         }
       }
     } else if (policeAlive > 0) {
@@ -510,6 +513,12 @@ export class GameEngine {
     for (const k of pendingKills) {
       const target = getPlayer(this.state, k.targetId);
       if (!target?.alive) continue;
+      // Agent can now intercept sniper headshots even though they are normally unstoppable.
+      const agentInterceptsSniper =
+        target.status.protectedByAgent && k.cause === DeathCause.SNIPER_HEADSHOT;
+      if (agentInterceptsSniper) {
+        continue;
+      }
       if (!k.unstoppable) {
         if (target.status.protectedByAgent) {
           continue;
@@ -528,6 +537,28 @@ export class GameEngine {
       if (fiend) fiend.status.fiendMode = "CHARGE";
     }
 
+    // Agent link kills (blockable, doctor-revivable): if agent dies, protected target dies too.
+    for (const [agentIdStr, targetId] of Object.entries(agentLinks)) {
+      const agentId = Number(agentIdStr);
+      const agent = getPlayer(this.state, agentId);
+      const target = getPlayer(this.state, targetId);
+      if (!agent || !target) continue;
+      const agentHasIncoming =
+        filteredKills.some((k) => k.targetId === agentId) || delayedKills.some((k) => k.targetId === agentId);
+      if (!agentHasIncoming) continue;
+      filteredKills.push({
+        targetId,
+        cause: DeathCause.AGENT_LINK,
+        killerId: agentId,
+        timing: "instant",
+        blockable: true,
+        unstoppable: false,
+        noLastWords: false,
+        requiresAliveActor: null,
+        requiresDeadAgent: agentId,
+      });
+    }
+
     // Doctor resolution (after protections gathered).
     const doctor = this.state.players.find((p) => p.role === Roles.DOCTOR.id && p.alive);
     if (
@@ -539,6 +570,9 @@ export class GameEngine {
       const target = getPlayer(this.state, doctorAction.targetId);
       this.state.usage.doctorInjections += 1;
       if (target?.alive) {
+        if (target.status.protectedByAgent) {
+          addPublicLog(this.state, `An agent shield blocked a syringe on ${target.name}.`);
+        } else {
         const allowedCauses = Roles.DOCTOR.revivableCauses || [];
         const nonRevivable = new Set(Roles.DOCTOR.nonRevivableCauses || []);
         const remaining = [];
@@ -586,6 +620,7 @@ export class GameEngine {
           });
           addPublicLog(this.state, `${doctor.name} was caught in a bomb backlash.`);
         }
+        }
       }
     }
 
@@ -613,46 +648,45 @@ export class GameEngine {
       }
     }
 
-    // Apply immediate kills.
-    for (const k of filteredKills) {
-      if (k.timing !== "instant") continue;
-      const target = getPlayer(this.state, k.targetId);
-      const actorAlive = k.requiresAliveActor ? survivors(k.requiresAliveActor) : true;
-      if (target?.alive && actorAlive) {
-        markDeath(this.state, target.id, k.cause);
-        nightDeaths.push({ targetId: target.id, killerId: k.killerId, cause: k.cause });
+    // Apply immediate kills (supporting conditional agent-link deaths).
+    const applyKills = (killList) => {
+      const pending = [...killList];
+      const appliedKills = [];
+      let progress = true;
+      while (progress) {
+        progress = false;
+        for (let i = 0; i < pending.length; i++) {
+          const k = pending[i];
+          const target = getPlayer(this.state, k.targetId);
+          const actorAlive = k.requiresAliveActor ? survivors(k.requiresAliveActor) : true;
+          const agentAlive =
+            k.requiresDeadAgent !== undefined ? getPlayer(this.state, k.requiresDeadAgent)?.alive === true : false;
+          if (!target?.alive) {
+            pending.splice(i, 1);
+            i -= 1;
+            continue;
+          }
+          if (!actorAlive) {
+            pending.splice(i, 1);
+            i -= 1;
+            continue;
+          }
+          if (k.requiresDeadAgent !== undefined && agentAlive) {
+            continue;
+          }
+          markDeath(this.state, target.id, k.cause);
+          appliedKills.push({ targetId: target.id, killerId: k.killerId, cause: k.cause });
+          pending.splice(i, 1);
+          i -= 1;
+          progress = true;
+        }
       }
-    }
+      return appliedKills;
+    };
 
-    // Apply delayed kills.
-    for (const k of delayedKills) {
-      const target = getPlayer(this.state, k.targetId);
-      const actorAlive = k.requiresAliveActor ? survivors(k.requiresAliveActor) : true;
-      if (target?.alive && actorAlive) {
-        markDeath(this.state, target.id, k.cause);
-        nightDeaths.push({ targetId: target.id, killerId: k.killerId, cause: k.cause });
-      }
-    }
-
-    for (const k of filteredKills) {
-      if (k.timing === "instant") continue;
-      const target = getPlayer(this.state, k.targetId);
-      const actorAlive = k.requiresAliveActor ? survivors(k.requiresAliveActor) : true;
-      if (target?.alive && actorAlive) {
-        markDeath(this.state, target.id, k.cause);
-        nightDeaths.push({ targetId: target.id, killerId: k.killerId, cause: k.cause });
-      }
-    }
-
-    // Agent death links.
-    for (const [agentId, targetId] of Object.entries(agentLinks)) {
-      const agent = getPlayer(this.state, Number(agentId));
-      const target = getPlayer(this.state, targetId);
-      if (agent && !agent.alive && target?.alive) {
-        markDeath(this.state, target.id, DeathCause.AGENT_LINK);
-        nightDeaths.push({ targetId: target.id, killerId: agent.id, cause: DeathCause.AGENT_LINK });
-      }
-    }
+    nightDeaths.push(...applyKills(filteredKills.filter((k) => k.timing !== "delayed")));
+    nightDeaths.push(...applyKills(delayedKills));
+    nightDeaths.push(...applyKills(filteredKills.filter((k) => k.timing === "delayed")));
 
     // Convert zombies.
     for (const targetId of convertNow) {

@@ -36,6 +36,7 @@ function makePlayer(id, name, roleId, isHuman = false) {
     emptyInjections: 0,
     souls: 0,
     lastKidnapTarget: null,
+    kidnapExecutionUsed: false,
     chainsLeft: roleId === Roles.EXORCIST.id ? Roles.EXORCIST.maxChain : 0,
     aiMemory: {
       suspicion: {},
