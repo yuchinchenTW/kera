@@ -737,8 +737,10 @@ export class GameEngine {
       this.state.publicLog.push(line);
     }
     const countsNow = factionCounts(this.state);
-    if (countsNow.zombies > 4) {
+    const aliveTotalNow = alivePlayers(this.state).length || 1;
+    if (countsNow.zombies > aliveTotalNow / 3) {
       addPublicLog(this.state, "The place is surrounded by zombies.");
+      addPublicLog(this.state, "這地方被殭屍包圍。");
     }
     updateWinrateHint(this.state);
 
