@@ -91,12 +91,24 @@ button:disabled {
 }
 
 main.grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  padding: 16px 24px 32px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  grid-template-areas:
+    "status players actions log"
+    "lastwords players actions log";
+
+  row-gap: 8px;              /* 可留 */
+  column-gap: 4px;
+
+  align-items: start;        /* ✅ 加這行 */
+  grid-auto-rows: min-content; /* ✅ 加這行（關鍵） */
 }
+
+.panel.status { grid-area: status; }
+.panel.last-words { grid-area: lastwords; }
+.panel.players { grid-area: players; }
+.panel.actions { grid-area: actions; }
+.panel.log { grid-area: log; }
 
 .panel {
   background: var(--panel);
@@ -109,6 +121,7 @@ main.grid {
 }
 
 .panel.status,
+.panel.last-words,
 .panel.players,
 .panel.actions {
   position: sticky;
@@ -321,6 +334,27 @@ label.compact {
   white-space: pre-wrap;
 }
 
+.last-words-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  min-height: 40px;
+}
+
+.last-words-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.last-words-list li:last-child {
+  border-bottom: none;
+}
+
+.last-words-list .note {
+  color: var(--subtext);
+}
+
+
 @media (max-width: 720px) {
   header.hero {
     flex-direction: column;
@@ -334,5 +368,15 @@ label.compact {
 
   .control-row {
     flex-direction: column;
+  }
+
+  main.grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-areas:
+      "status"
+      "lastwords"
+      "players"
+      "actions"
+      "log";
   }
 }

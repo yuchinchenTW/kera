@@ -43,6 +43,7 @@ const els = {
   playersList: document.getElementById("playersList"),
   logText: document.getElementById("logText"),
   endBanner: document.getElementById("endBanner"),
+  lastWordsList: document.getElementById("lastWordsList"),
 };
 
 const translations = {
@@ -96,6 +97,8 @@ const translations = {
     resolveVote: "Resolve Vote",
     votePlaceholder: "Last words (optional)",
     chatPlaceholder: "Message",
+    lastWordsTitle: "Last Words",
+    noLastWords: "No last words yet.",
     pickAction: "Pick action",
     noNightAction: "No night action",
     chooseTarget: "Choose target",
@@ -207,6 +210,8 @@ const translations = {
     resolveVote: "結算投票",
     votePlaceholder: "遺言 (可選)",
     chatPlaceholder: "訊息",
+    lastWordsTitle: "遺言",
+    noLastWords: "暫無遺言",
     pickAction: "選擇行動",
     noNightAction: "沒有夜行動",
     chooseTarget: "選擇目標",
@@ -377,6 +382,10 @@ function applyLocaleText() {
   if (els.localeSelect) els.localeSelect.value = locale;
   if (els.seatInfo && seatId !== null) els.seatInfo.textContent = `${t("seatLabel")} ${seatId + 1}`;
   if (els.hostBadge) els.hostBadge.textContent = isHost ? t("host") : "";
+  if (els.lastWordsList && els.lastWordsList.dataset.titleApplied !== "1") {
+    // Title is handled by data-i18n on the header; just mark once to avoid duplicate work.
+    els.lastWordsList.dataset.titleApplied = "1";
+  }
 }
 
 let ws = null;
@@ -695,6 +704,26 @@ function renderView() {
   const mergedLogs = [...intelLines, ...(v.publicLog || [])];
   const displayLogs = locale === "zh" ? translateLines(mergedLogs) : mergedLogs;
   els.logText.value = displayLogs.join("\n");
+
+  // Last words panel
+  if (els.lastWordsList) {
+    els.lastWordsList.innerHTML = "";
+    const entries = (v.players || [])
+      .filter((p) => typeof p.lastWords === "string" && p.lastWords.trim())
+      .map((p) => ({ name: p.name, text: p.lastWords.trim() }));
+    if (!entries.length) {
+      const li = document.createElement("li");
+      li.className = "note";
+      li.textContent = t("noLastWords");
+      els.lastWordsList.appendChild(li);
+    } else {
+      entries.forEach((e) => {
+        const li = document.createElement("li");
+        li.textContent = `${e.name}: ${e.text}`;
+        els.lastWordsList.appendChild(li);
+      });
+    }
+  }
   // Action controls
   const you = v.you;
   const choices = you ? roleActionChoices(you.role) : [];

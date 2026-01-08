@@ -32,40 +32,49 @@
   </header>
 
   <main class="grid">
-    <section class="panel status">
-      <div class="status-row">
-        <div>
-          <p class="label" data-i18n="phase">Phase</p>
-          <p id="phaseDisplay" class="value"></p>
+    <div class="left-stack">
+      <section class="panel status">
+        <div class="status-row">
+          <div>
+            <p class="label" data-i18n="phase">Phase</p>
+            <p id="phaseDisplay" class="value"></p>
+          </div>
+          <div>
+            <p class="label" data-i18n="day">Day</p>
+            <p id="dayDisplay" class="value"></p>
+          </div>
+          <div>
+            <p class="label" data-i18n="youAre">You are</p>
+            <p id="roleDisplay" class="value"></p>
+          </div>
         </div>
-        <div>
-          <p class="label" data-i18n="day">Day</p>
-          <p id="dayDisplay" class="value"></p>
+        <div class="status-row">
+          <div>
+            <p class="label" data-i18n="doctorUsage">Doctor injections</p>
+            <p id="doctorUsage" class="value small"></p>
+          </div>
+          <div>
+            <p class="label" data-i18n="sniperUsage">Sniper shots</p>
+            <p id="sniperUsage" class="value small"></p>
+          </div>
+          <div>
+            <p class="label" data-i18n="victory">Victory</p>
+            <p id="victoryDisplay" class="value small"></p>
+          </div>
+          <div>
+            <p class="label" data-i18n="winRate">Win rate</p>
+            <p id="winRateDisplay" class="value small"></p>
+          </div>
         </div>
-        <div>
-          <p class="label" data-i18n="youAre">You are</p>
-          <p id="roleDisplay" class="value"></p>
+      </section>
+
+      <section class="panel last-words">
+        <div class="panel-header">
+          <h2 data-i18n="lastWordsTitle">Last Words</h2>
         </div>
-      </div>
-      <div class="status-row">
-        <div>
-          <p class="label" data-i18n="doctorUsage">Doctor injections</p>
-          <p id="doctorUsage" class="value small"></p>
-        </div>
-        <div>
-          <p class="label" data-i18n="sniperUsage">Sniper shots</p>
-          <p id="sniperUsage" class="value small"></p>
-        </div>
-        <div>
-          <p class="label" data-i18n="victory">Victory</p>
-          <p id="victoryDisplay" class="value small"></p>
-        </div>
-        <div>
-          <p class="label" data-i18n="winRate">Win rate</p>
-          <p id="winRateDisplay" class="value small"></p>
-        </div>
-      </div>
-    </section>
+        <ul id="lastWordsList" class="last-words-list"></ul>
+      </section>
+    </div>
 
     <section class="panel players">
       <div class="panel-header">
@@ -133,6 +142,7 @@
       <div id="lastNight" class="last-night"></div>
       <textarea id="logText" class="log-text" readonly></textarea>
     </section>
+
   </main>
 
   <script type="module" src="./src/main.js"></script>

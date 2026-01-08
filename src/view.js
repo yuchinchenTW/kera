@@ -33,6 +33,7 @@ export function buildPlayerView(state, playerId) {
     faction: revealAll ? p.faction : visibleFaction(viewer, p),
     isYou: p.id === playerId,
     bratRevealed: p.status?.bratRevealed || false,
+    lastWords: p.lastWords || "",
   }));
 
   let privateIntel = [];
@@ -78,6 +79,7 @@ export function buildSpectatorView(state) {
     faction: revealAll ? p.faction : "UNKNOWN",
     isYou: false,
     bratRevealed: p.status?.bratRevealed || false,
+    lastWords: p.lastWords || "",
   }));
   return {
     phase: state.phase,

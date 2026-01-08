@@ -50,6 +50,7 @@ const el = {
   themeSelect: document.getElementById("themeSelect"),
   localeSelect: document.getElementById("localeSelect"),
   difficultySelect: document.getElementById("difficultySelect"),
+  lastWordsList: document.getElementById("lastWordsList"),
 };
 
 const translations = {
@@ -116,6 +117,8 @@ const translations = {
     riotNote: (left) => `Grenades left: ${left}.`,
     pickAction: "Pick an action and target.",
     lastWordsPlaceholder: "Last words (32 English or 16 Chinese chars)",
+    lastWordsTitle: "Last Words",
+    noLastWords: "No last words yet.",
   },
   zh: {
     eyebrow: "單人社會推理",
@@ -180,11 +183,17 @@ const translations = {
     riotNote: (left) => `煙霧彈剩餘：${left}。`,
     pickAction: "選擇行動與目標。",
     lastWordsPlaceholder: "遺言（英文 32 字 / 中文 16 字內）",
+    lastWordsTitle: "遺言",
+    noLastWords: "暫無遺言",
   },
 };
 
 let locale = "zh";
 let defaultDifficulty = "hard";
+
+// Ensure Chinese translations for last words exist even if the base string is garbled.
+translations.zh.lastWordsTitle = translations.zh.lastWordsTitle || "遺言";
+translations.zh.noLastWords = translations.zh.noLastWords || "暫無遺言";
 
 function applyLocaleText() {
   document.documentElement.lang = locale;
@@ -539,6 +548,26 @@ function renderLog() {
   }
 }
 
+function renderLastWords() {
+  if (!el.lastWordsList) return;
+  el.lastWordsList.innerHTML = "";
+  const entries = engine.state.players
+    .filter((p) => typeof p.lastWords === "string" && p.lastWords.trim())
+    .map((p) => ({ name: p.name, text: p.lastWords.trim() }));
+  if (!entries.length) {
+    const li = document.createElement("li");
+    li.className = "note";
+    li.textContent = (translations[locale] && translations[locale].noLastWords) || "No last words yet.";
+    el.lastWordsList.appendChild(li);
+    return;
+  }
+  for (const entry of entries) {
+    const li = document.createElement("li");
+    li.textContent = `${entry.name}: ${entry.text}`;
+    el.lastWordsList.appendChild(li);
+  }
+}
+
 function renderChat() {
   el.chatLines.innerHTML = "";
   if (!engine.state.dayChat || !engine.state.dayChat.length) {
@@ -784,6 +813,7 @@ function render() {
 
   renderPlayers();
   renderLog();
+  renderLastWords();
   renderControls();
 }
 
