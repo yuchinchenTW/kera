@@ -18,8 +18,6 @@ function ensureBeliefs(state) {
   const diffScale = diffScaleMap[state.difficulty || "normal"] ?? 1;
   const human = state.players.find((p) => p.isHuman);
   const humanFaction = human?.faction || null;
-  const opposingFaction =
-    humanFaction === Faction.RED ? Faction.BLUE : humanFaction === Faction.BLUE ? Faction.RED : null;
   const revealedRed = state.policeRevealedRed;
   const lastVoteHist = state.history?.votes?.[state.history.votes.length - 1] || null;
   const mentionMax = lastVoteHist?.mentions ? Math.max(1, ...Object.values(lastVoteHist.mentions)) : 1;
@@ -39,7 +37,6 @@ function ensureBeliefs(state) {
     for (const targetId of living) {
       if (targetId === p.id) continue;
       const target = getPlayer(state, targetId);
-      const sameFaction = target?.faction === p.faction;
       // 初始化或衰減到先驗
       if (!p.aiMemory.roleProbs[targetId]) p.aiMemory.roleProbs[targetId] = {};
       const decay = 0.9;
@@ -70,10 +67,7 @@ function ensureBeliefs(state) {
       if (revealedRed && targetId === revealedRed && p.faction === Faction.BLUE) {
         redBoost += 0.6 * diffScale;
       }
-      if (humanFaction && target?.faction && state.difficulty === "nightmare") {
-        if (target.faction === humanFaction) redBoost += 0.12 * diffScale;
-        else if (opposingFaction && target.faction === opposingFaction) redBoost -= 0.05 * diffScale;
-      }
+      // 不使用真實陣營偏置，避免作弊。
       // 應用到角色分布
       for (const role of allRoles) {
         const meta = roleMeta(role);
@@ -214,7 +208,7 @@ export function buildAiNightActions(state, opts = {}) {
   if (!sharedKillerTarget) {
     sharedKillerTarget =
       state.rng() < 0.6
-        ? pickGroupTarget(state, killerActors, (t) => t.faction !== Faction.RED && t.role !== Roles.KILLER.id)
+        ? pickGroupTarget(state, killerActors, (t) => t.role !== Roles.KILLER.id)
         : null;
   }
   // Pre-pick a shared police target to avoid split votes.
@@ -483,8 +477,8 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       }
     }
     const pruned =
-      actor.faction === Faction.RED
-        ? everyone.filter((t) => t.faction !== Faction.RED)
+      actor.role === Roles.KILLER.id
+        ? everyone.filter((t) => t.role !== Roles.KILLER.id)
         : everyone;
     const candidates = pruned.length ? pruned : everyone;
 
@@ -510,19 +504,7 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         const base = jitter(redProb);
         const chatBonus = actor.role !== Roles.POLICE.id ? chatWeight(t.id) * 0.05 : 0;
         let s = clamp(base + chatBonus, 0, 1);
-        // Difficulty bias: opposing the human only on nightmare
-        const human = state.players.find((p) => p.isHuman);
-        if (human) {
-          if (state.difficulty === "nightmare") {
-            if (actor.faction !== human.faction && t.faction === human.faction) {
-              s += 0.1;
-            }
-            if (actor.faction === human.faction && t.faction === actor.faction) {
-              s -= 0.05;
-            }
-          }
-          s = clamp(s, 0, 1);
-        }
+        s = clamp(s, 0, 1);
         if (s > bestScore) {
           bestScore = s;
           best = t;
