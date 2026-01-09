@@ -99,7 +99,7 @@ function pickTargetBySuspicion(state, actor, filterFn = () => true) {
     if (target.id === actor.id) continue;
     if (!filterFn(target)) continue;
     const score = actor.aiMemory?.suspicion?.[target.id] ?? 0.5;
-    if (score > bestScore) {
+    if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
       bestScore = score;
       best = target;
     }
@@ -146,6 +146,15 @@ function randomChoice(list, rng) {
   return list[idx];
 }
 
+function shuffled(list, rng) {
+  const arr = [...list];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 function pickGroupTarget(state, actors, filterFn = () => true) {
   const candidates = alivePlayers(state).filter((p) => filterFn(p));
   let best = null;
@@ -163,7 +172,7 @@ function pickGroupTarget(state, actors, filterFn = () => true) {
     }
     if (count === 0) continue;
     const avg = total / count;
-    if (avg > bestScore) {
+    if (avg > bestScore || (avg === bestScore && state.rng() < 0.5)) {
       bestScore = avg;
       best = target;
     }
@@ -252,11 +261,11 @@ export function buildAiNightActions(state, opts = {}) {
         if (!target) {
           let best = null;
           let bestScore = -Infinity;
-          for (const t of alivePlayers(state)) {
+          for (const t of shuffled(alivePlayers(state), state.rng)) {
             if (t.role === Roles.KILLER.id) continue;
             const redProb = factionProb(actor, t.id, Faction.BLUE) ?? 0;
             const priority = redProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
-            if (priority > bestScore) {
+            if (priority > bestScore || (priority === bestScore && state.rng() < 0.5)) {
               bestScore = priority;
               best = t;
             }
@@ -272,14 +281,14 @@ export function buildAiNightActions(state, opts = {}) {
           if (state.rng() <= 0.7) {
             let best = null;
             let bestScore = -Infinity;
-            for (const t of alivePlayers(state)) {
+            for (const t of shuffled(alivePlayers(state), state.rng)) {
               const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
               const specialProb =
                 (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0) +
                 (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0) +
                 (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0);
               const score = blueProb + specialProb;
-              if (score > bestScore) {
+              if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
                 bestScore = score;
                 best = t;
               }
@@ -305,7 +314,7 @@ export function buildAiNightActions(state, opts = {}) {
           const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
           const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
           const score = blueProb - redProb;
-          if (score > bestScore) {
+          if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
             bestScore = score;
             best = t;
           }
@@ -318,12 +327,12 @@ export function buildAiNightActions(state, opts = {}) {
         if (actor.status.fiendMode === "ABSORB") {
           let best = null;
           let bestScore = -Infinity;
-          for (const t of alivePlayers(state)) {
+          for (const t of shuffled(alivePlayers(state), state.rng)) {
             if (t.id === actor.id) continue;
             const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
             const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
             const score = blueProb - redProb;
-            if (score > bestScore) {
+            if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
               bestScore = score;
               best = t;
             }
@@ -349,12 +358,12 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.KIDNAPPER.id: {
         let best = null;
         let bestScore = -Infinity;
-        for (const t of alivePlayers(state)) {
+        for (const t of shuffled(alivePlayers(state), state.rng)) {
           if (t.id === actor.id) continue;
           if (actor.lastKidnapTarget !== null && t.id === actor.lastKidnapTarget) continue;
           const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
           const score = redProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
-          if (score > bestScore) {
+          if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
             bestScore = score;
             best = t;
           }
@@ -505,7 +514,7 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         const chatBonus = actor.role !== Roles.POLICE.id ? chatWeight(t.id) * 0.05 : 0;
         let s = clamp(base + chatBonus, 0, 1);
         s = clamp(s, 0, 1);
-        if (s > bestScore) {
+        if (s > bestScore || (s === bestScore && state.rng() < 0.5)) {
           bestScore = s;
           best = t;
         }
@@ -554,11 +563,14 @@ export function generateChatLines(state, maxLines = 6) {
     }
     const suspicion = speaker.aiMemory?.suspicion?.[useTarget?.id] ?? 0.5;
     const tone = suspicion > 0.7 ? "accuses" : suspicion < 0.3 && defendPool.length ? "defends" : "wonders";
+    const defendTarget =
+      useTarget ||
+      (defendPool.length ? randomChoice(defendPool, state.rng) : null);
     const line =
       tone === "accuses"
         ? `${speaker.name}: ${useTarget?.name ?? "someone"} feels off.`
         : tone === "defends"
-        ? `${speaker.name}: ${(defendPool[0]?.name ?? useTarget?.name) || "someone"} seems fine to me.`
+        ? `${speaker.name}: ${defendTarget?.name ?? "someone"} seems fine to me.`
         : `${speaker.name}: What's everyone thinking about ${useTarget?.name ?? "this"}?`;
     lines.push(line);
   }
