@@ -285,8 +285,9 @@ const RATE_LIMIT = {
   refill: 8,
 };
 const MAX_MESSAGE_BYTES = 16 * 1024; // hard cap per incoming WS message
+const VIOLATION_LIMIT = 5; // disconnect after too many violations
 function makeRateLimiter() {
-  return { tokens: RATE_LIMIT.maxTokens, last: Date.now() };
+  return { tokens: RATE_LIMIT.maxTokens, last: Date.now(), violations: 0 };
 }
 function consumeToken(limiter) {
   const now = Date.now();
@@ -395,11 +396,21 @@ wss.on("connection", (ws) => {
   ws.rateLimiter = makeRateLimiter();
   ws.on("message", (data) => {
     if (!consumeToken(ws.rateLimiter)) {
-      send(ws, { type: "error", message: "Too many requests; slow down." });
+      ws.rateLimiter.violations += 1;
+      if (ws.rateLimiter.violations >= VIOLATION_LIMIT) {
+        ws.close();
+      } else {
+        send(ws, { type: "error", message: "Too many requests; slow down." });
+      }
       return;
     }
     if (typeof data?.length === "number" && data.length > MAX_MESSAGE_BYTES) {
-      send(ws, { type: "error", message: "Payload too large." });
+      ws.rateLimiter.violations += 1;
+      if (ws.rateLimiter.violations >= VIOLATION_LIMIT) {
+        ws.close();
+      } else {
+        send(ws, { type: "error", message: "Payload too large." });
+      }
       return;
     }
     let msg = null;
