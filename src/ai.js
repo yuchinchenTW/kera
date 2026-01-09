@@ -304,16 +304,40 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.AGENT.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.faction === Faction.BLUE);
+        let best = null;
+        let bestScore = -Infinity;
+        for (const t of alivePlayers(state)) {
+          if (t.id === actor.id) continue;
+          const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+          const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+          const score = blueProb - redProb;
+          if (score > bestScore) {
+            bestScore = score;
+            best = t;
+          }
+        }
+        const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
         if (target) actions.push({ actorId: actor.id, type: "AGENT_PROTECT", targetId: target.id });
         break;
       }
       case Roles.HEAVENLY_FIEND.id: {
         if (actor.status.fiendMode === "ABSORB") {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.faction === Faction.BLUE);
+          let best = null;
+          let bestScore = -Infinity;
+          for (const t of alivePlayers(state)) {
+            if (t.id === actor.id) continue;
+            const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+            const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+            const score = blueProb - redProb;
+            if (score > bestScore) {
+              bestScore = score;
+              best = t;
+            }
+          }
+          const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "FIEND_PROTECT", targetId: target.id });
         } else {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.faction !== Faction.BLUE);
+          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "FIEND_SHOOT", targetId: target.id });
         }
         break;
@@ -329,11 +353,19 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.KIDNAPPER.id: {
-        const target = pickTargetBySuspicion(
-          state,
-          actor,
-          (t) => t.faction !== Faction.RED && t.id !== actor.lastKidnapTarget
-        );
+        let best = null;
+        let bestScore = -Infinity;
+        for (const t of alivePlayers(state)) {
+          if (t.id === actor.id) continue;
+          if (actor.lastKidnapTarget !== null && t.id === actor.lastKidnapTarget) continue;
+          const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+          const score = redProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+          if (score > bestScore) {
+            bestScore = score;
+            best = t;
+          }
+        }
+        const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
         if (target) actions.push({ actorId: actor.id, type: "KIDNAP", targetId: target.id });
         break;
       }
@@ -344,7 +376,7 @@ export function buildAiNightActions(state, opts = {}) {
       }
       case Roles.RIOT_POLICE.id: {
         if (state.usage.riotGrenades < (Roles.RIOT_POLICE.maxGrenades || 0)) {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.faction !== Faction.BLUE);
+          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "RIOT_SMOKE", targetId: target.id });
         }
         break;
@@ -360,7 +392,7 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.VINE_DEMON.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.faction === Faction.BLUE);
+        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
         if (target) actions.push({ actorId: actor.id, type: "VINE_SEED", targetId: target.id });
         break;
       }
@@ -516,14 +548,8 @@ export function generateChatLines(state, maxLines = 6) {
   for (const speaker of living) {
     if (lines.length >= maxLines) break;
     const allCandidates = alivePlayers(state).filter((t) => t.id !== speaker.id);
-    const accusePool =
-      speaker.faction === Faction.RED
-        ? allCandidates.filter((t) => t.faction !== Faction.RED)
-        : allCandidates;
-    const defendPool =
-      speaker.faction === Faction.RED
-        ? allCandidates.filter((t) => t.faction === Faction.RED)
-        : allCandidates.filter((t) => t.faction === speaker.faction);
+    const accusePool = allCandidates;
+    const defendPool = allCandidates;
 
     const target =
       state.rng() < 0.5
@@ -537,7 +563,7 @@ export function generateChatLines(state, maxLines = 6) {
     if (redFound?.alive && speaker.role === Roles.POLICE.id && state.rng() < 0.8) {
       useTarget = redFound;
     }
-    // Hard+紅方偶爾賊喊捉賊，提高迷惑性。
+    // Hard+紅方偶爾賊喊捉賊，提高迷惑性。仍然不使用真實陣營，只隨機指向任何人。
     const deceptive = (state.difficulty === "hard" || state.difficulty === "nightmare") && speaker.faction === Faction.RED;
     if (deceptive && state.rng() < 0.25) {
       const anyone = allCandidates;
