@@ -96,8 +96,9 @@ export function buildSpectatorView(state) {
     privateIntel: [],
     winrateHint: state.winrateHint,
     usage: { ...state.usage },
-    killerChat: [...(state.killerChat || [])],
-    policeChat: [...(state.policeChat || [])],
+    // Do not expose private channels to spectators to prevent leakage.
+    killerChat: [],
+    policeChat: [],
     spectatorChat: [...(state.spectatorChat || [])],
   };
 }
