@@ -269,17 +269,6 @@ const server = http.createServer((req, res) => {
 });
 const wss = new WebSocketServer({ server });
 
-// Per-IP connection cap (except localhost): max 1 concurrent connection.
-const ipConnectionCounts = new Map();
-function normalizeIp(addr) {
-  if (!addr) return "unknown";
-  if (addr.startsWith("::ffff:")) return addr.slice(7);
-  return addr;
-}
-function isLoopback(addr) {
-  return addr === "127.0.0.1" || addr === "::1";
-}
-
 let lobbyBroadcastHandle = null;
 function scheduleLobbyBroadcast() {
   if (lobbyBroadcastHandle) return;
@@ -287,6 +276,27 @@ function scheduleLobbyBroadcast() {
     lobbyBroadcastHandle = null;
     broadcast({ type: "lobby", seats: room.seats });
   }, 150);
+}
+
+// Per-connection rate limiting (simple token bucket).
+const RATE_LIMIT = {
+  intervalMs: 2000,
+  maxTokens: 8,
+  refill: 8,
+};
+function makeRateLimiter() {
+  return { tokens: RATE_LIMIT.maxTokens, last: Date.now() };
+}
+function consumeToken(limiter) {
+  const now = Date.now();
+  const elapsed = now - limiter.last;
+  if (elapsed > RATE_LIMIT.intervalMs) {
+    limiter.tokens = Math.min(RATE_LIMIT.maxTokens, limiter.tokens + RATE_LIMIT.refill);
+    limiter.last = now;
+  }
+  if (limiter.tokens <= 0) return false;
+  limiter.tokens -= 1;
+  return true;
 }
 
 function scheduleRestartAfterVictory() {
@@ -380,16 +390,13 @@ function promoteWaitingSpectatorsToSeats() {
   }
 }
 
-wss.on("connection", (ws, req) => {
-  const ipRaw = normalizeIp(req?.socket?.remoteAddress || "");
-  const ip = ipRaw || "unknown";
-  const current = ipConnectionCounts.get(ip) || 0;
-  if (!isLoopback(ip) && current >= 1) {
-    ws.close();
-    return;
-  }
-  ipConnectionCounts.set(ip, current + 1);
+wss.on("connection", (ws) => {
+  ws.rateLimiter = makeRateLimiter();
   ws.on("message", (data) => {
+    if (!consumeToken(ws.rateLimiter)) {
+      send(ws, { type: "error", message: "Too many requests; slow down." });
+      return;
+    }
     let msg = null;
     try {
       msg = JSON.parse(data.toString());
@@ -756,12 +763,6 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => {
     const seat = room.connections.get(ws);
     room.connections.delete(ws);
-    const ipRaw = normalizeIp(req?.socket?.remoteAddress || "");
-    if (ipConnectionCounts.has(ipRaw)) {
-      const next = Math.max(0, (ipConnectionCounts.get(ipRaw) || 1) - 1);
-      if (next === 0) ipConnectionCounts.delete(ipRaw);
-      else ipConnectionCounts.set(ipRaw, next);
-    }
     if (seat && seat.playerId !== undefined) {
       const player = room.engine?.state?.players?.[seat.playerId];
       if (room.started && player) {
