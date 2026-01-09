@@ -301,6 +301,19 @@ function consumeToken(limiter) {
   return true;
 }
 
+// IP-level penalties to block reconnect spam.
+const ipPenalties = new Map();
+const MAX_VIOLATIONS_PER_IP = 10;
+const BAN_DURATION_MS = 5 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, record] of ipPenalties.entries()) {
+    if (now - record.lastViolationTime > BAN_DURATION_MS) {
+      ipPenalties.delete(ip);
+    }
+  }
+}, BAN_DURATION_MS);
+
 function scheduleRestartAfterVictory() {
   if (!room.engine) return;
   const victory = !!room.engine.state?.victory;
@@ -392,24 +405,42 @@ function promoteWaitingSpectatorsToSeats() {
   }
 }
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  const ip = req?.socket?.remoteAddress || "unknown";
+  ws.ip = ip;
+  const penalty = ipPenalties.get(ip);
+  if (penalty && penalty.violations >= MAX_VIOLATIONS_PER_IP) {
+    const since = Date.now() - penalty.lastViolationTime;
+    if (since < BAN_DURATION_MS) {
+      ws.terminate();
+      return;
+    } else {
+      ipPenalties.delete(ip);
+    }
+  }
   ws.rateLimiter = makeRateLimiter();
   ws.on("message", (data) => {
     if (!consumeToken(ws.rateLimiter)) {
-      ws.rateLimiter.violations += 1;
-      if (ws.rateLimiter.violations >= VIOLATION_LIMIT) {
-        ws.close();
-      } else {
-        send(ws, { type: "error", message: "Too many requests; slow down." });
+      const record = ipPenalties.get(ws.ip) || { violations: 0, lastViolationTime: 0 };
+      record.violations += 1;
+      record.lastViolationTime = Date.now();
+      ipPenalties.set(ws.ip, record);
+      send(ws, { type: "error", message: "Too many requests; slow down." });
+      if (record.violations >= MAX_VIOLATIONS_PER_IP) {
+        log(`[server] Banning IP ${ws.ip} for ${BAN_DURATION_MS / 1000}s`);
+        ws.terminate();
       }
       return;
     }
     if (typeof data?.length === "number" && data.length > MAX_MESSAGE_BYTES) {
-      ws.rateLimiter.violations += 1;
-      if (ws.rateLimiter.violations >= VIOLATION_LIMIT) {
-        ws.close();
-      } else {
-        send(ws, { type: "error", message: "Payload too large." });
+      const record = ipPenalties.get(ws.ip) || { violations: 0, lastViolationTime: 0 };
+      record.violations += 1;
+      record.lastViolationTime = Date.now();
+      ipPenalties.set(ws.ip, record);
+      send(ws, { type: "error", message: "Payload too large." });
+      if (record.violations >= MAX_VIOLATIONS_PER_IP) {
+        log(`[server] Banning IP ${ws.ip} for ${BAN_DURATION_MS / 1000}s`);
+        ws.terminate();
       }
       return;
     }
