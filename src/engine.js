@@ -678,7 +678,7 @@ export class GameEngine {
           if (k.requiresDeadAgent !== undefined && agentAlive) {
             continue;
           }
-          markDeath(this.state, target.id, k.cause);
+          markDeath(this.state, target.id, k.cause, { noLastWords: !!k.noLastWords });
           appliedKills.push({ targetId: target.id, killerId: k.killerId, cause: k.cause });
           pending.splice(i, 1);
           i -= 1;
@@ -868,11 +868,10 @@ export class GameEngine {
           target.status.bratRevived = true;
           target.status.bratRevealed = true;
           addPublicLog(this.state, `${target.name} revealed as Brat and revived (loses voting power).`);
-        } else if (target.isHuman) {
+        } else {
           const candidate = lastWordsByPlayer[target.id] ?? humanLastWords;
-          if (typeof candidate === "string" && candidate.trim() && target.deathCause !== DeathCause.TERROR_BOMB) {
-            target.lastWords = candidate.trim().slice(0, 64);
-            addPublicLog(this.state, `Last words: "${target.lastWords}"`);
+          if (typeof candidate === "string" && candidate.trim()) {
+            this.submitLastWords(target.id, candidate);
           }
         }
       }
@@ -889,6 +888,19 @@ export class GameEngine {
       this.state.phase = Phase.NIGHT;
       this.state.dayNumber += 1;
     }
+  }
+
+  submitLastWords(playerId, text) {
+    const player = getPlayer(this.state, playerId);
+    if (!player || player.alive) return false;
+    if (player.noLastWords) return false;
+    if (player.lastWords && player.lastWords.trim()) return false;
+    if (this.state.phase !== Phase.DAY && this.state.phase !== Phase.VOTE) return false;
+    const trimmed = (text || "").trim().slice(0, 64);
+    if (!trimmed) return false;
+    player.lastWords = trimmed;
+    addPublicLog(this.state, `Last words: "${player.lastWords}"`);
+    return true;
   }
 }
 

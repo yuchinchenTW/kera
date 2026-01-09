@@ -555,6 +555,36 @@ wss.on("connection", (ws) => {
         scheduleRestartAfterVictory();
         break;
       }
+      case "last_words": {
+        if (!room.started || !room.engine) {
+          send(ws, { type: "error", message: "Game not started." });
+          return;
+        }
+        if (room.engine.state.phase !== Phase.DAY && room.engine.state.phase !== Phase.VOTE) {
+          send(ws, { type: "error", message: "Last words only during day." });
+          return;
+        }
+        const seat = room.connections.get(ws);
+        if (!seat || seat.spectator) return;
+        const player = room.engine.state.players[seat.playerId];
+        if (!player || player.alive) {
+          send(ws, { type: "error", message: "Only dead players can send last words." });
+          return;
+        }
+        const text = (msg.text || "").trim();
+        if (!text) {
+          send(ws, { type: "error", message: "Empty last words." });
+          return;
+        }
+        const ok = room.engine.submitLastWords(player.id, text);
+        if (!ok) {
+          send(ws, { type: "error", message: "Cannot accept last words (maybe already set or blocked)." });
+          return;
+        }
+        send(ws, { type: "acked", action: "last_words" });
+        broadcastViews();
+        break;
+      }
       case "chat": {
         if (!room.started || !room.engine || (room.engine.state.phase !== "DAY" && room.engine.state.phase !== "NIGHT")) {
           send(ws, { type: "error", message: "Chat only allowed in day or night discussion." });

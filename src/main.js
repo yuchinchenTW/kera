@@ -27,6 +27,9 @@ const el = {
   voteControls: document.getElementById("voteControls"),
   voteTarget: document.getElementById("voteTarget"),
   lastWordsInput: document.getElementById("lastWordsInput"),
+  nightLastWordsBox: document.getElementById("nightLastWordsBox"),
+  nightLastWordsInput: document.getElementById("nightLastWordsInput"),
+  sendNightLastWordsBtn: document.getElementById("sendNightLastWordsBtn"),
   runVoteBtn: document.getElementById("runVoteBtn"),
   playerChatInput: document.getElementById("playerChatInput"),
   sendChatBtn: document.getElementById("sendChatBtn"),
@@ -203,6 +206,7 @@ function applyLocaleText() {
     if (typeof val === "string") node.textContent = val;
   });
   if (el.lastWordsInput) el.lastWordsInput.placeholder = translations[locale].lastWordsPlaceholder;
+  if (el.nightLastWordsInput) el.nightLastWordsInput.placeholder = translations[locale].lastWordsPlaceholder;
   if (el.playerChatInput) el.playerChatInput.placeholder = translations[locale].chatPlaceholder;
 }
 
@@ -639,6 +643,18 @@ function sendPlayerChat() {
   render();
 }
 
+function sendNightLastWords() {
+  if (!engine || engine.state.phase !== Phase.DAY) return;
+  const human = engine.human();
+  if (!human || human.alive || human.noLastWords) return;
+  const text = (el.nightLastWordsInput?.value || "").trim();
+  if (!text) return;
+  if (engine.submitLastWords(human.id, text)) {
+    if (el.nightLastWordsInput) el.nightLastWordsInput.value = "";
+    render();
+  }
+}
+
 function sendKillerChat() {
   const input = el.killerChatInput;
   if (!input || engine.state.phase !== Phase.DAY) return;
@@ -769,6 +785,17 @@ function renderControls() {
     renderKillerChat();
     renderPoliceChat();
   }
+  if (el.nightLastWordsBox) {
+    const canNightWords =
+      phase === Phase.DAY &&
+      human &&
+      !human.alive &&
+      !human.noLastWords &&
+      !(human.lastWords && human.lastWords.trim()) &&
+      !state.victory;
+    el.nightLastWordsBox.classList.toggle("hidden", !canNightWords);
+    if (el.sendNightLastWordsBtn) el.sendNightLastWordsBtn.disabled = !canNightWords;
+  }
 
   if (phase === Phase.VOTE) {
     const options = buildPlayerOptions((p) => p.alive);
@@ -829,6 +856,7 @@ function init() {
   if (el.themeSelect) el.themeSelect.addEventListener("change", resetGame);
   if (el.difficultySelect) el.difficultySelect.addEventListener("change", resetGame);
   if (el.sendChatBtn) el.sendChatBtn.addEventListener("click", sendPlayerChat);
+  if (el.sendNightLastWordsBtn) el.sendNightLastWordsBtn.addEventListener("click", sendNightLastWords);
   if (el.playerChatInput) {
     el.playerChatInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {

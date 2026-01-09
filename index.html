@@ -103,6 +103,17 @@
         <div id="chatLines" class="chat"></div>
         <textarea id="playerChatInput" class="chat-input" rows="3" placeholder="Say something..."></textarea>
         <button id="sendChatBtn" data-i18n="sendChat">Send</button>
+        <div id="nightLastWordsBox" class="controls hidden">
+          <p class="label" data-i18n="lastWordsTitle">Last Words</p>
+          <textarea
+            id="nightLastWordsInput"
+            class="chat-input"
+            rows="2"
+            maxlength="64"
+            placeholder="Last words (32 English / 16 Chinese)"
+          ></textarea>
+          <button id="sendNightLastWordsBtn" data-i18n="sendChat">Send</button>
+        </div>
         <div id="killerChatBox" class="controls hidden">
           <p class="label" data-i18n="killerChat">Killer channel (private)</p>
           <div id="killerChatLines" class="chat"></div>

@@ -34,6 +34,7 @@ export function buildPlayerView(state, playerId) {
     isYou: p.id === playerId,
     bratRevealed: p.status?.bratRevealed || false,
     lastWords: p.lastWords || "",
+    noLastWords: !!p.noLastWords,
   }));
 
   let privateIntel = [];
@@ -56,6 +57,7 @@ export function buildPlayerView(state, playerId) {
       alive: viewer.alive,
       isHuman: viewer.isHuman,
       aiTakenOver,
+      noLastWords: !!viewer.noLastWords,
     },
     players,
     publicLog: [...state.publicLog],
@@ -80,6 +82,7 @@ export function buildSpectatorView(state) {
     isYou: false,
     bratRevealed: p.status?.bratRevealed || false,
     lastWords: p.lastWords || "",
+    noLastWords: !!p.noLastWords,
   }));
   return {
     phase: state.phase,

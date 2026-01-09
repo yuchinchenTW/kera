@@ -33,6 +33,7 @@ function makePlayer(id, name, roleId, isHuman = false) {
     isHuman,
     status: defaultStatus(roleId),
     lastWords: "",
+    noLastWords: false,
     emptyInjections: 0,
     souls: 0,
     lastKidnapTarget: null,
@@ -138,11 +139,14 @@ export function addPrivateLog(state, channel, entry) {
   state.privateLogs[channel].push(entry);
 }
 
-export function markDeath(state, playerId, cause) {
+export function markDeath(state, playerId, cause, opts = {}) {
   const player = getPlayer(state, playerId);
   if (!player || !player.alive) return;
   player.alive = false;
   player.deathCause = cause;
+  if (typeof opts.noLastWords === "boolean") {
+    player.noLastWords = !!opts.noLastWords;
+  }
   state.aliveIds = state.players.filter((p) => p.alive).map((p) => p.id);
   if (!state.deadIds.includes(playerId)) state.deadIds.push(playerId);
   if (state.policeRevealedRed === playerId) state.policeRevealedRed = null;

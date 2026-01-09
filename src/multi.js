@@ -38,6 +38,9 @@ const els = {
   spectatorChatLines: document.getElementById("spectatorChatLines"),
   spectatorChatInput: document.getElementById("spectatorChatInput"),
   sendSpectatorChat: document.getElementById("sendSpectatorChat"),
+  deadLastWordsBox: document.getElementById("deadLastWordsBox"),
+  deadLastWordsInput: document.getElementById("deadLastWordsInput"),
+  sendDeadLastWords: document.getElementById("sendDeadLastWords"),
   resolveNight: document.getElementById("resolveNight"),
   resolveVote: document.getElementById("resolveVote"),
   playersList: document.getElementById("playersList"),
@@ -379,6 +382,7 @@ function applyLocaleText() {
   if (els.chatInput) els.chatInput.placeholder = t("chatPlaceholder");
   if (els.lastWordsInput) els.lastWordsInput.placeholder = t("votePlaceholder");
   if (els.spectatorChatInput) els.spectatorChatInput.placeholder = t("spectatorChatPlaceholder");
+  if (els.deadLastWordsInput) els.deadLastWordsInput.placeholder = t("votePlaceholder");
   if (els.localeSelect) els.localeSelect.value = locale;
   if (els.seatInfo && seatId !== null) els.seatInfo.textContent = `${t("seatLabel")} ${seatId + 1}`;
   if (els.hostBadge) els.hostBadge.textContent = isHost ? t("host") : "";
@@ -798,6 +802,19 @@ function renderView() {
     if (els.spectatorChatInput) els.spectatorChatInput.placeholder = t("spectatorChatPlaceholder");
     if (els.sendSpectatorChat) els.sendSpectatorChat.disabled = !showSpectator;
   }
+  // Night-death last words for dead players
+  if (els.deadLastWordsBox) {
+    const selfPlayer = (v.players || []).find((p) => p.id === v.you?.id);
+    const canLastWords =
+      selfPlayer &&
+      !selfPlayer.alive &&
+      !selfPlayer.lastWords &&
+      !selfPlayer.noLastWords &&
+      !ended &&
+      v.phase === "DAY";
+    els.deadLastWordsBox.classList.toggle("hidden", !canLastWords);
+    if (els.sendDeadLastWords) els.sendDeadLastWords.disabled = !canLastWords;
+  }
   // Host controls visibility
   document.getElementById("hostControls").style.display = isHost ? "block" : "none";
   // Enable/disable controls based on phase/alive
@@ -933,6 +950,14 @@ if (els.sendSpectatorChat) {
     if (!text) return;
     send({ type: "spectator_chat", text });
     els.spectatorChatInput.value = "";
+  });
+}
+if (els.sendDeadLastWords) {
+  els.sendDeadLastWords.addEventListener("click", () => {
+    const text = els.deadLastWordsInput.value;
+    if (!text) return;
+    send({ type: "last_words", text });
+    els.deadLastWordsInput.value = "";
   });
 }
 const spectatorWaitLabel = document.getElementById("spectatorWaitLabel");
