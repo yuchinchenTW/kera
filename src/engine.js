@@ -141,7 +141,31 @@ export class GameEngine {
 
     const controlActions = [];
     const otherActions = [];
+    const roleAllow = {
+      POLICE: ["POLICE_INVESTIGATE"],
+      KILLER: ["KILLER_VOTE"],
+      DOCTOR: ["DOCTOR_INJECT"],
+      SNIPER: ["SNIPER_SHOT"],
+      AGENT: ["AGENT_PROTECT"],
+      HEAVENLY_FIEND: ["FIEND_PROTECT", "FIEND_SHOOT"],
+      TERRORIST: ["TERROR_BOMB"],
+      COWBOY: ["COWBOY_GAMBLE"],
+      KIDNAPPER: ["KIDNAP"],
+      ZOMBIE: ["ZOMBIE_BITE"],
+      RIOT_POLICE: ["RIOT_SMOKE"],
+      ARSONIST: ["ARSON_MARK", "ARSON_IGNITE"],
+      VINE_DEMON: ["VINE_SEED"],
+      NIGHTMARE_DEMON: ["NIGHTMARE_ATTACK"],
+      EXORCIST: ["EXORCIST_STRIKE"],
+      NECROMANCER: ["NECROMANCER_CURSE"],
+      PURIFIER: ["PURIFY"],
+      GRUDGE_BEAST: ["GRUDGE_JUDGE", "GRUDGE_KILL_VOTE"],
+    };
     for (const action of actions) {
+      const actor = getPlayer(this.state, action.actorId);
+      if (!actor) continue;
+      const allowedList = roleAllow[actor.role] || [];
+      if (!allowedList.includes(action.type)) continue; // drop spoofed or invalid action
       if (["RIOT_SMOKE", "PURIFY", "KIDNAP"].includes(action.type)) controlActions.push(action);
       else otherActions.push(action);
     }

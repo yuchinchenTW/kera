@@ -435,9 +435,43 @@ wss.on("connection", (ws) => {
           send(ws, { type: "error", message: "You are dead and cannot act." });
           return;
         }
+        // Role-based allowlist to prevent tampering.
+        const roleActions = {
+          POLICE: ["POLICE_INVESTIGATE"],
+          KILLER: ["KILLER_VOTE"],
+          DOCTOR: ["DOCTOR_INJECT"],
+          SNIPER: ["SNIPER_SHOT"],
+          AGENT: ["AGENT_PROTECT"],
+          HEAVENLY_FIEND: ["FIEND_PROTECT", "FIEND_SHOOT"],
+          TERRORIST: ["TERROR_BOMB"],
+          COWBOY: ["COWBOY_GAMBLE"],
+          KIDNAPPER: ["KIDNAP"],
+          ZOMBIE: ["ZOMBIE_BITE"],
+          RIOT_POLICE: ["RIOT_SMOKE"],
+          ARSONIST: ["ARSON_MARK", "ARSON_IGNITE"],
+          VINE_DEMON: ["VINE_SEED"],
+          NIGHTMARE_DEMON: ["NIGHTMARE_ATTACK"],
+          EXORCIST: ["EXORCIST_STRIKE"],
+          NECROMANCER: ["NECROMANCER_CURSE"],
+          PURIFIER: ["PURIFY"],
+          GRUDGE_BEAST: ["GRUDGE_JUDGE", "GRUDGE_KILL_VOTE"],
+        };
         if (!msg.action || !msg.action.type) {
           room.nightActions.delete(seat.playerId);
           return;
+        }
+        const allowed = roleActions[actor.role] || [];
+        if (!allowed.includes(msg.action.type)) {
+          send(ws, { type: "error", message: "Action not allowed for your role." });
+          return;
+        }
+        // Target sanity: only allow numeric targetId that exists when required.
+        if (msg.action.targetId !== undefined && msg.action.targetId !== null) {
+          const t = room.engine.state.players?.[msg.action.targetId];
+          if (!t || !t.alive) {
+            send(ws, { type: "error", message: "Invalid target." });
+            return;
+          }
         }
         room.nightActions.set(seat.playerId, { ...msg.action, actorId: seat.playerId });
         const targetName =
