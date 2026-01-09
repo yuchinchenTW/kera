@@ -4,6 +4,7 @@ import { Roles, Phase } from "./roles.js";
 function canSeeRole(viewer, target) {
   if (!viewer || !target) return false;
   if (viewer.id === target.id) return true;
+  if (!target.alive) return true;
   if (viewer.role === Roles.POLICE.id && target.role === Roles.POLICE.id) return true;
   if (viewer.role === Roles.KILLER.id && target.role === Roles.KILLER.id) return true;
   return false;
@@ -16,6 +17,7 @@ function visibleRole(viewer, target) {
 function visibleFaction(viewer, target) {
   if (!viewer || !target) return "UNKNOWN";
   if (viewer.id === target.id) return target.faction;
+  if (!target.alive) return target.faction;
   if (viewer.role === Roles.POLICE.id && target.role === Roles.POLICE.id) return target.faction;
   if (viewer.role === Roles.KILLER.id && target.role === Roles.KILLER.id) return target.faction;
   return "UNKNOWN";
@@ -29,8 +31,8 @@ export function buildPlayerView(state, playerId) {
     id: p.id,
     name: p.name,
     alive: p.alive,
-    role: revealAll ? p.role : visibleRole(viewer, p),
-    faction: revealAll ? p.faction : visibleFaction(viewer, p),
+    role: revealAll || !p.alive ? p.role : visibleRole(viewer, p),
+    faction: revealAll || !p.alive ? p.faction : visibleFaction(viewer, p),
     isYou: p.id === playerId,
     bratRevealed: p.status?.bratRevealed || false,
     lastWords: p.lastWords || "",
@@ -77,8 +79,8 @@ export function buildSpectatorView(state) {
     id: p.id,
     name: p.name,
     alive: p.alive,
-    role: revealAll ? p.role : "HIDDEN",
-    faction: revealAll ? p.faction : "UNKNOWN",
+    role: revealAll || !p.alive ? p.role : "HIDDEN",
+    faction: revealAll || !p.alive ? p.faction : "UNKNOWN",
     isYou: false,
     bratRevealed: p.status?.bratRevealed || false,
     lastWords: p.lastWords || "",
