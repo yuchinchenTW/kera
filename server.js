@@ -284,6 +284,7 @@ const RATE_LIMIT = {
   maxTokens: 8,
   refill: 8,
 };
+const MAX_MESSAGE_BYTES = 16 * 1024; // hard cap per incoming WS message
 function makeRateLimiter() {
   return { tokens: RATE_LIMIT.maxTokens, last: Date.now() };
 }
@@ -395,6 +396,10 @@ wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     if (!consumeToken(ws.rateLimiter)) {
       send(ws, { type: "error", message: "Too many requests; slow down." });
+      return;
+    }
+    if (typeof data?.length === "number" && data.length > MAX_MESSAGE_BYTES) {
+      send(ws, { type: "error", message: "Payload too large." });
       return;
     }
     let msg = null;
