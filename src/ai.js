@@ -1,11 +1,18 @@
 import { getPlayer, alivePlayers } from "./state.js";
-import { Roles, Faction } from "./roles.js";
+import { Roles, Faction, Theme, roleListFromTheme, roleMeta } from "./roles.js";
 
 function clamp(val, min, max) {
   return Math.min(max, Math.max(min, val));
 }
 
-function ensureSuspicion(state) {
+function rolePriorCounts(themeId) {
+  const list = roleListFromTheme(themeId);
+  const counts = {};
+  for (const r of list) counts[r] = (counts[r] || 0) + 1;
+  return counts;
+}
+
+function ensureBeliefs(state) {
   const living = alivePlayers(state).map((p) => p.id);
   const diffScaleMap = { easy: 0.6, normal: 1, hard: 1.3, nightmare: 1.6 };
   const diffScale = diffScaleMap[state.difficulty || "normal"] ?? 1;
@@ -20,72 +27,73 @@ function ensureSuspicion(state) {
   const firstVoterId = lastVoteHist?.order?.[0]?.actorId ?? null;
   const lastVoterId = lastVoteHist?.order?.[lastVoteHist.order.length - 1]?.actorId ?? null;
   const lastTally = lastVoteHist?.tally || {};
+  const rolePriors = rolePriorCounts(state.theme || Theme.GOOD_VS_EVIL.id);
+  const allRoles = Object.keys(rolePriors);
+  const totalPrior = Math.max(1, Object.values(rolePriors).reduce((a, b) => a + b, 0));
 
   for (const p of alivePlayers(state)) {
     if (p.isHuman) continue;
-    if (!p.aiMemory) p.aiMemory = { suspicion: {} };
+    if (!p.aiMemory) p.aiMemory = { suspicion: {}, roleProbs: {} };
+    if (!p.aiMemory.roleProbs) p.aiMemory.roleProbs = {};
+    if (!p.aiMemory.suspicion) p.aiMemory.suspicion = {};
     for (const targetId of living) {
       if (targetId === p.id) continue;
       const target = getPlayer(state, targetId);
       const sameFaction = target?.faction === p.faction;
-      const baseStart = p.faction === Faction.BLUE ? 0.32 : 0.35;
-      const base = baseStart + state.rng() * 0.35 - (sameFaction ? 0.15 : 0);
-      if (p.aiMemory.suspicion[targetId] === undefined) {
-        p.aiMemory.suspicion[targetId] = clamp(base, 0.05, 0.95);
-      } else {
-        const drift = (state.rng() - 0.5) * 0.08;
-        p.aiMemory.suspicion[targetId] = clamp(p.aiMemory.suspicion[targetId] + drift, 0.05, 0.95);
+      // 初始化或衰減到先驗
+      if (!p.aiMemory.roleProbs[targetId]) p.aiMemory.roleProbs[targetId] = {};
+      const decay = 0.9;
+      let mass = 0;
+      for (const role of allRoles) {
+        const prior = (rolePriors[role] || 0) / totalPrior;
+        const prev = p.aiMemory.roleProbs[targetId][role] ?? prior;
+        const blended = prior * (1 - decay) + prev * decay;
+        p.aiMemory.roleProbs[targetId][role] = blended;
+        mass += blended;
       }
-
-      // Heuristic bumps (weak strength)
-      let delta = 0;
-      // Mentions in discussion
+      // likelihood bumps
+      let redBoost = 0;
+      let blueBoost = 0;
       if (lastVoteHist?.mentions && lastVoteHist.mentions[targetId]) {
         const weight = (lastVoteHist.mentions[targetId] || 0) / mentionMax;
-        delta += 0.05 * weight * diffScale;
+        redBoost += 0.05 * weight * diffScale;
       }
-      // Flip voters (medium)
-      if (flipSet.has(targetId)) {
-        delta += 0.15 * diffScale;
-      }
-      // Last voter (opportunistic, medium)
-      if (targetId === lastVoterId) {
-        delta += 0.15 * diffScale;
-      }
-      // First voter (info holder) slight reduction
-      if (targetId === firstVoterId) {
-        delta -= 0.05 * diffScale;
-      }
-      // Voted into majority (if tally shows high votes)
+      if (flipSet.has(targetId)) redBoost += 0.15 * diffScale;
+      if (targetId === lastVoterId) redBoost += 0.15 * diffScale;
+      if (targetId === firstVoterId) redBoost -= 0.05 * diffScale;
       const tallyScore = lastTally[targetId] || 0;
       const maxTally = Math.max(1, ...Object.values(lastTally || {}));
       if (tallyScore && maxTally > 0) {
         const bandwagon = tallyScore / maxTally;
-        delta += 0.08 * bandwagon * diffScale;
+        redBoost += 0.08 * bandwagon * diffScale;
       }
-      // Police investigation: if a red is revealed, boost suspicion for blue-side actors
       if (revealedRed && targetId === revealedRed && p.faction === Faction.BLUE) {
-        delta += 0.25 * diffScale;
+        redBoost += 0.6 * diffScale;
       }
-      // Difficulty-based bias toward opposing the human (only on nightmare)
       if (humanFaction && target?.faction && state.difficulty === "nightmare") {
-        if (target.faction === humanFaction) delta += 0.12 * diffScale;
-        else if (opposingFaction && target.faction === opposingFaction) delta -= 0.05 * diffScale;
+        if (target.faction === humanFaction) redBoost += 0.12 * diffScale;
+        else if (opposingFaction && target.faction === opposingFaction) redBoost -= 0.05 * diffScale;
       }
-      p.aiMemory.suspicion[targetId] = clamp(p.aiMemory.suspicion[targetId] + delta, 0.01, 0.99);
-    }
-
-    // Normalize suspicions per actor
-    const vals = Object.values(p.aiMemory.suspicion).filter((v) => typeof v === "number");
-    const minVal = Math.min(...vals, 1);
-    const maxVal = Math.max(...vals, 0);
-    const range = maxVal - minVal;
-    if (range > 0) {
-      for (const tId of Object.keys(p.aiMemory.suspicion)) {
-        const v = p.aiMemory.suspicion[tId];
-        const norm = 0.05 + ((v - minVal) / range) * 0.9;
-        p.aiMemory.suspicion[tId] = clamp(norm, 0.01, 0.99);
+      // 應用到角色分布
+      for (const role of allRoles) {
+        const meta = roleMeta(role);
+        let mult = 1;
+        if (meta.faction === Faction.RED) mult += redBoost;
+        if (meta.faction === Faction.BLUE) mult += blueBoost;
+        p.aiMemory.roleProbs[targetId][role] = clamp(p.aiMemory.roleProbs[targetId][role] * Math.max(0.01, mult), 0.0001, 1);
+        mass += 0; // no-op
       }
+      // normalize
+      const sum = Object.values(p.aiMemory.roleProbs[targetId]).reduce((a, b) => a + b, 0) || 1;
+      for (const role of allRoles) {
+        p.aiMemory.roleProbs[targetId][role] = p.aiMemory.roleProbs[targetId][role] / sum;
+      }
+      // 對舊邏輯的兼容：用紅方機率總和作為 suspicion。
+      const redProb = Object.entries(p.aiMemory.roleProbs[targetId]).reduce(
+        (acc, [r, prob]) => acc + (roleMeta(r).faction === Faction.RED ? prob : 0),
+        0
+      );
+      p.aiMemory.suspicion[targetId] = clamp(redProb, 0.01, 0.99);
     }
   }
 }
@@ -100,6 +108,39 @@ function pickTargetBySuspicion(state, actor, filterFn = () => true) {
     if (score > bestScore) {
       bestScore = score;
       best = target;
+    }
+  }
+  return best;
+}
+
+function factionProb(actor, targetId, faction) {
+  const probs = actor.aiMemory?.roleProbs?.[targetId];
+  if (!probs) return null;
+  let sum = 0;
+  for (const [role, prob] of Object.entries(probs)) {
+    if (roleMeta(role).faction === faction) sum += prob;
+  }
+  return sum;
+}
+
+function pickPoliceSmartTarget(state, actor) {
+  let best = null;
+  let bestScore = -Infinity;
+  const diffScaleMap = { easy: 0.6, normal: 1, hard: 1.3, nightmare: 1.6 };
+  const diffScale = diffScaleMap[state.difficulty || "normal"] ?? 1;
+  for (const t of alivePlayers(state)) {
+    if (t.id === actor.id || t.role === Roles.POLICE.id) continue;
+    const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
+    const redProb = factionProb(actor, t.id, Faction.RED) ?? 0;
+    const likelyBluePower =
+      (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0) > 0.6 ||
+      (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0) > 0.6;
+    if (likelyBluePower && state.rng() < 0.8) continue;
+    let score = killerProb * 2 + redProb;
+    score = clamp(score + (state.rng() - 0.5) * 0.1 * diffScale, 0, 3);
+    if (score > bestScore) {
+      bestScore = score;
+      best = t;
     }
   }
   return best;
@@ -141,7 +182,7 @@ export function buildAiNightActions(state, opts = {}) {
   const humanChoice = opts.humanChoice || null;
   const humanActionsRaw = opts.humanActions || null;
   const human = state.players.find((p) => p.isHuman);
-  ensureSuspicion(state);
+  ensureBeliefs(state);
   const actions = [];
 
   const humanActionList = [];
@@ -207,30 +248,57 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.POLICE.id: {
         const target =
           sharedPoliceTarget ||
+          pickPoliceSmartTarget(state, actor) ||
           pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.POLICE.id);
         if (target) actions.push({ actorId: actor.id, type: "POLICE_INVESTIGATE", targetId: target.id });
         break;
       }
       case Roles.KILLER.id: {
-        const target =
-          sharedKillerTarget ||
-          pickTargetBySuspicion(state, actor, (t) => t.faction !== Faction.RED && t.role !== Roles.KILLER.id);
+        let target = sharedKillerTarget;
+        if (!target) {
+          let best = null;
+          let bestScore = -Infinity;
+          for (const t of alivePlayers(state)) {
+            if (t.role === Roles.KILLER.id) continue;
+            const redProb = factionProb(actor, t.id, Faction.BLUE) ?? 0;
+            const priority = redProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+            if (priority > bestScore) {
+              bestScore = priority;
+              best = t;
+            }
+          }
+          target = best;
+        }
         if (target) actions.push({ actorId: actor.id, type: "KILLER_VOTE", targetId: target.id });
         break;
       }
       case Roles.DOCTOR.id: {
         if (state.usage.doctorInjections < (Roles.DOCTOR.maxInjections || 0)) {
-          const target =
-            state.rng() > 0.7
-              ? actor
-              : pickTargetBySuspicion(state, actor, (t) => t.faction === Faction.BLUE);
+          let target = actor;
+          if (state.rng() <= 0.7) {
+            let best = null;
+            let bestScore = -Infinity;
+            for (const t of alivePlayers(state)) {
+              const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+              const specialProb =
+                (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0) +
+                (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0) +
+                (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0);
+              const score = blueProb + specialProb;
+              if (score > bestScore) {
+                bestScore = score;
+                best = t;
+              }
+            }
+            target = best || actor;
+          }
           if (target) actions.push({ actorId: actor.id, type: "DOCTOR_INJECT", targetId: target.id });
         }
         break;
       }
       case Roles.SNIPER.id: {
         if (state.usage.sniperShots < (Roles.SNIPER.maxShots || 0) && state.rng() > 0.4) {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.faction !== actor.faction);
+          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "SNIPER_SHOT", targetId: target.id });
         }
         break;
@@ -251,7 +319,7 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.TERRORIST.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.faction !== Faction.RED);
+        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
         if (target && state.rng() > 0.35) actions.push({ actorId: actor.id, type: "TERROR_BOMB", targetId: target.id });
         break;
       }
@@ -337,7 +405,7 @@ export function buildAiNightActions(state, opts = {}) {
 
 export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const includeHuman = opts.includeHuman === true;
-  ensureSuspicion(state);
+  ensureBeliefs(state);
   const chatMentions = {};
   const chats = state.dayChat || [];
   for (const line of chats) {
@@ -356,6 +424,8 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const aiVoters = alivePlayers(state).filter(
     (p) => (includeHuman || !p.isHuman) && !(p.role === Roles.BRAT.id && p.status.bratRevived)
   );
+  const randomVoteChance = { easy: 0.8, normal: 0.6, hard: 0.2, nightmare: 0.05 };
+  const chaosVoteChance = randomVoteChance[state.difficulty || "normal"] ?? 0.6;
   aiVoters.forEach((actor, idx) => {
     // force at least one vote by making the last AI always vote
     const abstainChance = idx === aiVoters.length - 1 ? 0 : 0.05;
@@ -373,7 +443,9 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
     if (state.policeRevealedRed !== null && actor.faction === Faction.BLUE && actor.role !== Roles.POLICE.id) {
       const redTarget = getPlayer(state, state.policeRevealedRed);
-      if (redTarget?.alive && state.rng() < 0.7) {
+      const followPoliceChance = { easy: 0.5, normal: 0.7, hard: 0.95, nightmare: 0.98 };
+      const chance = followPoliceChance[state.difficulty || "normal"] ?? 0.7;
+      if (redTarget?.alive && state.rng() < chance) {
         votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
         return;
       }
@@ -383,14 +455,27 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         ? everyone.filter((t) => t.faction !== Faction.RED)
         : everyone;
     const candidates = pruned.length ? pruned : everyone;
+
+    // Hard+ 紅方：若有暴露隊友，偶爾賣隊友以博信任。
+    if ((state.difficulty === "hard" || state.difficulty === "nightmare") && actor.faction === Faction.RED) {
+      const redTargetId = state.policeRevealedRed;
+      const exposedRed =
+        redTargetId !== null ? getPlayer(state, redTargetId) : candidates.find((t) => t.role === Roles.KILLER.id && t.id !== actor.id);
+      if (exposedRed?.alive && state.rng() < 0.5) {
+        votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: exposedRed.id });
+        return;
+      }
+    }
+
     let target = null;
-    if (roll < 0.6) {
+    if (roll < chaosVoteChance) {
       target = randomChoice(candidates, state.rng);
     } else {
       let best = null;
       let bestScore = -Infinity;
       for (const t of candidates) {
-        const base = jitter(actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+        const redProb = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
+        const base = jitter(redProb);
         const chatBonus = actor.role !== Roles.POLICE.id ? chatWeight(t.id) * 0.05 : 0;
         let s = clamp(base + chatBonus, 0, 1);
         // Difficulty bias: opposing the human only on nightmare
@@ -452,9 +537,12 @@ export function generateChatLines(state, maxLines = 6) {
     if (redFound?.alive && speaker.role === Roles.POLICE.id && state.rng() < 0.8) {
       useTarget = redFound;
     }
-    if (speaker.faction === Faction.RED && state.rng() < 0.75) {
-      const nonRed = allCandidates.filter((t) => t.faction !== Faction.RED);
-      if (nonRed.length) useTarget = randomChoice(nonRed, state.rng);
+    // Hard+紅方偶爾賊喊捉賊，提高迷惑性。
+    const deceptive = (state.difficulty === "hard" || state.difficulty === "nightmare") && speaker.faction === Faction.RED;
+    if (deceptive && state.rng() < 0.25) {
+      const anyone = allCandidates;
+      const bluff = randomChoice(anyone, state.rng);
+      if (bluff) useTarget = bluff;
     }
     const suspicion = speaker.aiMemory?.suspicion?.[useTarget?.id] ?? 0.5;
     const tone = suspicion > 0.7 ? "accuses" : suspicion < 0.3 && defendPool.length ? "defends" : "wonders";
