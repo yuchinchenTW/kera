@@ -269,6 +269,26 @@ const server = http.createServer((req, res) => {
 });
 const wss = new WebSocketServer({ server });
 
+// Per-IP connection cap (except localhost): max 1 concurrent connection.
+const ipConnectionCounts = new Map();
+function normalizeIp(addr) {
+  if (!addr) return "unknown";
+  if (addr.startsWith("::ffff:")) return addr.slice(7);
+  return addr;
+}
+function isLoopback(addr) {
+  return addr === "127.0.0.1" || addr === "::1";
+}
+
+let lobbyBroadcastHandle = null;
+function scheduleLobbyBroadcast() {
+  if (lobbyBroadcastHandle) return;
+  lobbyBroadcastHandle = setTimeout(() => {
+    lobbyBroadcastHandle = null;
+    broadcast({ type: "lobby", seats: room.seats });
+  }, 150);
+}
+
 function scheduleRestartAfterVictory() {
   if (!room.engine) return;
   const victory = !!room.engine.state?.victory;
@@ -323,7 +343,7 @@ function promoteWaitingSpectator() {
   room.host = waiterWs;
   send(waiterWs, { type: "joined", playerId: seatId, host: true });
   send(waiterWs, { type: "host", value: true });
-  broadcast({ type: "lobby", seats: room.seats });
+  scheduleLobbyBroadcast();
   log("Promoted waiting spectator to host", seatId, seat.name);
   return true;
 }
@@ -340,7 +360,7 @@ function handleHostVacancy() {
   if (promoteWaitingSpectator()) return;
   resetRoomState(true);
   room.host = null;
-  broadcast({ type: "lobby", seats: room.seats });
+  scheduleLobbyBroadcast();
 }
 
 function promoteWaitingSpectatorsToSeats() {
@@ -356,11 +376,19 @@ function promoteWaitingSpectatorsToSeats() {
     changed = true;
   }
   if (changed) {
-    broadcast({ type: "lobby", seats: room.seats });
+    scheduleLobbyBroadcast();
   }
 }
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  const ipRaw = normalizeIp(req?.socket?.remoteAddress || "");
+  const ip = ipRaw || "unknown";
+  const current = ipConnectionCounts.get(ip) || 0;
+  if (!isLoopback(ip) && current >= 1) {
+    ws.close();
+    return;
+  }
+  ipConnectionCounts.set(ip, current + 1);
   ws.on("message", (data) => {
     let msg = null;
     try {
@@ -406,7 +434,7 @@ wss.on("connection", (ws) => {
         room.connections.set(ws, seat);
         if (!room.host) room.host = ws;
         send(ws, { type: "joined", playerId: seatId, host: ensureHost(ws) });
-        broadcast({ type: "lobby", seats: room.seats });
+        scheduleLobbyBroadcast();
         log("Player joined", seatId, name);
         break;
       }
@@ -717,7 +745,7 @@ wss.on("connection", (ws) => {
         room.nightActions.clear();
         room.voteActions.clear();
         room.lastWords.clear();
-        broadcast({ type: "lobby", seats: room.seats });
+        scheduleLobbyBroadcast();
         break;
       }
       default:
@@ -728,6 +756,12 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     const seat = room.connections.get(ws);
     room.connections.delete(ws);
+    const ipRaw = normalizeIp(req?.socket?.remoteAddress || "");
+    if (ipConnectionCounts.has(ipRaw)) {
+      const next = Math.max(0, (ipConnectionCounts.get(ipRaw) || 1) - 1);
+      if (next === 0) ipConnectionCounts.delete(ipRaw);
+      else ipConnectionCounts.set(ipRaw, next);
+    }
     if (seat && seat.playerId !== undefined) {
       const player = room.engine?.state?.players?.[seat.playerId];
       if (room.started && player) {
@@ -738,7 +772,7 @@ wss.on("connection", (ws) => {
         log("Player disconnected, AI taking over seat", seat.playerId, player.name);
       } else if (!room.started) {
         room.seats = room.seats.filter((s) => s.playerId !== seat.playerId);
-        broadcast({ type: "lobby", seats: room.seats });
+        scheduleLobbyBroadcast();
       }
     }
     if (room.host === ws) {
