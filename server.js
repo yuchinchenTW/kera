@@ -545,6 +545,11 @@ wss.on("connection", (ws) => {
         if (msg.targetId === undefined || msg.targetId === null) {
           room.voteActions.delete(seat.playerId);
         } else {
+          const target = room.engine.state.players?.[msg.targetId];
+          if (!target || !target.alive) {
+            send(ws, { type: "error", message: "Invalid vote target." });
+            return;
+          }
           room.voteActions.set(seat.playerId, msg.targetId);
         }
         if (typeof msg.lastWords === "string") {

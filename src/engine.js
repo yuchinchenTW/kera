@@ -819,7 +819,7 @@ export class GameEngine {
       const actor = getPlayer(this.state, hv.actorId);
       if (!actor?.alive || (actor.role === Roles.BRAT.id && actor.status.bratRevived)) continue;
       const target = getPlayer(this.state, hv.targetId);
-      if (target) {
+      if (target?.alive) {
         votes[hv.targetId] = (votes[hv.targetId] || 0) + 1;
         votePairs.push(`${actor.name} -> ${target.name}`);
         voteOrder.push({ actorId: actor.id, targetId: target.id });
@@ -828,13 +828,12 @@ export class GameEngine {
 
     const aiVotes = buildAiVoteActions(this.state, null, { includeHuman: opts.includeHuman === true });
     for (const v of aiVotes) {
-      votes[v.targetId] = (votes[v.targetId] || 0) + 1;
       const actor = getPlayer(this.state, v.actorId);
       const target = getPlayer(this.state, v.targetId);
-      if (actor && target) {
-        votePairs.push(`${actor.name} -> ${target.name}`);
-        voteOrder.push({ actorId: actor.id, targetId: target.id });
-      }
+      if (!actor?.alive || !target?.alive) continue;
+      votes[v.targetId] = (votes[v.targetId] || 0) + 1;
+      votePairs.push(`${actor.name} -> ${target.name}`);
+      voteOrder.push({ actorId: actor.id, targetId: target.id });
     }
 
     const flips = [];
