@@ -233,7 +233,10 @@ export class GameEngine {
           trackBlueTarget(targetedByBlue, action.targetId, actor);
           target.status.purified = true;
           target.status.cannotAct = true;
-          if (target.role === Roles.NECROMANCER.id) target.souls = 0;
+          if (target.role === Roles.NECROMANCER.id) {
+            target.souls = 0;
+            target.pendingSoulsFromDay = 0;
+          }
           addPublicLog(this.state, `Someone cleansed ${target.name}.`);
           break;
         }
@@ -844,7 +847,7 @@ export class GameEngine {
     const voteOrder = [];
 
     const eligibleVoters = alivePlayers(this.state).filter(
-      (p) => !(p.role === Roles.BRAT.id && p.status.bratRevived)
+      (p) => !(p.role === Roles.BRAT.id && p.status.bratRevived) && !p.status.purified
     );
     const aliveCount = eligibleVoters.length;
     const needed = Math.floor(aliveCount / 2) + 1;
@@ -885,9 +888,9 @@ export class GameEngine {
     for (const hv of humanVotesList) {
       if (hv.targetId === null || hv.targetId === undefined) continue;
       const actor = getPlayer(this.state, hv.actorId);
-      if (!actor?.alive || (actor.role === Roles.BRAT.id && actor.status.bratRevived)) continue;
+      if (!actor?.alive || (actor.role === Roles.BRAT.id && actor.status.bratRevived) || actor.status.purified) continue;
       const target = getPlayer(this.state, hv.targetId);
-      if (target?.alive) {
+      if (target?.alive && !target.status.purified) {
         votes[hv.targetId] = (votes[hv.targetId] || 0) + 1;
         votePairs.push(`${actor.name} -> ${target.name}`);
         voteOrder.push({ actorId: actor.id, targetId: target.id });
@@ -898,7 +901,7 @@ export class GameEngine {
     for (const v of aiVotes) {
       const actor = getPlayer(this.state, v.actorId);
       const target = getPlayer(this.state, v.targetId);
-      if (!actor?.alive || !target?.alive) continue;
+      if (!actor?.alive || actor.status.purified || !target?.alive || target.status.purified) continue;
       votes[v.targetId] = (votes[v.targetId] || 0) + 1;
       votePairs.push(`${actor.name} -> ${target.name}`);
       voteOrder.push({ actorId: actor.id, targetId: target.id });
