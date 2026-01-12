@@ -159,7 +159,7 @@ export class GameEngine {
     }
 
     const controlActions = [];
-    const otherActions = [];
+    let otherActions = [];
     const roleAllow = {
       POLICE: ["POLICE_INVESTIGATE"],
       KILLER: ["KILLER_VOTE"],
@@ -188,6 +188,55 @@ export class GameEngine {
       if (["RIOT_SMOKE", "PURIFY", "KIDNAP"].includes(action.type)) controlActions.push(action);
       else otherActions.push(action);
     }
+
+    // Expand human exorcist chains: if a human exorcist submits strikes, fill up to maxChains unique targets.
+    const shuffleList = (arr) => {
+      const res = [...arr];
+      for (let i = res.length - 1; i > 0; i--) {
+        const j = Math.floor(this.state.rng() * (i + 1));
+        [res[i], res[j]] = [res[j], res[i]];
+      }
+      return res;
+    };
+    const expandedOther = [];
+    for (const action of otherActions) {
+      if (action.type === "EXORCIST_STRIKE") {
+        const actor = getPlayer(this.state, action.actorId);
+        if (actor?.isHuman && actor.role === Roles.EXORCIST.id) {
+          const maxChains = Math.max(1, actor.maxChains ?? Roles.EXORCIST.maxChain);
+          const targetIds = [
+            action.targetId,
+            ...(Array.isArray(action.extraTargets) ? action.extraTargets : []),
+          ];
+          const seen = new Set();
+          let added = 0;
+          for (const tid of targetIds) {
+            const t = getPlayer(this.state, tid);
+            if (!t?.alive || t.id === actor.id) continue;
+            if (seen.has(t.id)) continue;
+            seen.add(t.id);
+            expandedOther.push({ actorId: actor.id, type: "EXORCIST_STRIKE", targetId: t.id });
+            added += 1;
+            if (added >= maxChains) break;
+          }
+          // If user picked fewer than maxChains, fill remaining randomly (excluding duplicates and self)
+          if (added < maxChains) {
+            const candidates = shuffleList(
+              alivePlayers(this.state).filter((p) => p.id !== actor.id && !seen.has(p.id))
+            );
+            for (const c of candidates) {
+              if (added >= maxChains) break;
+              expandedOther.push({ actorId: actor.id, type: "EXORCIST_STRIKE", targetId: c.id });
+              seen.add(c.id);
+              added += 1;
+            }
+          }
+          continue; // skip default push; we've added expanded strikes
+        }
+      }
+      expandedOther.push(action);
+    }
+    otherActions = expandedOther;
 
     const killerVotes = {};
     const policeVotes = {};

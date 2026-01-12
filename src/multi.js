@@ -20,6 +20,7 @@ const els = {
   victoryDisplay: document.getElementById("victoryDisplay"),
   nightActionType: document.getElementById("nightActionType"),
   nightTarget: document.getElementById("nightTarget"),
+  exorcistTargets: document.getElementById("exorcistTargets"),
   sendNightAction: document.getElementById("sendNightAction"),
   voteTarget: document.getElementById("voteTarget"),
   lastWordsInput: document.getElementById("lastWordsInput"),
@@ -750,6 +751,24 @@ function renderView() {
     .filter((p) => p.id !== you?.id && p.alive)
     .map((p) => ({ value: String(p.id), label: p.name }));
   buildOptions(els.nightTarget, targetOptions, t("chooseTarget"));
+  // Exorcist: show N target dropdowns (maxChains); others: single target
+  if (els.exorcistTargets) {
+    els.exorcistTargets.innerHTML = "";
+  }
+  if (you?.role === Roles.EXORCIST.id) {
+    const maxChains = Math.max(1, you.maxChains || 1);
+    if (els.nightTarget) els.nightTarget.multiple = false;
+    if (els.exorcistTargets) {
+      const extraCount = Math.max(0, maxChains - 1);
+      for (let i = 0; i < extraCount; i++) {
+        const sel = document.createElement("select");
+        buildOptions(sel, targetOptions, t("chooseTarget"));
+        els.exorcistTargets.appendChild(sel);
+      }
+    }
+  } else {
+    if (els.nightTarget) els.nightTarget.multiple = false;
+  }
   const voteOptions = (v.players || [])
     .filter((p) => p.alive)
     .map((p) => ({ value: String(p.id), label: p.name }));
@@ -947,9 +966,25 @@ els.sendNightAction.addEventListener("click", () => {
     ? roleActionChoices(latestView.you.role, !!latestView.grudgeState?.berserk).find((c) => c.value === type)
     : null;
   const needsTarget = selected ? selected.needsTarget !== false : true;
-  const targetId = needsTarget ? Number(els.nightTarget.value) : undefined;
+  let targetId = undefined;
+  let extraTargets = [];
+  if (needsTarget) {
+    if (latestView?.you?.role === Roles.EXORCIST.id) {
+      const selects = [els.nightTarget, ...(els.exorcistTargets ? Array.from(els.exorcistTargets.querySelectorAll("select")) : [])];
+      const ids = selects
+        .map((s) => Number(s?.value))
+        .filter((n) => !Number.isNaN(n));
+      if (ids.length) {
+        targetId = ids[0];
+        extraTargets = ids.slice(1);
+      }
+    } else {
+      targetId = Number(els.nightTarget.value);
+    }
+  }
   const action = { type };
   if (targetId !== undefined && !Number.isNaN(targetId)) action.targetId = targetId;
+  if (extraTargets.length) action.extraTargets = extraTargets;
   send({ type: "night_action", action });
 });
 els.sendVote.addEventListener("click", () => {

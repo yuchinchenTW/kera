@@ -446,10 +446,9 @@ export function buildAiNightActions(state, opts = {}) {
         if ((actor.exorcistMistakes || 0) >= 3) break;
         const maxChains = Math.max(0, actor.maxChains ?? Roles.EXORCIST.maxChain);
         if (maxChains <= 0) break;
-        const ordered = shuffled(
-          alivePlayers(state).filter((t) => t.id !== actor.id),
-          state.rng
-        ).sort((a, b) => {
+        const ordered = shuffled(alivePlayers(state), state.rng)
+          .filter((t) => t.id !== actor.id)
+          .sort((a, b) => {
           const sa = actor.aiMemory?.suspicion?.[a.id] ?? 0.5;
           const sb = actor.aiMemory?.suspicion?.[b.id] ?? 0.5;
           return sb - sa;

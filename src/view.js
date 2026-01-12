@@ -63,6 +63,7 @@ export function buildPlayerView(state, playerId) {
       isHuman: viewer.isHuman,
       aiTakenOver,
       noLastWords: !!viewer.noLastWords,
+      maxChains: viewer.maxChains ?? 0,
     },
     players,
     publicLog: [...state.publicLog],

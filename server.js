@@ -555,6 +555,15 @@ wss.on("connection", (ws, req) => {
             return;
           }
         }
+        if (Array.isArray(msg.action.extraTargets)) {
+          for (const tid of msg.action.extraTargets) {
+            const t = room.engine.state.players?.[tid];
+            if (!t || !t.alive) {
+              send(ws, { type: "error", message: "Invalid extra target." });
+              return;
+            }
+          }
+        }
         room.nightActions.set(seat.playerId, { ...msg.action, actorId: seat.playerId });
         const targetName =
           typeof msg.action.targetId === "number"
