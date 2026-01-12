@@ -30,7 +30,7 @@ export const Roles = {
     hasNightAction: true,
     maxGrenades: 4,
   },
-  ARSONIST: { id: "ARSONIST", name: "Arsonist", faction: Faction.RED, hasNightAction: true },
+  ARSONIST: { id: "ARSONIST", name: "Arsonist", faction: Faction.RED, hasNightAction: true, maxMarks: 4 },
   HEAVENLY_FIEND: { id: "HEAVENLY_FIEND", name: "Heavenly Fiend", faction: Faction.BLUE, hasNightAction: true },
   VINE_DEMON: { id: "VINE_DEMON", name: "Vine Demon", faction: Faction.RED, hasNightAction: true },
   BRAT: { id: "BRAT", name: "Brat", faction: Faction.BLUE, hasNightAction: false },

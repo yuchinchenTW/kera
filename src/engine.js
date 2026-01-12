@@ -345,7 +345,16 @@ export class GameEngine {
         case "RIOT_SMOKE":
           break; // handled
         case "ARSON_MARK":
-          if (target && target.alive) {
+          if (target && target.alive && this.state.usage.arsonMarks < (Roles.ARSONIST.maxMarks || 0)) {
+            this.state.usage.arsonMarks += 1;
+            if (target.status.protectedByAgent) {
+              addPublicLog(this.state, `An agent shield blocked a gasoline bottle on ${target.name}.`);
+              break;
+            }
+            if (target.status.protectedByFiend) {
+              addPublicLog(this.state, `A guardian absorbed a gasoline bottle on ${target.name}.`);
+              break;
+            }
             target.status.arsonMarked = true;
             arsonMarkedTargets.add(target.id);
             addPublicLog(this.state, `Someone splashed fuel on ${target.name}.`);

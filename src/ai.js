@@ -402,7 +402,8 @@ export function buildAiNightActions(state, opts = {}) {
       }
       case Roles.ARSONIST.id: {
         const marked = state.players.filter((p) => p.status.arsonMarked && p.alive).length;
-        if (marked >= 2 || state.rng() > 0.65) {
+        const doIgnite = marked >= 2 || state.rng() > 0.65;
+        if (doIgnite) {
           actions.push({ actorId: actor.id, type: "ARSON_IGNITE" });
         } else {
           const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);

@@ -103,6 +103,7 @@ export function createInitialState(
       doctorInjections: 0,
       sniperShots: 0,
       riotGrenades: 0,
+      arsonMarks: 0,
     },
     difficulty,
     grudgeState: {
