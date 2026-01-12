@@ -212,7 +212,7 @@ export class GameEngine {
           target.status.smoked += 1;
           target.status.cannotAct = true;
           if (target.status.smoked >= 2) {
-            addKill(target.id, DeathCause.SMOKE_OVERDOSE, { unstoppable: true, noLastWords: true });
+            addKill(target.id, DeathCause.SMOKE_OVERDOSE, { unstoppable: false, blockable: true, noLastWords: true });
           } else {
           addPublicLog(this.state, `Someone deployed smoke on ${target.name}.`);
           }
@@ -271,7 +271,11 @@ export class GameEngine {
           addPublicLog(this.state, `Someone fired a sniper shot.`);
           break;
         case "AGENT_PROTECT":
-          if (isUntargetable(target)) break;
+          if (!target || !target.alive) break;
+          if (target.status.smoked > 0) {
+            target.status.smoked = 0;
+            target.status.cannotAct = false;
+          }
           target.status.protectedByAgent = true;
           target.status.protectionSource = actor.id;
           agentLinks[actor.id] = target.id;
@@ -279,7 +283,11 @@ export class GameEngine {
           break;
         case "FIEND_PROTECT":
           if (actor.status.fiendMode !== "ABSORB") break;
-          if (isUntargetable(target)) break;
+          if (!target || !target.alive) break;
+          if (target.status.smoked > 0) {
+            target.status.smoked = 0;
+            target.status.cannotAct = false;
+          }
           target.status.protectedByFiend = true;
           target.status.protectionSource = actor.id;
           fiendProtectMap[actor.id] = target.id;
