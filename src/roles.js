@@ -33,7 +33,7 @@ export const Roles = {
   ARSONIST: { id: "ARSONIST", name: "Arsonist", faction: Faction.RED, hasNightAction: true, maxMarks: 4 },
   HEAVENLY_FIEND: { id: "HEAVENLY_FIEND", name: "Heavenly Fiend", faction: Faction.BLUE, hasNightAction: true },
   VINE_DEMON: { id: "VINE_DEMON", name: "Vine Demon", faction: Faction.RED, hasNightAction: true },
-  BRAT: { id: "BRAT", name: "Brat", faction: Faction.BLUE, hasNightAction: false },
+  BRAT: { id: "BRAT", name: "屁孩", faction: Faction.BLUE, hasNightAction: false },
   NIGHTMARE_DEMON: { id: "NIGHTMARE_DEMON", name: "Nightmare Demon", faction: Faction.RED, hasNightAction: true },
   EXORCIST: { id: "EXORCIST", name: "Exorcist", faction: Faction.BLUE, hasNightAction: true, maxChain: 3 },
   NECROMANCER: { id: "NECROMANCER", name: "Necromancer", faction: Faction.RED, hasNightAction: true },

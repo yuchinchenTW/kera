@@ -825,7 +825,10 @@ export class GameEngine {
     const votePairs = [];
     const voteOrder = [];
 
-    const aliveCount = alivePlayers(this.state).length;
+    const eligibleVoters = alivePlayers(this.state).filter(
+      (p) => !(p.role === Roles.BRAT.id && p.status.bratRevived)
+    );
+    const aliveCount = eligibleVoters.length;
     const needed = Math.floor(aliveCount / 2) + 1;
 
     const mentionCounts = {};
