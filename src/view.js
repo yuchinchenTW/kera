@@ -7,6 +7,7 @@ function canSeeRole(viewer, target) {
   if (!target.alive) return true;
   if (viewer.role === Roles.POLICE.id && target.role === Roles.POLICE.id) return true;
   if (viewer.role === Roles.KILLER.id && target.role === Roles.KILLER.id) return true;
+  if (viewer.role === Roles.GRUDGE_BEAST.id && target.role === Roles.GRUDGE_BEAST.id) return true;
   return false;
 }
 
@@ -20,6 +21,7 @@ function visibleFaction(viewer, target) {
   if (!target.alive) return target.faction;
   if (viewer.role === Roles.POLICE.id && target.role === Roles.POLICE.id) return target.faction;
   if (viewer.role === Roles.KILLER.id && target.role === Roles.KILLER.id) return target.faction;
+  if (viewer.role === Roles.GRUDGE_BEAST.id && target.role === Roles.GRUDGE_BEAST.id) return target.faction;
   return "UNKNOWN";
 }
 
@@ -66,6 +68,7 @@ export function buildPlayerView(state, playerId) {
     lastNightSummary: [...state.lastNightSummary],
     killerChat: viewer.role === Roles.KILLER.id ? [...(state.killerChat || [])] : [],
     policeChat: viewer.role === Roles.POLICE.id ? [...(state.policeChat || [])] : [],
+    grudgeChat: viewer.role === Roles.GRUDGE_BEAST.id ? [...(state.grudgeChat || [])] : [],
     spectatorChat: !viewer.alive ? [...(state.spectatorChat || [])] : [],
     privateIntel,
     winrateHint: state.winrateHint,

@@ -105,6 +105,15 @@ export class GameEngine {
 
   resolveNight(humanAction = null, opts = {}) {
     this.startNight();
+    // Share grudge team info each night to their private channel.
+    const grudgeTeam = alivePlayers(this.state).filter((p) => p.role === Roles.GRUDGE_BEAST.id);
+    if (grudgeTeam.length) {
+      addPrivateLog(
+        this.state,
+        "grudge",
+        `Grudge team (${grudgeTeam.length}): ${grudgeTeam.map((p) => p.name).join(", ")}`
+      );
+    }
     // Apply any souls gained from daytime deaths so necromancer can use them tonight.
     for (const necro of this.state.players) {
       if (!necro.alive || necro.role !== Roles.NECROMANCER.id) continue;
@@ -274,6 +283,7 @@ export class GameEngine {
         case "GRUDGE_KILL_VOTE":
           if (isUntargetable(target)) break;
           grudgeKillVotes[action.targetId] = (grudgeKillVotes[action.targetId] || 0) + 1;
+          addPrivateLog(this.state, "grudge", `${actor.name} voted to punish ${target.name}.`);
           break;
         case "DOCTOR_INJECT":
           doctorAction = action;
@@ -1025,15 +1035,10 @@ export function checkVictory(state) {
   const civilianAutoWin = civilianWipeAutoWinThemes.has(state.theme) && counts.civilians === 0;
 
   const grudgeAlive = counts.grudge > 0;
-  // 1) Grudge Beast precedence
-  if (grudgeAlive) {
-    if (state.grudgeState.berserk) {
-      if (counts.killers === 0 || counts.police === 0) {
-        state.victory = { winner: "GRUDGE", reason: "Grudge Beasts finished their rage condition." };
-        return state.victory;
-      }
-    } else {
-      state.victory = { winner: "GRUDGE", reason: "Grudge Beasts survive without berserk." };
+  // 1) Grudge Beast berserk precedence (only if rage condition met)
+  if (grudgeAlive && state.grudgeState.berserk) {
+    if (counts.killers === 0 || counts.police === 0) {
+      state.victory = { winner: "GRUDGE", reason: "Grudge Beasts finished their rage condition." };
       return state.victory;
     }
   }
@@ -1051,6 +1056,10 @@ export function checkVictory(state) {
       ![Roles.POLICE.id, Roles.KILLER.id, Roles.CIVILIAN.id, Roles.ZOMBIE.id, Roles.GRUDGE_BEAST.id].includes(p.role)
   );
   if ((counts.killers >= counts.blue && !hasOtherSpecials) || counts.police === 0 || civilianAutoWin) {
+    if (grudgeAlive && !state.grudgeState?.berserk) {
+      state.victory = { winner: "GRUDGE", reason: "Grudge Beasts survive without berserk (overriding red win)." };
+      return state.victory;
+    }
     const blueTriggered = state.grudgeState?.triggerFaction === Faction.BLUE;
     if (blueTriggered && state.grudgeState?.berserk) {
       state.victory = { winner: "GRUDGE", reason: "Grudge co-win after berserk triggered by BLUE; RED cleared police." };
@@ -1062,6 +1071,10 @@ export function checkVictory(state) {
 
   // 4) Blue victory
   if (counts.killers === 0) {
+    if (grudgeAlive && !state.grudgeState?.berserk) {
+      state.victory = { winner: "GRUDGE", reason: "Grudge Beasts survive without berserk (overriding blue win)." };
+      return state.victory;
+    }
     const redTriggered = state.grudgeState?.triggerFaction === Faction.RED;
     if (redTriggered && state.grudgeState?.berserk) {
       state.victory = { winner: "GRUDGE", reason: "Grudge co-win after berserk triggered by RED; BLUE cleared killers." };
@@ -1071,5 +1084,6 @@ export function checkVictory(state) {
     return state.victory;
   }
 
+  // 5) Grudge non-berserk survival win (only after primary factions resolved)
   return null;
 }

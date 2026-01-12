@@ -30,6 +30,14 @@ const els = {
   killerChatLines: document.getElementById("killerChatLines"),
   killerChatInput: document.getElementById("killerChatInput"),
   sendKillerChat: document.getElementById("sendKillerChat"),
+  grudgeChatBox: document.getElementById("grudgeChatBox"),
+  grudgeChatLines: document.getElementById("grudgeChatLines"),
+  grudgeChatInput: document.getElementById("grudgeChatInput"),
+  sendGrudgeChat: document.getElementById("sendGrudgeChat"),
+  grudgeChatInput: document.getElementById("grudgeChatInput"),
+  sendGrudgeChat: document.getElementById("sendGrudgeChat"),
+  grudgeChatBox: document.getElementById("grudgeChatBox"),
+  grudgeChatLines: document.getElementById("grudgeChatLines"),
   policeChatBox: document.getElementById("policeChatBox"),
   policeChatLines: document.getElementById("policeChatLines"),
   policeChatInput: document.getElementById("policeChatInput"),
@@ -82,7 +90,10 @@ const translations = {
     vote: "Vote",
     dayChat: "Chat",
     killerChat: "Killer chat (private)",
+    grudgeChat: "Grudge chat (private)",
     sendKillerChat: "Send (killers)",
+    sendGrudgeChat: "Send (grudge)",
+    grudgeChatPlaceholder: "Grudge chat...",
     killerChatPlaceholder: "Private killer chat...",
     policeChat: "Police chat (private)",
     sendPoliceChat: "Send (police)",
@@ -661,6 +672,8 @@ function renderView() {
       allies = players.filter((p) => p.role === Roles.POLICE.id && p.id !== you.id);
     } else if (you?.role === Roles.KILLER.id) {
       allies = players.filter((p) => p.role === Roles.KILLER.id && p.id !== you.id);
+    } else if (you?.role === Roles.GRUDGE_BEAST.id) {
+      allies = players.filter((p) => p.role === Roles.GRUDGE_BEAST.id && p.id !== you.id);
     }
     els.alliesDisplay.textContent = allies.length
       ? allies.map((p) => (p.alive ? p.name : `${p.name} (dead)`)).join(", ")
@@ -730,6 +743,7 @@ function renderView() {
   }
   // Action controls
   const you = v.you;
+  const isGrudge = you && you.role === Roles.GRUDGE_BEAST.id && you.alive;
   const choices = you ? roleActionChoices(you.role) : [];
   buildOptions(els.nightActionType, choices, choices.length ? t("pickAction") : t("noNightAction"));
   const targetOptions = (v.players || [])
@@ -762,6 +776,26 @@ function renderView() {
     }
     if (els.killerChatInput) els.killerChatInput.placeholder = t("killerChatPlaceholder");
     if (els.sendKillerChat) els.sendKillerChat.disabled = !(isKiller && !ended);
+  }
+  // Grudge chat (read-only)
+  if (els.grudgeChatBox) {
+    const isGrudge = you && you.role === Roles.GRUDGE_BEAST.id && you.alive;
+    els.grudgeChatBox.classList.toggle("hidden", !(isGrudge && !ended));
+    const glines = (v.grudgeChat || []).slice(-10);
+    els.grudgeChatLines.innerHTML = "";
+    if (!glines.length) {
+      const p = document.createElement("p");
+      p.textContent = t("noChat");
+      els.grudgeChatLines.appendChild(p);
+    } else {
+      glines.forEach((line) => {
+        const p = document.createElement("p");
+        p.textContent = line;
+        els.grudgeChatLines.appendChild(p);
+      });
+    }
+    if (els.grudgeChatInput) els.grudgeChatInput.placeholder = t("grudgeChatPlaceholder") || t("chatPlaceholder");
+    if (els.sendGrudgeChat) els.sendGrudgeChat.disabled = !(isGrudge && !ended);
   }
   // Police chat
   if (els.policeChatBox) {
@@ -934,6 +968,14 @@ if (els.sendKillerChat) {
     if (!text) return;
     send({ type: "killer_chat", text });
     els.killerChatInput.value = "";
+  });
+}
+if (els.sendGrudgeChat) {
+  els.sendGrudgeChat.addEventListener("click", () => {
+    const text = els.grudgeChatInput.value;
+    if (!text) return;
+    send({ type: "grudge_chat", text });
+    els.grudgeChatInput.value = "";
   });
 }
 if (els.sendPoliceChat) {

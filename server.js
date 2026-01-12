@@ -789,6 +789,28 @@ wss.on("connection", (ws, req) => {
         broadcastViews();
         break;
       }
+      case "grudge_chat": {
+        if (!room.started || !room.engine || (room.engine.state.phase !== "DAY" && room.engine.state.phase !== "NIGHT")) {
+          send(ws, { type: "error", message: "Grudge chat only allowed in day or night." });
+          return;
+        }
+        const seat = room.connections.get(ws);
+        if (!seat || seat.spectator) return;
+        const actor = room.engine.state.players[seat.playerId];
+        if (!actor?.alive || actor.role !== "GRUDGE_BEAST") {
+          send(ws, { type: "error", message: "Only alive grudge beasts can use grudge chat." });
+          return;
+        }
+        const text = (msg.text || "").trim();
+        if (!text) return;
+        const line = `${actor.name}: ${text.slice(0, 120)}`;
+        room.engine.state.grudgeChat = room.engine.state.grudgeChat || [];
+        room.engine.state.grudgeChat.push(line);
+        room.engine.state.privateLogs.grudge = room.engine.state.privateLogs.grudge || [];
+        room.engine.state.privateLogs.grudge.push(line);
+        broadcastViews();
+        break;
+      }
       case "restart": {
         if (!ensureHost(ws)) {
           send(ws, { type: "error", message: "Only host can restart." });
