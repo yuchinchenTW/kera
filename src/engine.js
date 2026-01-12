@@ -284,6 +284,7 @@ export class GameEngine {
         case "FIEND_PROTECT":
           if (actor.status.fiendMode !== "ABSORB") break;
           if (!target || !target.alive) break;
+          if (target.id === actor.id) break; // cannot absorb attacks on self
           if (target.status.smoked > 0) {
             target.status.smoked = 0;
             target.status.cannotAct = false;
@@ -564,14 +565,25 @@ export class GameEngine {
       if (agentInterceptsSniper) {
         continue;
       }
+      const fiendImmuneCauses = new Set([
+        DeathCause.TERROR_BOMB,
+        DeathCause.ARSON_BURN,
+        DeathCause.VINE_SWAP,
+        DeathCause.ZOMBIE_BITE,
+        DeathCause.ZOMBIE_FATAL,
+        DeathCause.KIDNAP_EXECUTION,
+        DeathCause.SMOKE_OVERDOSE,
+      ]);
       if (!k.unstoppable) {
         if (target.status.protectedByAgent) {
           continue;
         }
         if (target.status.protectedByFiend) {
           const sourceId = target.status.protectionSource;
-          fiendAbsorbed.add(sourceId);
-          continue;
+          if (!fiendImmuneCauses.has(k.cause)) {
+            fiendAbsorbed.add(sourceId);
+            continue;
+          }
         }
       }
       filteredKills.push(k);
