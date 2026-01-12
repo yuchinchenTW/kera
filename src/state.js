@@ -19,6 +19,7 @@ function defaultStatus(roleId) {
     pendingZombieConversion: false,
     grudgeKnownRole: null,
     cannotAct: false,
+    exorcistChainsUsed: 0,
   };
 }
 
@@ -38,7 +39,9 @@ function makePlayer(id, name, roleId, isHuman = false) {
     souls: 0,
     lastKidnapTarget: null,
     kidnapExecutionUsed: false,
-    chainsLeft: roleId === Roles.EXORCIST.id ? Roles.EXORCIST.maxChain : 0,
+    maxChains: roleId === Roles.EXORCIST.id ? Roles.EXORCIST.maxChain : 0,
+    exorcistMistakes: 0,
+    chainsLeft: 0,
     aiMemory: {
       suspicion: {},
       persona: {},

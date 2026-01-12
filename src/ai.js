@@ -422,8 +422,21 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.EXORCIST.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-        if (target) actions.push({ actorId: actor.id, type: "EXORCIST_STRIKE", targetId: target.id });
+        if ((actor.exorcistMistakes || 0) >= 3) break;
+        const maxChains = Math.max(0, actor.maxChains ?? Roles.EXORCIST.maxChain);
+        if (maxChains <= 0) break;
+        const ordered = shuffled(
+          alivePlayers(state).filter((t) => t.id !== actor.id),
+          state.rng
+        ).sort((a, b) => {
+          const sa = actor.aiMemory?.suspicion?.[a.id] ?? 0.5;
+          const sb = actor.aiMemory?.suspicion?.[b.id] ?? 0.5;
+          return sb - sa;
+        });
+        const picks = ordered.slice(0, maxChains);
+        for (const t of picks) {
+          actions.push({ actorId: actor.id, type: "EXORCIST_STRIKE", targetId: t.id });
+        }
         break;
       }
       case Roles.NECROMANCER.id: {

@@ -99,6 +99,7 @@ export class GameEngine {
       p.status.protectionSource = null;
       p.status.cannotAct = false;
       p.status.zombieBites = 0;
+      p.status.exorcistChainsUsed = 0;
     }
   }
 
@@ -395,11 +396,18 @@ export class GameEngine {
           break;
         case "EXORCIST_STRIKE":
           if (!target || isUntargetable(target)) break;
-          if (actor.chainsLeft <= 0) break;
+          if ((actor.exorcistMistakes || 0) >= 3) break;
+          const maxChains = Math.max(0, actor.maxChains ?? Roles.EXORCIST.maxChain);
+          if (actor.status.exorcistChainsUsed >= maxChains) break;
           trackBlueTarget(targetedByBlue, action.targetId, actor);
-          addKill(target.id, DeathCause.EXORCIST_PETRIFY, { killerId: actor.id, blockable: false });
-          if (target.faction !== Faction.RED && target.role !== Roles.ZOMBIE.id) {
-            actor.chainsLeft = Math.max(0, actor.chainsLeft - 1);
+          addKill(target.id, DeathCause.EXORCIST_PETRIFY, { killerId: actor.id, blockable: true });
+          actor.status.exorcistChainsUsed += 1;
+          const isRed = target.faction === Faction.RED;
+          if (!isRed) {
+            actor.exorcistMistakes = (actor.exorcistMistakes || 0) + 1;
+            actor.maxChains = Math.max(0, maxChains - 1);
+            actor.status.cannotAct = true; // stop further chains this night
+            if (actor.exorcistMistakes >= 3) actor.maxChains = 0;
           }
           break;
         case "NECROMANCER_CURSE":
