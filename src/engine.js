@@ -449,10 +449,10 @@ export class GameEngine {
         return b && b.faction === Faction.BLUE;
       });
       if (triggeringBlueId !== undefined) {
-        addKill(target.id, DeathCause.VINE_SWAP, { killerId: demon.id, blockable: true, unstoppable: true });
-        addKill(triggeringBlueId, DeathCause.VINE_SWAP, { killerId: demon.id, blockable: true, unstoppable: true });
+          addKill(target.id, DeathCause.VINE_SWAP, { killerId: demon.id, blockable: true, unstoppable: false });
+          addKill(triggeringBlueId, DeathCause.VINE_SWAP, { killerId: demon.id, blockable: true, unstoppable: false });
+        }
       }
-    }
     // Majority decisions.
     const killersAlive = alivePlayers(this.state).filter((p) => p.role === Roles.KILLER.id && !actorBlocked(p)).length;
     const killerNeeded = Math.floor(killersAlive / 2) + 1;
@@ -573,6 +573,7 @@ export class GameEngine {
     const survivors = (id) => getPlayer(this.state, id)?.alive;
     const filteredKills = [];
     const fiendAbsorbed = new Set();
+    const agentImmuneCauses = new Set([DeathCause.VINE_SWAP]);
     for (const k of pendingKills) {
       const target = getPlayer(this.state, k.targetId);
       if (!target?.alive) continue;
@@ -592,7 +593,7 @@ export class GameEngine {
         DeathCause.SMOKE_OVERDOSE,
       ]);
       if (!k.unstoppable) {
-        if (target.status.protectedByAgent) {
+        if (target.status.protectedByAgent && !agentImmuneCauses.has(k.cause)) {
           continue;
         }
         if (target.status.protectedByFiend) {
@@ -712,7 +713,7 @@ export class GameEngine {
             killerId: target.id,
             timing: "instant",
             blockable: true,
-            unstoppable: true,
+            unstoppable: false,
             noLastWords: false,
             requiresAliveActor: null,
           });
