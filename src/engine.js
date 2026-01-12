@@ -263,6 +263,7 @@ export class GameEngine {
       switch (action.type) {
         case "POLICE_INVESTIGATE":
           if (isUntargetable(target) || target?.status.purified) break;
+          if (this.state.policeConfirmed?.[action.targetId]) break;
           policeVotes[action.targetId] = (policeVotes[action.targetId] || 0) + 1;
           trackBlueTarget(targetedByBlue, action.targetId, actor);
           break;
@@ -444,12 +445,18 @@ export class GameEngine {
           break;
         case "GRUDGE_JUDGE":
           if (!target || isUntargetable(target)) break;
+          addPrivateLog(this.state, "grudge", `${actor.name} judged ${target.name} (${target.role}).`);
           if (target.faction === Faction.RED) {
             addPrivateLog(this.state, "police", `Grudge intel: ${target.name} is ${target.role}.`);
+            this.state.policeConfirmed = this.state.policeConfirmed || {};
+            this.state.policeConfirmed[target.id] = true;
+            this.state.policeRevealedRed = this.state.policeRevealedRed ?? target.id;
           } else if (target.faction === Faction.BLUE && target.role !== Roles.CIVILIAN.id) {
             addPrivateLog(this.state, "killer", `Grudge intel: ${target.name} is ${target.role}.`);
           } else if (target.role === Roles.CIVILIAN.id) {
-            addKill(actor.id, DeathCause.GRUDGE_PUNISH, { killerId: actor.id });
+            const beasts = alivePlayers(this.state).filter((p) => p.role === Roles.GRUDGE_BEAST.id);
+            const victim = beasts.length ? beasts[Math.floor(this.state.rng() * beasts.length)] : actor;
+            if (victim) addKill(victim.id, DeathCause.GRUDGE_PUNISH, { killerId: actor.id });
           }
           break;
         default:
@@ -801,12 +808,16 @@ export class GameEngine {
     }
 
     // Grudge berserk trigger if any beast died at night.
-    const grudgeDeath = nightDeaths.some((d) => {
+    const grudgeDeath = nightDeaths.find((d) => {
       const player = getPlayer(this.state, d.targetId);
-      return player?.role === Roles.GRUDGE_BEAST.id;
+      return player?.role === Roles.GRUDGE_BEAST.id && d.cause !== DeathCause.GRUDGE_PUNISH;
     });
     if (grudgeDeath) {
       this.state.grudgeState.berserk = true;
+      if (!this.state.grudgeState.triggerFaction) {
+        const killer = grudgeDeath.killerId !== null ? getPlayer(this.state, grudgeDeath.killerId) : null;
+        this.state.grudgeState.triggerFaction = killer?.faction || null;
+      }
       addPublicLog(this.state, "Grudge Beasts entered berserk rage.");
     }
 
@@ -1013,8 +1024,9 @@ export function checkVictory(state) {
   ]);
   const civilianAutoWin = civilianWipeAutoWinThemes.has(state.theme) && counts.civilians === 0;
 
+  const grudgeAlive = counts.grudge > 0;
   // 1) Grudge Beast precedence
-  if (counts.grudge > 0) {
+  if (grudgeAlive) {
     if (state.grudgeState.berserk) {
       if (counts.killers === 0 || counts.police === 0) {
         state.victory = { winner: "GRUDGE", reason: "Grudge Beasts finished their rage condition." };
@@ -1039,12 +1051,22 @@ export function checkVictory(state) {
       ![Roles.POLICE.id, Roles.KILLER.id, Roles.CIVILIAN.id, Roles.ZOMBIE.id, Roles.GRUDGE_BEAST.id].includes(p.role)
   );
   if ((counts.killers >= counts.blue && !hasOtherSpecials) || counts.police === 0 || civilianAutoWin) {
+    const blueTriggered = state.grudgeState?.triggerFaction === Faction.BLUE;
+    if (blueTriggered && state.grudgeState?.berserk) {
+      state.victory = { winner: "GRUDGE", reason: "Grudge co-win after berserk triggered by BLUE; RED cleared police." };
+      return state.victory;
+    }
     state.victory = { winner: "RED", reason: "Red faction satisfied elimination condition." };
     return state.victory;
   }
 
   // 4) Blue victory
   if (counts.killers === 0) {
+    const redTriggered = state.grudgeState?.triggerFaction === Faction.RED;
+    if (redTriggered && state.grudgeState?.berserk) {
+      state.victory = { winner: "GRUDGE", reason: "Grudge co-win after berserk triggered by RED; BLUE cleared killers." };
+      return state.victory;
+    }
     state.victory = { winner: "BLUE", reason: "All killers eliminated." };
     return state.victory;
   }

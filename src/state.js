@@ -100,10 +100,11 @@ export function createInitialState(
       night: [],
       vote: [],
     },
-    history: {
-      votes: [],
-    },
+  history: {
+    votes: [],
+  },
   lastVoteTargetByActor: {},
+  policeConfirmed: {},
     usage: {
       doctorInjections: 0,
       sniperShots: 0,
