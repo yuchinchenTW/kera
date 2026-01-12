@@ -281,6 +281,7 @@ export class GameEngine {
           killerVotes[action.targetId] = (killerVotes[action.targetId] || 0) + 1;
           break;
         case "GRUDGE_KILL_VOTE":
+          if (!this.state.grudgeState?.berserk) break;
           if (isUntargetable(target)) break;
           grudgeKillVotes[action.targetId] = (grudgeKillVotes[action.targetId] || 0) + 1;
           addPrivateLog(this.state, "grudge", `${actor.name} voted to punish ${target.name}.`);
@@ -455,19 +456,9 @@ export class GameEngine {
           break;
         case "GRUDGE_JUDGE":
           if (!target || isUntargetable(target)) break;
-          addPrivateLog(this.state, "grudge", `${actor.name} judged ${target.name} (${target.role}).`);
-          if (target.faction === Faction.RED) {
-            addPrivateLog(this.state, "police", `Grudge intel: ${target.name} is ${target.role}.`);
-            this.state.policeConfirmed = this.state.policeConfirmed || {};
-            this.state.policeConfirmed[target.id] = true;
-            this.state.policeRevealedRed = this.state.policeRevealedRed ?? target.id;
-          } else if (target.faction === Faction.BLUE && target.role !== Roles.CIVILIAN.id) {
-            addPrivateLog(this.state, "killer", `Grudge intel: ${target.name} is ${target.role}.`);
-          } else if (target.role === Roles.CIVILIAN.id) {
-            const beasts = alivePlayers(this.state).filter((p) => p.role === Roles.GRUDGE_BEAST.id);
-            const victim = beasts.length ? beasts[Math.floor(this.state.rng() * beasts.length)] : actor;
-            if (victim) addKill(victim.id, DeathCause.GRUDGE_PUNISH, { killerId: actor.id });
-          }
+          // Non-berserk: use judge as a vote; resolution happens later via majority.
+          grudgeKillVotes[action.targetId] = (grudgeKillVotes[action.targetId] || 0) + 1;
+          addPrivateLog(this.state, "grudge", `${actor.name} wants to judge ${target.name}.`);
           break;
         default:
           break;
@@ -548,6 +539,34 @@ export class GameEngine {
       if (decision) {
         const tgt = getPlayer(this.state, decision.targetId);
         if (tgt && !isUntargetable(tgt)) addKill(tgt.id, DeathCause.GRUDGE_PUNISH, { killerId: null });
+      }
+    } else {
+      // Non-berserk: allow only one collective judge via majority of judge intents.
+      const grudgeAlive = alivePlayers(this.state).filter((p) => p.role === Roles.GRUDGE_BEAST.id && !actorBlocked(p)).length;
+      const needed = Math.floor(grudgeAlive / 2) + 1;
+      const decision = majorityTarget(grudgeKillVotes, needed);
+      if (decision) {
+        const tgt = getPlayer(this.state, decision.targetId);
+        if (tgt && !isUntargetable(tgt)) {
+          // Execute a single judge action on the chosen target
+          if (tgt.faction === Faction.RED) {
+            addPrivateLog(this.state, "police", `Grudge intel: ${tgt.name} is ${tgt.role}.`);
+            this.state.policeConfirmed = this.state.policeConfirmed || {};
+            this.state.policeConfirmed[tgt.id] = true;
+            this.state.policeRevealedRed = this.state.policeRevealedRed ?? tgt.id;
+            addPrivateLog(this.state, "grudge", `Judged ${tgt.name}: RED (${tgt.role}).`);
+          } else if (tgt.faction === Faction.BLUE && tgt.role !== Roles.CIVILIAN.id) {
+            addPrivateLog(this.state, "killer", `Grudge intel: ${tgt.name} is ${tgt.role}.`);
+            addPrivateLog(this.state, "grudge", `Judged ${tgt.name}: BLUE (${tgt.role}).`);
+          } else if (tgt.role === Roles.CIVILIAN.id) {
+            const beasts = alivePlayers(this.state).filter((p) => p.role === Roles.GRUDGE_BEAST.id);
+            const victim = beasts.length ? beasts[Math.floor(this.state.rng() * beasts.length)] : null;
+            if (victim) addKill(victim.id, DeathCause.GRUDGE_PUNISH, { killerId: null });
+            addPrivateLog(this.state, "grudge", `Judged ${tgt.name}: CIVILIAN. A grudge beast was sacrificed.`);
+          }
+        }
+      } else if (grudgeAlive > 0) {
+        addPrivateLog(this.state, "grudge", "Grudge beasts could not agree on a judgment target.");
       }
     }
 

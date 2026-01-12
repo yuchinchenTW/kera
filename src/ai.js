@@ -260,6 +260,27 @@ export function buildAiNightActions(state, opts = {}) {
   ) {
     sharedPoliceTarget = getPlayer(state, humanChoice.targetId) || sharedPoliceTarget;
   }
+  // Pre-pick shared grudge target (follow human if present, else group).
+  const grudgeActors = alivePlayers(state).filter((p) => p.role === Roles.GRUDGE_BEAST.id && (!p.isHuman || includeHuman));
+  const humanGrudgeTarget =
+    pickHumanTarget("GRUDGE_JUDGE") ||
+    pickHumanTarget("GRUDGE_KILL_VOTE");
+  let sharedGrudgeTarget = humanGrudgeTarget;
+  if (
+    !sharedGrudgeTarget &&
+    humanChoice &&
+    human?.role === Roles.GRUDGE_BEAST.id &&
+    typeof humanChoice.targetId === "number"
+  ) {
+    sharedGrudgeTarget = getPlayer(state, humanChoice.targetId) || null;
+  }
+  if (!sharedGrudgeTarget) {
+    sharedGrudgeTarget = pickGroupTarget(
+      state,
+      grudgeActors,
+      (t) => t.role !== Roles.GRUDGE_BEAST.id
+    );
+  }
 
   for (const actor of alivePlayers(state)) {
     if (actor.isHuman && !includeHuman) continue;
@@ -446,20 +467,25 @@ export function buildAiNightActions(state, opts = {}) {
         }
         break;
       }
-      case Roles.PURIFIER.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-        if (target) actions.push({ actorId: actor.id, type: "PURIFY", targetId: target.id });
-        break;
+    case Roles.PURIFIER.id: {
+      const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+      if (target) actions.push({ actorId: actor.id, type: "PURIFY", targetId: target.id });
+      break;
+    }
+    case Roles.GRUDGE_BEAST.id: {
+      const leaderChoice = sharedGrudgeTarget && sharedGrudgeTarget.alive ? sharedGrudgeTarget : null;
+      if (state.grudgeState.berserk) {
+        const target =
+          leaderChoice ||
+          pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.GRUDGE_BEAST.id);
+        if (target) actions.push({ actorId: actor.id, type: "GRUDGE_KILL_VOTE", targetId: target.id });
+      } else {
+        const target =
+          leaderChoice ||
+          pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+        if (target) actions.push({ actorId: actor.id, type: "GRUDGE_JUDGE", targetId: target.id });
       }
-      case Roles.GRUDGE_BEAST.id: {
-        if (state.grudgeState.berserk) {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.GRUDGE_BEAST.id);
-          if (target) actions.push({ actorId: actor.id, type: "GRUDGE_KILL_VOTE", targetId: target.id });
-        } else {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-          if (target) actions.push({ actorId: actor.id, type: "GRUDGE_JUDGE", targetId: target.id });
-        }
-        break;
+      break;
       }
       default:
         break;

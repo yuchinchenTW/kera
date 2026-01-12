@@ -53,6 +53,7 @@ export function buildPlayerView(state, playerId) {
     dayNumber: state.dayNumber,
     theme: state.theme,
     victory: state.victory,
+    grudgeState: { berserk: !!state.grudgeState?.berserk },
     you: {
       id: viewer.id,
       name: viewer.name,
@@ -98,6 +99,7 @@ export function buildSpectatorView(state) {
     players,
     publicLog: [...state.publicLog],
     lastNightSummary: [...state.lastNightSummary],
+    grudgeState: { berserk: !!state.grudgeState?.berserk },
     privateIntel: [],
     winrateHint: state.winrateHint,
     usage: { ...state.usage },

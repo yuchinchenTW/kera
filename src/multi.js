@@ -571,7 +571,7 @@ function renderLobby() {
   applyLocaleText();
 }
 
-function roleActionChoices(roleId) {
+function roleActionChoices(roleId, grudgeBerserk = false) {
   switch (roleId) {
     case Roles.POLICE.id:
       return [{ value: "POLICE_INVESTIGATE", label: actionLabel("POLICE_INVESTIGATE"), needsTarget: true }];
@@ -614,10 +614,9 @@ function roleActionChoices(roleId) {
     case Roles.PURIFIER.id:
       return [{ value: "PURIFY", label: actionLabel("PURIFY"), needsTarget: true }];
     case Roles.GRUDGE_BEAST.id:
-      return [
-        { value: "GRUDGE_JUDGE", label: actionLabel("GRUDGE_JUDGE"), needsTarget: true },
-        { value: "GRUDGE_KILL_VOTE", label: actionLabel("GRUDGE_KILL_VOTE"), needsTarget: true },
-      ];
+      return grudgeBerserk
+        ? [{ value: "GRUDGE_KILL_VOTE", label: actionLabel("GRUDGE_KILL_VOTE"), needsTarget: true }]
+        : [{ value: "GRUDGE_JUDGE", label: actionLabel("GRUDGE_JUDGE"), needsTarget: true }];
     default:
       return [];
   }
@@ -743,8 +742,9 @@ function renderView() {
   }
   // Action controls
   const you = v.you;
+  const isGrudgeBerserk = !!v.grudgeState?.berserk;
   const isGrudge = you && you.role === Roles.GRUDGE_BEAST.id && you.alive;
-  const choices = you ? roleActionChoices(you.role) : [];
+  let choices = you ? roleActionChoices(you.role, isGrudgeBerserk) : [];
   buildOptions(els.nightActionType, choices, choices.length ? t("pickAction") : t("noNightAction"));
   const targetOptions = (v.players || [])
     .filter((p) => p.id !== you?.id && p.alive)
@@ -943,7 +943,9 @@ els.startBtn.addEventListener("click", () => {
 els.sendNightAction.addEventListener("click", () => {
   const type = els.nightActionType.value;
   if (!type) return;
-  const selected = latestView?.you ? roleActionChoices(latestView.you.role).find((c) => c.value === type) : null;
+  const selected = latestView?.you
+    ? roleActionChoices(latestView.you.role, !!latestView.grudgeState?.berserk).find((c) => c.value === type)
+    : null;
   const needsTarget = selected ? selected.needsTarget !== false : true;
   const targetId = needsTarget ? Number(els.nightTarget.value) : undefined;
   const action = { type };
