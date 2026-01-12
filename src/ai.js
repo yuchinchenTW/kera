@@ -180,6 +180,22 @@ function pickGroupTarget(state, actors, filterFn = () => true) {
   return best;
 }
 
+function pickZombieTarget(state, actor) {
+  let best = null;
+  let bestScore = -Infinity;
+  for (const t of shuffled(alivePlayers(state), state.rng)) {
+    if (t.id === actor.id) continue;
+    const zombieProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.ZOMBIE.id] ?? 0;
+    const notZombieProb = 1 - zombieProb;
+    const score = notZombieProb;
+    if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+      bestScore = score;
+      best = t;
+    }
+  }
+  return best;
+}
+
 export function buildAiNightActions(state, opts = {}) {
   const includeHuman = opts.includeHuman === true;
   const humanChoice = opts.humanChoice || null;
@@ -373,7 +389,7 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.ZOMBIE.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.ZOMBIE.id);
+        const target = pickZombieTarget(state, actor);
         if (target) actions.push({ actorId: actor.id, type: "ZOMBIE_BITE", targetId: target.id });
         break;
       }
