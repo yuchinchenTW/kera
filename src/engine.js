@@ -390,7 +390,7 @@ export class GameEngine {
           if (target.role === Roles.CIVILIAN.id || target.role === Roles.BRAT.id) {
             addKill(target.id, DeathCause.NIGHTMARE_STRIKE, { killerId: actor.id });
           } else {
-            addPrivateLog(this.state, "killer", `${actor.name} learned ${target.name} is ${target.role}.`);
+            addPrivateLog(this.state, "nightmare", `${actor.name} learned ${target.name} is ${target.role}.`);
           }
           break;
         case "EXORCIST_STRIKE":
