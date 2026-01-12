@@ -209,6 +209,7 @@ export class GameEngine {
         case "RIOT_SMOKE": {
           if (this.state.usage.riotGrenades >= (Roles.RIOT_POLICE.maxGrenades || 0)) break;
           this.state.usage.riotGrenades += 1;
+          trackBlueTarget(targetedByBlue, action.targetId, actor);
           target.status.smoked += 1;
           target.status.cannotAct = true;
           if (target.status.smoked >= 2) {
@@ -219,6 +220,7 @@ export class GameEngine {
           break;
         }
         case "PURIFY": {
+          trackBlueTarget(targetedByBlue, action.targetId, actor);
           target.status.purified = true;
           target.status.cannotAct = true;
           if (target.role === Roles.NECROMANCER.id) target.souls = 0;
@@ -297,6 +299,7 @@ export class GameEngine {
         case "FIEND_SHOOT":
           if (actor.status.fiendMode !== "CHARGE") break;
           if (isUntargetable(target)) break;
+          trackBlueTarget(targetedByBlue, action.targetId, actor);
           addKill(target.id, DeathCause.FIEND_SHOT, { killerId: actor.id, blockable: true });
           actor.status.fiendMode = "ABSORB";
           break;
@@ -313,6 +316,7 @@ export class GameEngine {
           break;
         case "COWBOY_GAMBLE": {
           if (!target || isUntargetable(target)) break;
+          trackBlueTarget(targetedByBlue, action.targetId, actor);
           const roll = this.state.rng();
           if (roll < 2 / 6) {
             delayedKills.push({ targetId: target.id, cause: DeathCause.COWBOY_SHOT, killerId: actor.id });
@@ -366,7 +370,17 @@ export class GameEngine {
           addPublicLog(this.state, `Someone prepared to ignite marked targets.`);
           break;
         case "VINE_SEED":
-          if (actor.status.vineActive && target && target.alive) {
+          if (!actor.status.vineActive) break;
+          actor.status.vineActive = false; // ability is single-use, consumed even if blocked
+          if (target && target.alive) {
+            if (target.status.protectedByAgent) {
+              addPublicLog(this.state, `An agent shield blocked a vine seed on ${target.name}.`);
+              break;
+            }
+            if (target.status.protectedByFiend) {
+              addPublicLog(this.state, `A guardian absorbed a vine seed on ${target.name}.`);
+              break;
+            }
             target.status.vineSeededBy = actor.id;
             vineSeeds[actor.id] = target.id;
           }
@@ -382,6 +396,7 @@ export class GameEngine {
         case "EXORCIST_STRIKE":
           if (!target || isUntargetable(target)) break;
           if (actor.chainsLeft <= 0) break;
+          trackBlueTarget(targetedByBlue, action.targetId, actor);
           addKill(target.id, DeathCause.EXORCIST_PETRIFY, { killerId: actor.id, blockable: false });
           if (target.faction !== Faction.RED && target.role !== Roles.ZOMBIE.id) {
             actor.chainsLeft = Math.max(0, actor.chainsLeft - 1);
@@ -422,20 +437,22 @@ export class GameEngine {
       }
     }
 
-    // Vine demon triggers on blue actions.
+    // Vine demon triggers on blue-side actions against seeded targets.
     for (const [actorId, targetId] of Object.entries(vineSeeds)) {
       const demon = getPlayer(this.state, Number(actorId));
       const target = getPlayer(this.state, targetId);
       if (!demon?.alive || !target?.alive) continue;
       const blues = targetedByBlue.get(targetId);
-      if (blues && blues.length) {
-        addKill(target.id, DeathCause.VINE_SWAP, { killerId: demon.id });
-        const blueActorId = blues[0];
-        addKill(blueActorId, DeathCause.VINE_SWAP, { killerId: demon.id });
-        demon.status.vineActive = false;
+      if (!blues || blues.length === 0) continue;
+      const triggeringBlueId = blues.find((bid) => {
+        const b = getPlayer(this.state, bid);
+        return b && b.faction === Faction.BLUE;
+      });
+      if (triggeringBlueId !== undefined) {
+        addKill(target.id, DeathCause.VINE_SWAP, { killerId: demon.id, blockable: true, unstoppable: true });
+        addKill(triggeringBlueId, DeathCause.VINE_SWAP, { killerId: demon.id, blockable: true, unstoppable: true });
       }
     }
-
     // Majority decisions.
     const killersAlive = alivePlayers(this.state).filter((p) => p.role === Roles.KILLER.id && !actorBlocked(p)).length;
     const killerNeeded = Math.floor(killersAlive / 2) + 1;
@@ -694,8 +711,8 @@ export class GameEngine {
             cause: DeathCause.VINE_SWAP,
             killerId: target.id,
             timing: "instant",
-            blockable: false,
-            unstoppable: false,
+            blockable: true,
+            unstoppable: true,
             noLastWords: false,
             requiresAliveActor: null,
           });

@@ -14,7 +14,7 @@ export const Roles = {
     hasNightAction: true,
     maxInjections: 6,
     emptyKillsAt: 2,
-    revivableCauses: ["KILLER_MURDER", "KIDNAP_EXECUTION", "EXORCIST_PETRIFY", "AGENT_LINK"],
+    revivableCauses: ["KILLER_MURDER", "KIDNAP_EXECUTION", "EXORCIST_PETRIFY", "AGENT_LINK", "VINE_SWAP"],
     nonRevivableCauses: ["SNIPER_HEADSHOT", "TERROR_BOMB", "ARSON_BURN", "ZOMBIE_FATAL"],
   },
   SNIPER: { id: "SNIPER", name: "Sniper", faction: Faction.RED, hasNightAction: true, maxShots: 4 },
