@@ -105,6 +105,15 @@ export class GameEngine {
 
   resolveNight(humanAction = null, opts = {}) {
     this.startNight();
+    // Apply any souls gained from daytime deaths so necromancer can use them tonight.
+    for (const necro of this.state.players) {
+      if (!necro.alive || necro.role !== Roles.NECROMANCER.id) continue;
+      if (necro.pendingSoulsFromDay && necro.pendingSoulsFromDay > 0) {
+        necro.souls = Math.min(4, necro.souls + necro.pendingSoulsFromDay);
+        necro.pendingSoulsFromDay = 0;
+      }
+    }
+
     const actions = buildAiNightActions(this.state, {
       includeHuman: opts.includeHuman === true,
       humanChoice: humanAction,
@@ -798,15 +807,16 @@ export class GameEngine {
       addPublicLog(this.state, "Grudge Beasts entered berserk rage.");
     }
 
-    // Necromancer soul gain: any alive necromancer gains souls per death not caused by them.
+    // Necromancer soul gain: any alive necromancer gains souls per death not caused by them (day + night).
     for (const necro of this.state.players) {
       if (!necro.alive || necro.role !== Roles.NECROMANCER.id) continue;
-      let gained = 0;
+      let gained = necro.pendingSoulsFromDay || 0;
       for (const d of nightDeaths) {
         if (d.killerId === necro.id) continue;
         gained += 1;
       }
-      necro.souls += gained;
+      necro.pendingSoulsFromDay = 0;
+      necro.souls = Math.min(4, necro.souls + gained);
     }
 
     this.state.phase = Phase.DAY;
@@ -953,6 +963,11 @@ export class GameEngine {
           const candidate = lastWordsByPlayer[target.id] ?? humanLastWords;
           if (typeof candidate === "string" && candidate.trim()) {
             this.submitLastWords(target.id, candidate);
+          }
+          for (const necro of this.state.players) {
+            if (necro.alive && necro.role === Roles.NECROMANCER.id && necro.id !== target.id) {
+              necro.pendingSoulsFromDay = (necro.pendingSoulsFromDay || 0) + 1;
+            }
           }
         }
       }

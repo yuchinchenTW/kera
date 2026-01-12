@@ -37,6 +37,7 @@ function makePlayer(id, name, roleId, isHuman = false) {
     noLastWords: false,
     emptyInjections: 0,
     souls: 0,
+    pendingSoulsFromDay: 0,
     lastKidnapTarget: null,
     kidnapExecutionUsed: false,
     maxChains: roleId === Roles.EXORCIST.id ? Roles.EXORCIST.maxChain : 0,
@@ -102,7 +103,7 @@ export function createInitialState(
     history: {
       votes: [],
     },
-    lastVoteTargetByActor: {},
+  lastVoteTargetByActor: {},
     usage: {
       doctorInjections: 0,
       sniperShots: 0,
