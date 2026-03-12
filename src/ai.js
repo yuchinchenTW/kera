@@ -906,62 +906,57 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
 
 // ─── Chat Generation ───────────────────────────────────────────────────────
 
-// Chat templates categorized by type for more human-like variety
+// Bilingual chat templates. Each returns "EN||ZH" so the client can pick by locale.
 const CHAT_TEMPLATES = {
   accuse: [
-    (s, t) => `${s}: I think ${t} is suspicious.`,
-    (s, t) => `${s}: ${t} feels off to me.`,
-    (s, t) => `${s}: Something about ${t} doesn't add up.`,
-    (s, t) => `${s}: We should look into ${t}.`,
-    (s, t) => `${s}: ${t} has been acting weird.`,
-    (s, t) => `${s}: I don't trust ${t} at all.`,
+    (s, t) => `${s}: I think ${t} is suspicious.||${s}：我覺得 ${t} 很可疑。`,
+    (s, t) => `${s}: ${t} feels off to me.||${s}：${t} 給我的感覺不太對勁。`,
+    (s, t) => `${s}: Something about ${t} doesn't add up.||${s}：${t} 的行為有矛盾。`,
+    (s, t) => `${s}: We should look into ${t}.||${s}：我們應該注意 ${t}。`,
+    (s, t) => `${s}: ${t} has been acting weird.||${s}：${t} 一直表現得很奇怪。`,
+    (s, t) => `${s}: I don't trust ${t} at all.||${s}：我完全不信任 ${t}。`,
   ],
   defend: [
-    (s, t) => `${s}: I think ${t} is on our side.`,
-    (s, t) => `${s}: ${t} seems fine to me.`,
-    (s, t) => `${s}: Leave ${t} alone, they're not the problem.`,
-    (s, t) => `${s}: ${t} has been helpful so far.`,
+    (s, t) => `${s}: I think ${t} is on our side.||${s}：我覺得 ${t} 是自己人。`,
+    (s, t) => `${s}: ${t} seems fine to me.||${s}：${t} 看起來沒問題。`,
+    (s, t) => `${s}: Leave ${t} alone, they're not the problem.||${s}：別針對 ${t} 了，問題不在他。`,
+    (s, t) => `${s}: ${t} has been helpful so far.||${s}：${t} 到目前為止一直有在幫忙。`,
   ],
   wonder: [
-    (s, t) => `${s}: What does everyone think about ${t}?`,
-    (s, t) => `${s}: I'm not sure about ${t} yet.`,
-    (s, t) => `${s}: Anyone have thoughts on ${t}?`,
-    (s, t) => `${s}: ${t} is hard to read...`,
+    (s, t) => `${s}: What does everyone think about ${t}?||${s}：大家覺得 ${t} 怎麼樣？`,
+    (s, t) => `${s}: I'm not sure about ${t} yet.||${s}：我對 ${t} 還拿不定主意。`,
+    (s, t) => `${s}: Anyone have thoughts on ${t}?||${s}：有人注意到 ${t} 嗎？`,
+    (s, t) => `${s}: ${t} is hard to read...||${s}：${t} 讓人看不透⋯`,
   ],
-  // Hard+ vote reference
   voteRef: [
-    (s, t, extra) => `${s}: ${t} voted for ${extra} last time, that's suspicious.`,
-    (s, t, extra) => `${s}: Why did ${t} switch their vote to ${extra}?`,
-    (s, t, extra) => `${s}: ${t} keeps targeting ${extra}, are they allies?`,
+    (s, t, extra) => `${s}: ${t} voted for ${extra} last time, that's suspicious.||${s}：${t} 上次投了 ${extra}，很可疑。`,
+    (s, t, extra) => `${s}: Why did ${t} switch their vote to ${extra}?||${s}：${t} 為什麼臨時改投 ${extra}？`,
+    (s, t, extra) => `${s}: ${t} keeps targeting ${extra}, are they allies?||${s}：${t} 一直針對 ${extra}，他們是同夥嗎？`,
   ],
-  // Hard+ death reference
   deathRef: [
-    (s, t, dead) => `${s}: ${t} defended ${dead} before they died... think about that.`,
-    (s, t, dead) => `${s}: Ever since ${dead} died, ${t} has been quiet.`,
-    (s, t, dead) => `${s}: After ${dead} died, I started watching ${t} more closely.`,
+    (s, t, dead) => `${s}: ${t} defended ${dead} before they died... think about that.||${s}：${t} 在 ${dead} 死前幫他說話⋯大家想想。`,
+    (s, t, dead) => `${s}: Ever since ${dead} died, ${t} has been quiet.||${s}：自從 ${dead} 死了之後，${t} 就不太說話了。`,
+    (s, t, dead) => `${s}: After ${dead} died, I started watching ${t} more closely.||${s}：${dead} 死後我就一直在觀察 ${t}。`,
   ],
-  // Hard+ red deception
   bluff: [
-    (s, t) => `${s}: I'm pretty sure ${t} is the killer.`,
-    (s, t) => `${s}: ${t} is definitely suspicious, I've been watching them.`,
-    (s, t) => `${s}: We need to vote ${t} out today!`,
-    (s, t) => `${s}: Trust me on this, ${t} is not who they seem.`,
+    (s, t) => `${s}: I'm pretty sure ${t} is the killer.||${s}：我很確定 ${t} 就是殺手。`,
+    (s, t) => `${s}: ${t} is definitely suspicious, I've been watching them.||${s}：${t} 絕對有問題，我一直在觀察他。`,
+    (s, t) => `${s}: We need to vote ${t} out today!||${s}：今天一定要把 ${t} 投出去！`,
+    (s, t) => `${s}: Trust me on this, ${t} is not who they seem.||${s}：相信我，${t} 不是表面看起來那樣。`,
   ],
-  // Hard+ red strategic silence (say nothing useful)
   deflect: [
-    (s) => `${s}: I'm not sure who to suspect right now.`,
-    (s) => `${s}: Let's think about this carefully.`,
-    (s) => `${s}: I want to hear what others think first.`,
-    (s) => `${s}: This is getting complicated...`,
+    (s) => `${s}: I'm not sure who to suspect right now.||${s}：我現在還不確定該懷疑誰。`,
+    (s) => `${s}: Let's think about this carefully.||${s}：大家冷靜想想吧。`,
+    (s) => `${s}: I want to hear what others think first.||${s}：我想先聽聽其他人的想法。`,
+    (s) => `${s}: This is getting complicated...||${s}：事情越來越複雜了⋯`,
   ],
-  // Hard+ strategic police reveal
   policeReveal: [
-    (s, t) => `${s}: I investigated ${t} and they're RED!`,
-    (s, t) => `${s}: ${t} is confirmed red, we need to vote them out.`,
+    (s, t) => `${s}: I investigated ${t} and they're RED!||${s}：我查了 ${t}，他是紅方！`,
+    (s, t) => `${s}: ${t} is confirmed red, we need to vote them out.||${s}：${t} 確認是紅方，必須投掉。`,
   ],
   policeClear: [
-    (s, t) => `${s}: I checked ${t}, they're clean.`,
-    (s, t) => `${s}: ${t} is confirmed blue, leave them alone.`,
+    (s, t) => `${s}: I checked ${t}, they're clean.||${s}：我查了 ${t}，他是好人。`,
+    (s, t) => `${s}: ${t} is confirmed blue, leave them alone.||${s}：${t} 確認是藍方，別投他。`,
   ],
 };
 

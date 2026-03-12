@@ -275,7 +275,13 @@ function factionLabel(faction) {
 }
 
 function translateLine(line) {
-  if (locale !== "zh" || typeof line !== "string") return line;
+  if (typeof line !== "string") return line;
+  // Bilingual chat lines use "EN||ZH" format
+  if (line.includes("||")) {
+    const [en, zh] = line.split("||", 2);
+    return locale === "zh" ? zh : en;
+  }
+  if (locale !== "zh") return line;
   const factionMap = {
     BLUE: "藍方",
     RED: "紅方",

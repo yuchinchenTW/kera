@@ -1,60 +1,178 @@
-﻿# Night / Day 18
+# Night / Day 18
 
 ## Disclaimer
 This project is an original, non-commercial technical prototype for learning and experimentation.
 It does not use or include any assets, code, data, or materials from any existing commercial games.
 
-## Quick Play (single-player)
-1. `npm install`
-2. `npm start` (serves `http://localhost:3001/` with ws on `ws://localhost:3001`)
-3. Open `http://localhost:3001/` and click **New Game**.
+## Quick Start
+```bash
+npm install
+npm start          # serves http://localhost:3001
+```
+- Single-player: `http://localhost:3001/`
+- Multiplayer: `http://localhost:3001/multiplayer.html`
 
 ## Overview (EN)
-- Social deduction for 18 seats (1 human + 17 AI) with multiple themed role mixes.
-- Fixed night/day cadence, majority/plurality daytime votes, private faction chats.
-- Supports single-player, headless simulations, and experimental WebSocket multiplayer.
+- Social deduction game for 18 seats with multiple themed role mixes.
+- Single-player (1 human + 17 AI) and WebSocket multiplayer (multiple humans, AI fills remaining seats and takes over on disconnect).
+- Fixed night/day cadence, majority/plurality daytime votes, private faction chats with real-time ally action visibility.
+- Four AI difficulty levels with behavioral analysis, deception strategies, and Bayesian belief systems.
 
 ## 摘要（中文）
-- 18 人社交推理（1 人類 + 17 AI），多種主題角色組合。
-- 夜/日節奏固定，白天多數/最高票處決，陣營私聊分離。
-- 支援單人、模擬測試，以及實驗性的 WebSocket 多人模式。
+- 18 人社交推理遊戲，多種主題角色組合。
+- 單人模式（1 人類 + 17 AI）與 WebSocket 多人模式（多名真人，AI 填補空位並在斷線時接管）。
+- 夜/日節奏固定，白天多數/最高票處決，陣營私聊即時同步隊友夜間行動。
+- 四種 AI 難度，含行為分析、欺騙策略、貝氏信念系統。
 
-## Multiplayer (experimental)
-- One process serves both page and WebSocket: `npm install && npm start`
-- Open `http://<host>:3001/multiplayer.html` (use `https/wss` when deployed behind TLS).
-- In-page flow: set WS URL -> join with a name (first joiner is Host) -> Host picks a theme -> **Start** -> nights send actions, days chat, votes auto-resolve or Host clicks Resolve -> use **Restart** then **Start** for a new match.
+## Project Structure
 
-## Gameplay loop
-- 18 seats (1 human + 17 AI). Themes swap role mixes.
-- Night order (simplified): smoke / purify / kidnap -> remaining actions -> protections (agent/fiend) and doctor -> deaths resolve (including delayed) -> zombie conversions.
-- Day: public chat plus vote; if no majority, highest votes execute. Brat revives once when first executed. Dead players can leave last words unless death disallows it.
-- Visibility: you see yourself; killers share killer chat; police share police chat; grudge beasts share grudge chat; spectators share spectator chat.
+| File | Description |
+|------|-------------|
+| `server.js` | Node.js HTTP + WebSocket server, room/lobby management, multiplayer game flow |
+| `src/engine.js` | Game engine: night resolution, vote resolution, victory checks |
+| `src/ai.js` | AI decision system: beliefs, night actions, voting, chat generation |
+| `src/state.js` | Game state initialization, player/death management, faction counts |
+| `src/roles.js` | Role/faction/theme/phase definitions, role metadata |
+| `src/view.js` | Per-player view builder (hides info based on role visibility rules) |
+| `src/rng.js` | Seeded RNG for deterministic replays |
+| `src/main.js` | Single-player client UI renderer |
+| `src/multi.js` | Multiplayer client UI renderer |
+| `index.html` | Single-player entry page |
+| `multiplayer.html` | Multiplayer entry page |
+| `styles.css` | Shared stylesheet |
+| `tests/simulate.js` | Headless simulation for win-rate analysis |
 
-## Game highlights (EN)
-- Fast loop: fixed 18 seats, deterministic night/day order, auto-resolution when timers end.
-- Multiple private channels: killers, police, grudge, spectators (and role intel scoped per faction).
-- Rich protection/kill stack: smoke, purify, kidnap, agent/fiend shielding, doctor revives, unstoppable causes.
-- Role diversity per theme: classic, horror, street, psychic, other-dimension, final judgement mixes.
-- AI + sim: headless `tests/simulate.js` to measure win rates by faction/difficulty.
+## Multiplayer
 
-## 遊戲重點（中文）
-- 快速節奏：固定 18 人，夜/日順序固定，計時結束自動結算。
-- 多重私聊：殺手、警察、怨靈、觀戰頻道，各陣營專屬情報。
-- 深度交互：煙霧、淨化、綁架、特務/天煞護盾、醫生救援、不可阻擋攻擊等堆疊。
-- 主題多樣：經典、末日、街頭、超能、異界、最終審判等配置。
-- AI 與模擬：`tests/simulate.js` 可批量跑勝率，觀察難度/陣營平衡。
+### Setup
+One process serves both static files and WebSocket:
+```bash
+npm install && npm start
+```
+Open `http://<host>:3001/multiplayer.html` (use `https/wss` when deployed behind TLS).
 
-## Themes (role counts)
-- Good vs Evil: 4 Police, 4 Killers, Doctor, Sniper, 8 Civilians
-- Counter-Terror Crisis: 4 Police, 4 Killers, Doctor, Sniper, Agent, Terrorist, 6 Civilians
-- Wild West: 4 Police, 4 Killers, Doctor, Sniper, Cowboy, Kidnapper, 6 Civilians
-- Doomsday Horror: 4 Police, 4 Killers, Doctor, Sniper, Cowboy, Kidnapper, Zombie, 5 Civilians
-- Street Fury: 4 Police, 4 Killers, Riot Police, Arsonist, Agent, Terrorist, 6 Civilians
-- Psychic Century: 4 Police, 4 Killers, Doctor, Sniper, Heavenly Fiend, Vine Demon, Brat, 5 Civilians
-- Other Dimension: 4 Police, 4 Killers, Exorcist, Nightmare Demon, Purifier, Necromancer, 6 Civilians
-- Final Judgement: 4 Police, 4 Killers, 3 Grudge Beasts, Cowboy, Sniper, 5 Civilians
+### Flow
+1. Set WS URL and join with a name (first joiner becomes Host).
+2. Host picks a theme and clicks **Start**.
+3. Night phase: players submit actions within the timer; unsubmitted players are auto-resolved by AI.
+4. Day phase: faction chats, public chat, then vote. Host can click Resolve or wait for timer.
+5. Use **Restart** then **Start** for a new match.
 
-## Roles & rules (EN)
+### Disconnect Handling
+When a player disconnects mid-game, their seat is taken over by the AI system. The player name is suffixed with `(AI)`. The AI difficulty for multiplayer is fixed at **Hard**.
+
+### Real-time Ally Visibility
+During the night phase, same-role allies (killers/police/grudge beasts) can see each other's action choices in real time, both before and after resolution. Actions are persisted in faction chat so they survive page refreshes.
+
+### WebSocket Protocol
+
+**Client -> Server:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type: "join"` | Join | `name`: display name, `spectator`: boolean, `waitForStart`: boolean |
+| `type: "start"` | Host | `theme`: theme ID string |
+| `type: "night_action"` | Action | `action`: `{ type, targetId }` |
+| `type: "vote"` | Vote | `targetId`: player ID |
+| `type: "last_words"` | Chat | `text`: last words string |
+| `type: "chat"` | Chat | `text`: message, `channel`: `"killer"` / `"police"` / `"grudge"` / `"spectator"` |
+| `type: "resolve"` | Host | Force-resolve current phase |
+| `type: "restart"` | Host | Reset room for new game |
+
+**Server -> Client:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type: "joined"` | Init | `playerId`, `host`, `spectator` |
+| `type: "lobby"` | Lobby | `seats[]`: current seat list |
+| `type: "phase"` | Flow | `phase`, `day` |
+| `type: "view"` | State | Full player view (role-filtered) |
+| `type: "acked"` | Confirm | `action`, `actorName`, `role`, `targetName` |
+| `type: "action_log_killer"` | RT | Real-time killer ally action |
+| `type: "action_log_police"` | RT | Real-time police ally action |
+| `type: "action_log_grudge"` | RT | Real-time grudge ally action |
+| `type: "chat"` | Chat | `channel`, `sender`, `text` |
+| `type: "timer"` | UI | `label`, `remaining` (seconds) |
+| `type: "error"` | Error | `message` |
+
+## AI Difficulty System
+
+All AI decisions are purely algorithmic (no external LLM). A seeded RNG ensures deterministic replays.
+
+### Difficulty Levels
+
+| Parameter | Easy | Normal | Hard | Nightmare |
+|-----------|------|--------|------|-----------|
+| Suspicion scaling | 0.6x | 1.0x | 1.3x | 1.6x |
+| Random voting | 80% | 60% | 20% | 5% |
+| Follow police reveal | 50% | 70% | 95% | 98% |
+| Red team deception | - | - | Yes | Yes |
+| Behavioral analysis | - | - | Yes | Yes |
+
+### Belief System
+Each AI maintains a Bayesian probability distribution over every other player's possible role (`aiMemory.roleProbs`). Updated each round based on observable signals:
+- Chat mentions, vote flips, vote order, bandwagon pressure
+- Police-revealed red confirmation
+- Hard+: voting pattern consistency, vote-together pair detection, silence analysis, death correlation
+
+### Hard+ Enhancements
+- **Behavioral analysis**: Tracks cross-day voting graphs, mutual voting pairs, and chat activity patterns.
+- **Smart killer targeting**: Avoids likely-protected targets, prioritizes active speakers and police.
+- **Self-threat awareness**: Doctor self-protects more when threatened; terrorist triggers when about to be voted out.
+- **Sniper timing**: Conservative early game, aggressive once enough intel accumulates.
+- **Red deception**: Strategic deflection (20%), aggressive bluff accusations (25%), subtle ally defense (15%), vote scattering among killers.
+- **Contextual chat**: References past votes, vote flips, and deaths instead of generic statements.
+- **Strategic betrayal**: Sells out exposed teammates only when they're likely dead anyway.
+
+### Single-player vs Multiplayer AI
+- Single-player: difficulty is chosen at game creation.
+- Multiplayer: fixed at Hard. When a player disconnects, AI takes over their seat at the same difficulty.
+
+## Gameplay Loop
+
+### Night Phase
+1. **Control actions** resolve first: smoke (Riot Police), purify (Purifier), kidnap (Kidnapper) — these block targets from acting.
+2. **Remaining actions** resolve: kills, protections, investigations, bites, etc.
+3. **Protection stack**: Agent shield > Fiend absorb > Doctor revive. Unstoppable causes bypass all.
+4. **Deaths resolve**: delayed kills (cowboy, necromancer) apply after instant kills.
+5. **Zombie conversions**: pending bites convert at next night start.
+
+### Day Phase
+- AI-generated chat lines appear in public log.
+- Private faction channels: killers / police / grudge beasts / spectators.
+- Players discuss and vote.
+
+### Vote Phase
+- Majority vote (>50% of eligible voters) executes the target.
+- If no majority, the player with the most votes is executed.
+- Brat revives on first execution (revealed, loses future voting power).
+- Dead players may leave last words (unless death type forbids it).
+
+## Victory Conditions
+
+| Condition | Winner |
+|-----------|--------|
+| All killers eliminated | BLUE wins |
+| Killers >= non-killer alive | RED wins |
+| Zombies > 1/3 of alive | GREEN (Zombie) wins |
+| Berserk grudge + killers == 0 | GREEN (Grudge) wins |
+| Berserk grudge + police == 0 | GREEN (Grudge) wins |
+| Non-berserk grudge alive when RED/BLUE would win | Grudge overrides |
+
+## Themes (Role Counts)
+
+| Theme | Composition |
+|-------|-------------|
+| Good vs Evil | 4 Police, 4 Killers, Doctor, Sniper, 8 Civilians |
+| Counter-Terror Crisis | 4 Police, 4 Killers, Doctor, Sniper, Agent, Terrorist, 6 Civilians |
+| Wild West | 4 Police, 4 Killers, Doctor, Sniper, Cowboy, Kidnapper, 6 Civilians |
+| Doomsday Horror | 4 Police, 4 Killers, Doctor, Sniper, Cowboy, Kidnapper, Zombie, 5 Civilians |
+| Street Fury | 4 Police, 4 Killers, Riot Police, Arsonist, Agent, Terrorist, 6 Civilians |
+| Psychic Century | 4 Police, 4 Killers, Doctor, Sniper, Heavenly Fiend, Vine Demon, Brat, 5 Civilians |
+| Other Dimension | 4 Police, 4 Killers, Exorcist, Nightmare Demon, Purifier, Necromancer, 6 Civilians |
+| Final Judgement | 4 Police, 4 Killers, 3 Grudge Beasts, Cowboy, Sniper, 5 Civilians |
+
+## Roles & Rules (EN)
 - **Civilian (BLUE)**: No night action.
 - **Police (BLUE)**: Night vote to investigate; majority result reveals faction/role to police (terrorist appears BLUE). Investigating a Kidnapper executes that kidnapper's hostage (blockable, once per kidnapper).
 - **Killer (RED)**: Night murder vote; majority/plurality kills one non-red target (blockable, doctor-revivable).
@@ -98,5 +216,19 @@ It does not use or include any assets, code, data, or materials from any existin
 - 除靈師（藍）：淨化一名目標，使其當晚無法行動、對多數行動／投票免疫，並清除死靈靈魂。狙擊／不可阻擋攻擊仍可擊殺。
 - 怨靈獸（綠）：擁有怨靈獸私人頻道。未狂暴時每晚票選「審判」一人：紅方 -> 身份告知警察並標記；藍方非平民 -> 身份告知殺手；平民 -> 隨機犧牲一名怨靈獸。任一怨靈獸在夜晚死亡（非自身處決）即進入狂暴，只能在夜晚多數決擊殺。勝利條件：狂暴後若警察為 0 或殺手為 0 則怨靈獸勝；若紅或藍要取勝時仍有未狂暴的怨靈獸存活，怨靈獸會覆寫勝利；狂暴觸發方會影響共贏判定。
 
+## 勝利條件
+
+| 條件 | 獲勝方 |
+|------|--------|
+| 所有殺手被消滅 | 藍方勝利 |
+| 殺手數量 >= 非殺手存活數 | 紅方勝利 |
+| 喪屍 > 存活人數的 1/3 | 綠方（喪屍）勝利 |
+| 狂暴怨靈 + 殺手 == 0 | 綠方（怨靈）勝利 |
+| 狂暴怨靈 + 警察 == 0 | 綠方（怨靈）勝利 |
+| 紅/藍即將獲勝但仍有未狂暴怨靈存活 | 怨靈覆寫勝利 |
+
 ## Simulation
-`node tests/simulate.js 500` runs all-AI games and prints win rates by faction. Increase the number for larger samples.
+```bash
+node tests/simulate.js 500    # runs 500 all-AI games, prints win rates by faction
+```
+Increase the number for larger samples. Useful for balancing roles and difficulty tuning.
