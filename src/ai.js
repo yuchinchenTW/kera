@@ -26,6 +26,16 @@ function ensureAdvancedMemory(p) {
   if (!p.aiMemory.defenseHistory) p.aiMemory.defenseHistory = {};
   if (!p.aiMemory.selfThreat) p.aiMemory.selfThreat = 0;
   if (!p.aiMemory.chatActivity) p.aiMemory.chatActivity = {};
+  // Improvement 1: Cross-round memory tracking
+  if (!p.aiMemory.chatMemory) p.aiMemory.chatMemory = [];
+  // Improvement 4: Emotion system
+  if (!p.aiMemory.emotion) p.aiMemory.emotion = "neutral";
+  // Improvement 7: Red silence tracking
+  if (p.aiMemory.silentRounds === undefined) p.aiMemory.silentRounds = 0;
+  // Improvement 11: Doctor anti-pattern
+  if (p.aiMemory.lastProtected === undefined) p.aiMemory.lastProtected = null;
+  // Improvement 13: Fake police claim tracking
+  if (p.aiMemory.fakePoliceClaimUsed === undefined) p.aiMemory.fakePoliceClaimUsed = false;
 }
 
 /**
@@ -152,6 +162,61 @@ function ensureBeliefs(state) {
       p.aiMemory.selfThreat = computeSelfThreat(state, p);
     }
 
+    // ── Improvement 1: Cross-round chat memory tracking ──
+    if (hard) {
+      const dayNum = state.dayNumber || 1;
+      const alreadyParsedThisDay = p.aiMemory.chatMemory.some((m) => m.day === dayNum);
+      if (!alreadyParsedThisDay) {
+        const chats = state.dayChat || [];
+        for (const line of chats) {
+          for (const sp of state.players) {
+            if (!sp || !line.startsWith(sp.name + ":")) continue;
+            const entry = { day: dayNum, speakerId: sp.id, mentionedIds: [], accusedId: null, defendedId: null };
+            for (const other of state.players) {
+              if (!other || other.id === sp.id) continue;
+              if (line.includes(other.name)) {
+                entry.mentionedIds.push(other.id);
+                // Detect accuse/defend keywords in the English portion (before ||)
+                const enPart = line.split("||")[0] || line;
+                const lowerEn = enPart.toLowerCase();
+                if (lowerEn.includes("suspicious") || lowerEn.includes("killer") || lowerEn.includes("vote") || lowerEn.includes("doesn't add up") || lowerEn.includes("acting weird") || lowerEn.includes("don't trust")) {
+                  entry.accusedId = other.id;
+                }
+                if (lowerEn.includes("on our side") || lowerEn.includes("seems fine") || lowerEn.includes("leave") || lowerEn.includes("helpful") || lowerEn.includes("clean") || lowerEn.includes("innocent") || lowerEn.includes("confirmed blue")) {
+                  entry.defendedId = other.id;
+                }
+              }
+            }
+            p.aiMemory.chatMemory.push(entry);
+            break; // only one speaker per line
+          }
+        }
+      }
+    }
+
+    // ── Improvement 4: Emotion system ──
+    if (hard) {
+      const lastVotes = state.history?.votes?.[state.history.votes.length - 1];
+      const myVotesReceived = lastVotes?.tally?.[p.id] || 0;
+      const aliveCount = alivePlayers(state).length || 1;
+      const voteRatio = myVotesReceived / aliveCount;
+      const selfThreat = p.aiMemory.selfThreat || 0;
+      // Was saved by doctor? Check lastNightSummary for mention of this player being saved
+      const wasSaved = (state.lastNightSummary || []).some(
+        (e) => typeof e === "string" && e.includes(p.name) && e.includes("saved")
+      );
+
+      if (wasSaved) {
+        p.aiMemory.emotion = "grateful";
+      } else if (voteRatio > 0.3) {
+        p.aiMemory.emotion = state.rng() < 0.5 ? "angry" : "defensive";
+      } else if (selfThreat > 0.5) {
+        p.aiMemory.emotion = "anxious";
+      } else {
+        p.aiMemory.emotion = "neutral";
+      }
+    }
+
     for (const targetId of living) {
       if (targetId === p.id) continue;
       // 初始化或衰減到先驗
@@ -228,6 +293,56 @@ function ensureBeliefs(state) {
         const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount));
         if (spoken === 0 && maxSpoken > 0) {
           redBoost += 0.04 * diffScale;
+        }
+      }
+
+      // ── Improvement 2: Statement contradiction detection ──
+      if (hard && p.aiMemory.chatMemory.length > 0) {
+        const targetEntries = p.aiMemory.chatMemory.filter((m) => m.speakerId === targetId);
+        const accusedSet = new Set();
+        const defendedSet = new Set();
+        for (const entry of targetEntries) {
+          if (entry.accusedId !== null) accusedSet.add(entry.accusedId + ":" + entry.day);
+          if (entry.defendedId !== null) defendedSet.add(entry.defendedId + ":" + entry.day);
+        }
+        // Check for contradiction: accused X in one round, defended X in another
+        for (const entry of targetEntries) {
+          if (entry.accusedId !== null) {
+            const hasDefended = targetEntries.some(
+              (e) => e.defendedId === entry.accusedId && e.day !== entry.day
+            );
+            if (hasDefended) {
+              redBoost += 0.08 * diffScale; // contradiction signal
+            }
+          }
+        }
+      }
+
+      // ── Improvement 3: Death attribution analysis ──
+      if (hard && p.aiMemory.chatMemory.length > 0) {
+        for (const dead of recentDeaths) {
+          if (dead.faction === Faction.BLUE && dead.deathCause !== "VOTE_EXECUTION") {
+            // Night-killed blue: who accused them most in chat?
+            const prevDayEntries = p.aiMemory.chatMemory.filter(
+              (m) => m.accusedId === dead.id && m.speakerId === targetId
+            );
+            // Someone who aggressively pushed against the victim is slightly more likely blue (genuine suspicion)
+            if (prevDayEntries.length > 0) {
+              blueBoost += 0.03 * prevDayEntries.length * diffScale;
+            }
+            // Check if target deflected attention away from the victim (mentioned others, not victim)
+            const targetDayEntries = p.aiMemory.chatMemory.filter(
+              (m) => m.speakerId === targetId && m.day === (dead.deathDay || state.dayNumber - 1)
+            );
+            const mentionedVictim = targetDayEntries.some(
+              (m) => m.mentionedIds.includes(dead.id)
+            );
+            const totalEntries = targetDayEntries.length;
+            if (totalEntries > 0 && !mentionedVictim) {
+              // Spoke but never mentioned the eventual victim — mildly suspicious
+              redBoost += 0.03 * diffScale;
+            }
+          }
         }
       }
 
@@ -399,10 +514,27 @@ function pickKillerSmartTarget(state, actor) {
     score -= protectionLikelihood * 0.6;
 
     // Penalty: same person was killed last night and survived → likely protected
+    // Improvement 12: much stronger penalty — 80% skip saved targets
     const lastSummary = state.lastNightSummary || [];
+    let wasSavedLastNight = false;
     for (const entry of lastSummary) {
       if (typeof entry === "string" && entry.includes(t.name) && entry.includes("saved")) {
-        score -= 0.4;
+        wasSavedLastNight = true;
+        score -= 0.8; // stronger penalty (was 0.4)
+      }
+    }
+    // Improvement 12: If same target as last night and was saved, near-skip
+    if (state.killerLastTarget !== undefined && t.id === state.killerLastTarget && wasSavedLastNight) {
+      if (state.rng() < 0.8) continue; // 80% chance to skip entirely
+    }
+    // Improvement 12: If last target died, switch target TYPE (if killed active speaker, target quiet one)
+    if (state.killerLastTarget !== undefined && t.id !== state.killerLastTarget) {
+      const lastTargetPlayer = getPlayer(state, state.killerLastTarget);
+      if (lastTargetPlayer && !lastTargetPlayer.alive) {
+        // Last target died — switch to different activity level
+        const lastSpeakRatio = (chatBehavior.speakCount[state.killerLastTarget] || 0) / maxSpoken;
+        if (lastSpeakRatio > 0.5 && speakRatio < 0.3) score += 0.15; // killed talker, now target quiet
+        if (lastSpeakRatio < 0.3 && speakRatio > 0.5) score += 0.15; // killed quiet, now target talker
       }
     }
 
@@ -521,6 +653,16 @@ export function buildAiNightActions(state, opts = {}) {
       }
       case Roles.KILLER.id: {
         let target = sharedKillerTarget;
+        // ── Improvement 12: Killer target rotation ──
+        // If hard and shared target was saved last night, 80% chance to skip them
+        if (hard && target && state.killerLastTarget !== undefined && target.id === state.killerLastTarget) {
+          const wasSaved = (state.lastNightSummary || []).some(
+            (e) => typeof e === "string" && e.includes(target.name) && e.includes("saved")
+          );
+          if (wasSaved && state.rng() < 0.8) {
+            target = null; // force re-pick
+          }
+        }
         if (!target) {
           if (hard) {
             target = pickKillerSmartTarget(state, actor);
@@ -540,7 +682,11 @@ export function buildAiNightActions(state, opts = {}) {
             target = best;
           }
         }
-        if (target) actions.push({ actorId: actor.id, type: "KILLER_VOTE", targetId: target.id });
+        if (target) {
+          actions.push({ actorId: actor.id, type: "KILLER_VOTE", targetId: target.id });
+          // Track last target for rotation
+          if (hard) state.killerLastTarget = target.id;
+        }
         break;
       }
       case Roles.DOCTOR.id: {
@@ -570,6 +716,27 @@ export function buildAiNightActions(state, opts = {}) {
                 const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
                 score += speakRatio * 0.2;
               }
+              // ── Improvement 11: Doctor anti-pattern ──
+              if (hard) {
+                ensureAdvancedMemory(actor);
+                const lastProt = actor.aiMemory.lastProtected;
+                if (lastProt !== null && t.id === lastProt) {
+                  // Check if this person was actually attacked and saved
+                  const wasSavedLast = (state.lastNightSummary || []).some(
+                    (e) => typeof e === "string" && e.includes(t.name) && e.includes("saved")
+                  );
+                  if (wasSavedLast) {
+                    // Re-protect is smart — they were attacked
+                    score += 0.3;
+                  } else {
+                    // Don't protect same person two nights in a row (killer will switch)
+                    // Unless 10% random chance to be unpredictable
+                    if (state.rng() >= 0.1) {
+                      score -= 0.8; // strong penalty to avoid same target
+                    }
+                  }
+                }
+              }
               if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
                 bestScore = score;
                 best = t;
@@ -577,7 +744,14 @@ export function buildAiNightActions(state, opts = {}) {
             }
             target = best || actor;
           }
-          if (target) actions.push({ actorId: actor.id, type: "DOCTOR_INJECT", targetId: target.id });
+          if (target) {
+            actions.push({ actorId: actor.id, type: "DOCTOR_INJECT", targetId: target.id });
+            // Track last protected for anti-pattern
+            if (hard) {
+              ensureAdvancedMemory(actor);
+              actor.aiMemory.lastProtected = target.id;
+            }
+          }
         }
         break;
       }
@@ -1126,6 +1300,22 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     const abstainChance = idx === aiVoters.length - 1 ? 0 : 0.05;
     if (state.rng() < abstainChance) return;
 
+    // ── Improvement 9: Strategic abstaining (blue AI only) ──
+    if (hard && actor.faction === Faction.BLUE && idx !== aiVoters.length - 1) {
+      ensureAdvancedMemory(actor);
+      // Find the actor's top suspicion target
+      let topSusp = 0;
+      for (const t of alivePlayers(state)) {
+        if (t.id === actor.id) continue;
+        const s = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
+        if (s > topSusp) topSusp = s;
+      }
+      if (topSusp < 0.35 && state.policeRevealedRed === null && state.rng() < 0.15) {
+        // Abstain — low confidence, no police intel
+        return;
+      }
+    }
+
     // Hard+: Brat strategy — follow the majority, don't stand out
     // Before revealed: blend in by voting with the crowd
     if (hard && actor.role === Roles.BRAT.id && !actor.status.bratRevealed) {
@@ -1257,11 +1447,65 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
   });
 
+  // ── Improvement 8: Vote timing awareness (second pass for hard AI) ──
+  if (hard && votes.length > 1) {
+    // Build current vote tally
+    const tally = {};
+    for (const v of votes) tally[v.targetId] = (tally[v.targetId] || 0) + 1;
+    // Find the consensus target (most votes)
+    let consensusTarget = null;
+    let consensusCount = 0;
+    for (const [tid, cnt] of Object.entries(tally)) {
+      if (cnt > consensusCount) { consensusCount = cnt; consensusTarget = Number(tid); }
+    }
+    // For each voter, consider switching to consensus if they agree
+    for (let i = 0; i < votes.length; i++) {
+      const v = votes[i];
+      if (v.targetId === consensusTarget) continue; // already voting consensus
+      const actor = getPlayer(state, v.actorId);
+      if (!actor || actor.isHuman) continue;
+      if (actor.faction === Faction.RED) continue; // red AI has its own strategy
+      if (state.rng() >= 0.4) continue; // 40% chance to bandwagon
+
+      // Only switch if they somewhat agree with the consensus
+      ensureAdvancedMemory(actor);
+      const consensusSusp = actor.aiMemory?.suspicion?.[consensusTarget] ?? 0.5;
+      const currentSusp = actor.aiMemory?.suspicion?.[v.targetId] ?? 0.5;
+      // Switch if consensus target is at least somewhat suspicious and their current target has fewer votes
+      const currentVotes = tally[v.targetId] || 0;
+      if (consensusSusp > 0.35 && currentVotes <= 1 && consensusCount >= 2) {
+        tally[v.targetId] = (tally[v.targetId] || 0) - 1;
+        v.targetId = consensusTarget;
+        tally[consensusTarget] = (tally[consensusTarget] || 0) + 1;
+      }
+    }
+  }
+
   if (votes.length === 0 && aiVoters.length > 0) {
     const actor = aiVoters[0];
     const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id && t.alive);
     if (target) votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: target.id });
   }
+
+  // ── Improvement 10: Vote explanation chat ──
+  if (hard && votes.length > 0) {
+    if (!state.dayChat) state.dayChat = [];
+    const explainCount = Math.min(3, Math.floor(state.rng() * 3) + 1);
+    const shuffledVotes = shuffled(votes, state.rng);
+    let explained = 0;
+    for (const v of shuffledVotes) {
+      if (explained >= explainCount) break;
+      const actor = getPlayer(state, v.actorId);
+      if (!actor || actor.isHuman) continue;
+      const target = getPlayer(state, v.targetId);
+      if (!target) continue;
+      if (state.rng() < 0.4) continue; // not everyone explains
+      const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.voteExplain);
+      state.dayChat.push(tmpl(actor.name, target.name));
+      explained++;
+    }
+  }
+
   return votes;
 }
 
@@ -1319,6 +1563,71 @@ const CHAT_TEMPLATES = {
     (s, t) => `${s}: I checked ${t}, they're clean.||${s}：我查了 ${t}，他是好人。`,
     (s, t) => `${s}: ${t} is confirmed blue, leave them alone.||${s}：${t} 確認是藍方，別投他。`,
   ],
+  // Improvement 4: Emotion-specific chat
+  emotionChat: {
+    angry: [
+      (s) => `${s}: Why did you all vote for me?! I'm NOT the killer!||${s}：為什麼都投我？！我不是殺手！`,
+      (s) => `${s}: You're wasting time on me while the real killer is still out there!||${s}：你們浪費時間在我身上，真正的殺手還在外面！`,
+      (s, t) => `${s}: ${t}, you voted for me — explain yourself!||${s}：${t}，你投了我，給個解釋！`,
+    ],
+    defensive: [
+      (s) => `${s}: I've been helping the team from the start, check my record.||${s}：我從頭到尾都在幫大家，看看我的紀錄。`,
+      (s) => `${s}: If I was the killer, why would I accuse known reds?||${s}：如果我是殺手，我為什麼會指控已知的紅方？`,
+    ],
+    grateful: [
+      (s) => `${s}: Thanks for saving me last night, I owe you one.||${s}：謝謝昨晚救了我，我欠你一次。`,
+      (s) => `${s}: Someone protected me... I'll repay the favor by finding the killer.||${s}：有人保護了我⋯我會找出殺手來報答的。`,
+    ],
+    anxious: [
+      (s) => `${s}: I have a bad feeling about tonight...||${s}：我對今晚有不好的預感⋯`,
+      (s) => `${s}: I think they're coming for me next.||${s}：我覺得他們下一個就是要殺我。`,
+      (s, t) => `${s}: If I die tonight, look into ${t}.||${s}：如果我今晚死了，去查 ${t}。`,
+    ],
+  },
+  // Improvement 5: Responsive reply chat
+  replyChat: {
+    agree: [
+      (s, t, target) => `${s}: I agree with ${t}, ${target} is suspicious.||${s}：我同意 ${t} 的看法，${target} 很可疑。`,
+      (s, t) => `${s}: ${t} has a point, we should listen.||${s}：${t} 說得有道理，大家應該聽。`,
+    ],
+    disagree: [
+      (s, t, target) => `${s}: ${t}, I disagree — ${target} seems fine to me.||${s}：${t}，我不同意，${target} 看起來沒問題。`,
+      (s, t) => `${s}: ${t}, that doesn't make sense, think again.||${s}：${t}，那說不通，再想想。`,
+    ],
+    question: [
+      (s, t) => `${s}: ${t}, why do you think that?||${s}：${t}，你為什麼這麼想？`,
+      (s, t) => `${s}: ${t}, what evidence do you have?||${s}：${t}，你有什麼證據？`,
+    ],
+  },
+  // Improvement 6: Bandwagon & counter
+  bandwagon: [
+    (s, t) => `${s}: Everyone's right about ${t}, let's vote them out.||${s}：大家說的對，${t} 有問題，投他。`,
+    (s, t) => `${s}: Yeah, ${t} is definitely the one.||${s}：對，${t} 一定是。`,
+  ],
+  counter: [
+    (s, t) => `${s}: Hold on, you're all wrong about ${t}!||${s}：等等，你們都搞錯了，${t} 不是！`,
+    (s, t) => `${s}: Stop ganging up on ${t}, there's no proof.||${s}：別圍攻 ${t} 了，沒有證據。`,
+  ],
+  // Improvement 10: Vote explanation chat
+  voteExplain: [
+    (s, t) => `${s}: I'm voting ${t} because their behavior has been suspicious.||${s}：我投 ${t}，因為他行為一直很可疑。`,
+    (s, t) => `${s}: ${t} has to go — look at who they've been defending.||${s}：${t} 必須出去，看看他一直在幫誰說話。`,
+    (s, t) => `${s}: My vote goes to ${t}, I've been watching them.||${s}：我投 ${t}，我一直在觀察他。`,
+    (s, t) => `${s}: I'm voting ${t} based on last night's results.||${s}：根據昨晚的結果，我投 ${t}。`,
+    (s) => `${s}: I'm not confident in anyone... abstaining for now.||${s}：我對誰都沒把握⋯先棄票。`,
+  ],
+  // Improvement 13: Fake police claim
+  fakePoliceClaim: [
+    (s, t) => `${s}: I'm the police. I investigated ${t} last night — they're RED.||${s}：我是警察。我昨晚查了 ${t}，他是紅方。`,
+    (s, t) => `${s}: Police report: ${t} is confirmed RED. Vote them out!||${s}：警察報告：${t} 確認紅方。投掉他！`,
+  ],
+  // Improvement 14: Trust building chat
+  trustBuild: [
+    (s, t) => `${s}: I've been thinking about it — ${t} voted against the killer last round.||${s}：我想了一下，${t} 上回合投了殺手的票。`,
+    (s, t) => `${s}: ${t} can't be the killer, their behavior is too consistent.||${s}：${t} 不可能是殺手，他行為太一致了。`,
+    (s) => `${s}: I just want to help the team find the truth.||${s}：我只是想幫大家找出真相。`,
+    (s, t) => `${s}: Let me share my analysis — ${t} has been helpful, probably blue.||${s}：讓我分享我的分析，${t} 一直在幫忙，應該是藍方。`,
+  ],
 };
 
 function pickTemplate(rng, templates) {
@@ -1337,20 +1646,114 @@ export function generateChatLines(state, maxLines = 6) {
   // Shuffle speakers for natural order variety
   const speakers = shuffled(living, state.rng);
 
+  // Track who accused whom in this round for bandwagon detection (improvement 6)
+  const accuseCounts = {}; // accuseCounts[targetId] = count of accuse lines
+
   for (const speaker of speakers) {
     if (lines.length >= maxLines) break;
+    ensureAdvancedMemory(speaker);
 
     // Hard+: some speakers skip (not everyone talks every round)
-    if (hard && state.rng() < 0.15) continue;
+    if (hard && state.rng() < 0.15) {
+      if (hard) speaker.aiMemory.silentRounds = (speaker.aiMemory.silentRounds || 0) + 1;
+      continue;
+    }
 
     const allCandidates = alivePlayers(state).filter((t) => t.id !== speaker.id);
     const isRedSpeaker = speaker.faction === Faction.RED;
+
+    // ── Improvement 7: Red silence strategy ──
+    if (hard && isRedSpeaker) {
+      const silentRounds = speaker.aiMemory.silentRounds || 0;
+      if (silentRounds < 2 && state.rng() < 0.2) {
+        // 20% chance to say nothing (stay silent)
+        speaker.aiMemory.silentRounds = silentRounds + 1;
+        continue;
+      }
+      // If silent 2+ rounds, force speech with deflect
+      if (silentRounds >= 2) {
+        speaker.aiMemory.silentRounds = 0;
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.deflect);
+        lines.push(tmpl(speaker.name));
+        continue;
+      }
+    }
+    // Reset silent rounds for speakers who do speak
+    if (hard) speaker.aiMemory.silentRounds = 0;
+
+    // ── Improvement 4: Emotion-driven chat (30% chance for hard AI) ──
+    if (hard && speaker.aiMemory.emotion !== "neutral" && state.rng() < 0.3) {
+      const emotionTemplates = CHAT_TEMPLATES.emotionChat[speaker.aiMemory.emotion];
+      if (emotionTemplates && emotionTemplates.length > 0) {
+        const tmpl = pickTemplate(state.rng, emotionTemplates);
+        // Some emotion templates take (s), some (s, t)
+        const target = randomChoice(allCandidates, state.rng);
+        const tName = target?.name ?? "someone";
+        lines.push(tmpl(speaker.name, tName));
+        continue;
+      }
+    }
+
+    // ── Improvement 13: Fake police claim (8% chance, once per game, killer only) ──
+    if (hard && isRedSpeaker && speaker.role === Roles.KILLER.id &&
+        !speaker.aiMemory.fakePoliceClaimUsed &&
+        state.policeRevealedRed === null &&
+        (state.dayNumber || 1) >= 2 &&
+        state.rng() < 0.08) {
+      const blueTargets = allCandidates.filter((t) => t.faction === Faction.BLUE);
+      const frameTarget = randomChoice(blueTargets.length ? blueTargets : allCandidates, state.rng);
+      if (frameTarget) {
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.fakePoliceClaim);
+        lines.push(tmpl(speaker.name, frameTarget.name));
+        speaker.aiMemory.fakePoliceClaimUsed = true;
+        continue;
+      }
+    }
+
+    // ── Improvement 14: Trust building chat (15% chance for hard RED AI) ──
+    if (hard && isRedSpeaker && state.rng() < 0.15) {
+      // Defend genuinely blue players (not allies) to seem credible
+      const blueTargets = allCandidates.filter((t) => t.faction === Faction.BLUE);
+      const trustTarget = randomChoice(blueTargets.length ? blueTargets : allCandidates, state.rng);
+      if (trustTarget) {
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.trustBuild);
+        lines.push(tmpl(speaker.name, trustTarget.name));
+        continue;
+      }
+    }
 
     // ── Police strategic reveal ──
     if (speaker.role === Roles.POLICE.id && redFound?.alive && state.rng() < 0.8) {
       const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeReveal);
       lines.push(tmpl(speaker.name, redFound.name));
       continue;
+    }
+
+    // ── Improvement 6: Bandwagon & counter ──
+    if (hard) {
+      // Check if 3+ lines already accuse the same person
+      let bandwagonTarget = null;
+      for (const [tid, cnt] of Object.entries(accuseCounts)) {
+        if (cnt >= 3) { bandwagonTarget = Number(tid); break; }
+      }
+      if (bandwagonTarget !== null) {
+        const bTarget = getPlayer(state, bandwagonTarget);
+        if (bTarget?.alive && bTarget.id !== speaker.id) {
+          const suspOfTarget = speaker.aiMemory?.suspicion?.[bandwagonTarget] ?? 0.5;
+          if (suspOfTarget > 0.4 && state.rng() < 0.6) {
+            // Pile on — agree with the crowd
+            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.bandwagon);
+            lines.push(tmpl(speaker.name, bTarget.name));
+            accuseCounts[bandwagonTarget] = (accuseCounts[bandwagonTarget] || 0) + 1;
+            continue;
+          } else if (suspOfTarget <= 0.4 && state.rng() < 0.3) {
+            // Counter — defend the accused
+            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.counter);
+            lines.push(tmpl(speaker.name, bTarget.name));
+            continue;
+          }
+        }
+      }
     }
 
     // ── Hard+ RED deception strategies ──
@@ -1371,6 +1774,7 @@ export function generateChatLines(state, maxLines = 6) {
         if (bluffTarget) {
           const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.bluff);
           lines.push(tmpl(speaker.name, bluffTarget.name));
+          accuseCounts[bluffTarget.id] = (accuseCounts[bluffTarget.id] || 0) + 1;
           continue;
         }
       }
@@ -1435,7 +1839,64 @@ export function generateChatLines(state, maxLines = 6) {
       ? randomChoice(allCandidates, state.rng)?.name ?? "someone"
       : useTarget?.name ?? "someone";
     lines.push(tmpl(speaker.name, tName));
+    // Track accuse lines for bandwagon detection
+    if (tone === "accuse" && useTarget) {
+      accuseCounts[useTarget.id] = (accuseCounts[useTarget.id] || 0) + 1;
+    }
   }
+
+  // ── Improvement 5: Responsive chat (reply to accusation lines) ──
+  if (hard && lines.length > 0) {
+    const replyLines = [];
+    for (const line of lines) {
+      if (replyLines.length + lines.length >= maxLines + 3) break; // don't add too many
+      // Find if this line accuses someone (check for accusation keywords)
+      const enPart = line.split("||")[0] || line;
+      const lowerEn = enPart.toLowerCase();
+      const isAccusation = lowerEn.includes("suspicious") || lowerEn.includes("killer") || lowerEn.includes("vote them") || lowerEn.includes("doesn't add up") || lowerEn.includes("acting weird") || lowerEn.includes("don't trust");
+      if (!isAccusation) continue;
+      if (state.rng() >= 0.4) continue; // 40% chance to respond
+
+      // Find who spoke and who was accused
+      let speakerName = null;
+      let accusedName = null;
+      for (const p of state.players) {
+        if (!p) continue;
+        if (enPart.startsWith(p.name + ":")) speakerName = p.name;
+        else if (enPart.includes(p.name)) accusedName = p.name;
+      }
+      if (!speakerName || !accusedName) continue;
+
+      // Pick a responder (different from speaker and accused)
+      const responders = living.filter(
+        (p) => p.name !== speakerName && p.name !== accusedName
+      );
+      const responder = randomChoice(responders, state.rng);
+      if (!responder) continue;
+      ensureAdvancedMemory(responder);
+
+      // Decide response based on responder's beliefs about the accused
+      const accusedPlayer = state.players.find((p) => p && p.name === accusedName);
+      const accusedSusp = accusedPlayer ? (responder.aiMemory?.suspicion?.[accusedPlayer.id] ?? 0.5) : 0.5;
+
+      const roll = state.rng();
+      if (accusedSusp > 0.5 && roll < 0.5) {
+        // Agree
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.replyChat.agree);
+        replyLines.push(tmpl(responder.name, speakerName, accusedName));
+      } else if (accusedSusp <= 0.4 && roll < 0.5) {
+        // Disagree
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.replyChat.disagree);
+        replyLines.push(tmpl(responder.name, speakerName, accusedName));
+      } else {
+        // Question
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.replyChat.question);
+        replyLines.push(tmpl(responder.name, speakerName));
+      }
+    }
+    for (const rl of replyLines) lines.push(rl);
+  }
+
   return lines;
 }
 
