@@ -36,6 +36,38 @@ function ensureAdvancedMemory(p) {
   if (p.aiMemory.lastProtected === undefined) p.aiMemory.lastProtected = null;
   // Improvement 13: Fake police claim tracking
   if (p.aiMemory.fakePoliceClaimUsed === undefined) p.aiMemory.fakePoliceClaimUsed = false;
+  // Advanced: Role claiming system
+  if (p.aiMemory.claimedRole === undefined) p.aiMemory.claimedRole = null;
+  if (!p.aiMemory.otherClaims) p.aiMemory.otherClaims = {};
+  // Advanced: Night result inference
+  if (!p.aiMemory.nightResultInference) p.aiMemory.nightResultInference = [];
+  // Advanced: Police investigation results tracking
+  if (!p.aiMemory.investigationResults) p.aiMemory.investigationResults = [];
+  // Advanced: Personality system (deterministic based on player id)
+  if (!p.aiMemory.personality) {
+    const seed = (p.id * 7 + 13) % 100;
+    if (seed < 25) p.aiMemory.personality = "aggressive";
+    else if (seed < 50) p.aiMemory.personality = "cautious";
+    else if (seed < 75) p.aiMemory.personality = "social";
+    else p.aiMemory.personality = "quiet";
+  }
+}
+
+// ─── Advanced Helper: Role Name (Chinese) ────────────────────────────────
+function roleNameZh(roleId) {
+  const map = { POLICE: "警察", DOCTOR: "醫生", AGENT: "特務", CIVILIAN: "平民", KILLER: "殺手", SNIPER: "狙擊手", COWBOY: "牛仔", PURIFIER: "淨化者", RIOT_POLICE: "鎮暴警察", EXORCIST: "驅魔師" };
+  return map[roleId] || roleId;
+}
+
+// ─── Advanced Helper: Game Phase Detection ────────────────────────────────
+function getGamePhase(state) {
+  const day = state.dayNumber || 1;
+  const alive = alivePlayers(state).length;
+  const total = state.players.length;
+  const ratio = alive / total;
+  if (day <= 2 && ratio > 0.7) return "early";
+  if (day <= 4 && ratio > 0.4) return "mid";
+  return "late";
 }
 
 /**
@@ -126,6 +158,123 @@ function computeSelfThreat(state, actor) {
   // Am I the police-revealed red?
   if (state.policeRevealedRed === actor.id) threat += 0.5;
   return clamp(threat, 0, 1);
+}
+
+// ─── Advanced: Logical Deduction Chains ──────────────────────────────────
+
+function applyDeductionChains(state, p) {
+  const hard = isHard(state);
+  if (!hard) return;
+  ensureAdvancedMemory(p);
+  const living = alivePlayers(state).map((pl) => pl.id);
+  const votePatterns = analyzeVotingPatterns(state);
+  const diffScaleMap = { easy: 0.6, normal: 1, hard: 1.3, nightmare: 1.6 };
+  const diffScale = diffScaleMap[state.difficulty || "normal"] ?? 1;
+
+  // Trust propagation: If police confirmed A is blue, and A consistently defends B, B gets blue boost
+  const confirmedBlues = new Set();
+  const confirmedReds = new Set();
+  if (state.policeRevealedRed !== null) confirmedReds.add(state.policeRevealedRed);
+  // Scan chat memory for defense patterns from confirmed blues
+  for (const targetId of living) {
+    if (targetId === p.id) continue;
+    // Check if this target is confirmed blue via police clearing in chat
+    const playerObj = getPlayer(state, targetId);
+    if (!playerObj) continue;
+    // A player we are >80% sure is blue counts as confirmed for trust propagation
+    const blueProb = factionProb(p, targetId, Faction.BLUE) ?? 0.5;
+    if (blueProb > 0.8) confirmedBlues.add(targetId);
+    const redProb = factionProb(p, targetId, Faction.RED) ?? 0.5;
+    if (redProb > 0.8) confirmedReds.add(targetId);
+  }
+
+  for (const targetId of living) {
+    if (targetId === p.id) continue;
+    let trustBoost = 0;
+    let suspBoost = 0;
+
+    // Trust propagation from confirmed blues
+    for (const blueId of confirmedBlues) {
+      if (blueId === targetId) continue;
+      const defenses = p.aiMemory.chatMemory.filter(
+        (m) => m.speakerId === blueId && m.defendedId === targetId
+      );
+      if (defenses.length > 0) {
+        trustBoost += 0.04 * defenses.length * diffScale;
+      }
+    }
+
+    // Suspicion propagation from confirmed reds
+    for (const redId of confirmedReds) {
+      if (redId === targetId) continue;
+      const togetherCount = votePatterns.votedTogether[targetId]?.[redId] || 0;
+      if (togetherCount > 0) {
+        suspBoost += 0.06 * togetherCount * diffScale;
+      }
+      // Also check if target defended the confirmed red
+      const redDefenses = p.aiMemory.chatMemory.filter(
+        (m) => m.speakerId === targetId && m.defendedId === redId
+      );
+      if (redDefenses.length > 0) {
+        suspBoost += 0.05 * redDefenses.length * diffScale;
+      }
+    }
+
+    // Death pattern analysis: if killers target active speakers, boost protection instinct
+    const chatBehavior = analyzeChatBehavior(state);
+    const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount || {}));
+    const recentDeaths = state.players.filter((pl) => !pl.alive && pl.deathCause && pl.deathCause !== "VOTE_EXECUTION");
+    let killersTargetActive = 0;
+    let killersTargetQuiet = 0;
+    for (const dead of recentDeaths) {
+      if (dead.faction === Faction.BLUE) {
+        const deadSpeak = (chatBehavior.speakCount[dead.id] || 0) / maxSpoken;
+        if (deadSpeak > 0.5) killersTargetActive++;
+        else killersTargetQuiet++;
+      }
+    }
+    const targetSpeak = (chatBehavior.speakCount[targetId] || 0) / maxSpoken;
+    if (killersTargetActive > killersTargetQuiet && targetSpeak > 0.5) {
+      // Active speakers are targeted — slightly boost blue (they're threats to red)
+      trustBoost += 0.02 * diffScale;
+    }
+
+    // Elimination logic: if few killer slots remain and someone is highly suspected
+    const rolePriors = rolePriorCounts(state.theme || "GOOD_VS_EVIL");
+    const killerSlots = rolePriors[Roles.KILLER.id] || 2;
+    const deadReds = state.players.filter((pl) => !pl.alive && pl.faction === Faction.RED).length;
+    const remainingKillers = Math.max(0, killerSlots - deadReds);
+    if (remainingKillers <= 1) {
+      const redProb = factionProb(p, targetId, Faction.RED) ?? 0.5;
+      if (redProb > 0.7) {
+        suspBoost += 0.1 * diffScale; // Focus votes on the likely last killer
+      }
+    }
+
+    // Apply boosts to role probs
+    if (trustBoost > 0 || suspBoost > 0) {
+      const allRoles = Object.keys(p.aiMemory.roleProbs[targetId] || {});
+      for (const role of allRoles) {
+        const meta = roleMeta(role);
+        let mult = 1;
+        if (meta.faction === Faction.BLUE) mult += trustBoost;
+        if (meta.faction === Faction.RED) mult += suspBoost;
+        p.aiMemory.roleProbs[targetId][role] = clamp(
+          p.aiMemory.roleProbs[targetId][role] * Math.max(0.01, mult), 0.0001, 1
+        );
+      }
+      // re-normalize
+      const sum = Object.values(p.aiMemory.roleProbs[targetId]).reduce((a, b) => a + b, 0) || 1;
+      for (const role of allRoles) {
+        p.aiMemory.roleProbs[targetId][role] = p.aiMemory.roleProbs[targetId][role] / sum;
+      }
+      // re-compute suspicion
+      const newRedProb = Object.entries(p.aiMemory.roleProbs[targetId]).reduce(
+        (acc, [r, prob]) => acc + (roleMeta(r).faction === Faction.RED ? prob : 0), 0
+      );
+      p.aiMemory.suspicion[targetId] = clamp(newRedProb, 0.01, 0.99);
+    }
+  }
 }
 
 // ─── Enhanced Belief System ────────────────────────────────────────────────
@@ -367,6 +516,84 @@ function ensureBeliefs(state) {
       );
       p.aiMemory.suspicion[targetId] = clamp(redProb, 0.01, 0.99);
     }
+
+    // ── Advanced: Night result inference ──
+    if (hard) {
+      const dayNum = state.dayNumber || 1;
+      const lastInferDay = p.aiMemory.nightResultInference.length > 0
+        ? p.aiMemory.nightResultInference[p.aiMemory.nightResultInference.length - 1].day
+        : 0;
+      if (dayNum > lastInferDay) {
+        const nightSummary = state.lastNightSummary || [];
+        const hasSave = nightSummary.some(
+          (e) => typeof e === "string" && e.includes("saved")
+        );
+        const nightDeaths = state.players.filter(
+          (pl) => !pl.alive && pl.deathCause && pl.deathCause !== "VOTE_EXECUTION" && (pl.deathDay || 0) >= dayNum - 1
+        );
+        if (hasSave) {
+          // Someone was saved — boost doctor/agent probability for protector candidates
+          const chatInfo = analyzeChatBehavior(state);
+          const maxSp = Math.max(1, ...Object.values(chatInfo.speakCount || {}));
+          for (const tid of living) {
+            if (tid === p.id) continue;
+            const doctorProb = p.aiMemory.roleProbs[tid]?.[Roles.DOCTOR.id] ?? 0;
+            const agentProb = p.aiMemory.roleProbs[tid]?.[Roles.AGENT?.id] ?? 0;
+            if (doctorProb > 0.1 || agentProb > 0.1) {
+              // Boost protector probability slightly
+              if (p.aiMemory.roleProbs[tid]) {
+                if (p.aiMemory.roleProbs[tid][Roles.DOCTOR.id] !== undefined)
+                  p.aiMemory.roleProbs[tid][Roles.DOCTOR.id] *= 1.1;
+                if (Roles.AGENT && p.aiMemory.roleProbs[tid][Roles.AGENT.id] !== undefined)
+                  p.aiMemory.roleProbs[tid][Roles.AGENT.id] *= 1.1;
+              }
+            }
+          }
+          p.aiMemory.nightResultInference.push({ day: dayNum, type: "save_detected" });
+        } else if (nightDeaths.length > 0) {
+          // Someone died — analyze if they were quiet or active
+          const chatInfo = analyzeChatBehavior(state);
+          const maxSp = Math.max(1, ...Object.values(chatInfo.speakCount || {}));
+          for (const dead of nightDeaths) {
+            const deadSpeak = (chatInfo.speakCount[dead.id] || 0) / maxSp;
+            p.aiMemory.nightResultInference.push({
+              day: dayNum, type: "death", targetId: dead.id, wasActive: deadSpeak > 0.5
+            });
+          }
+        }
+      }
+    }
+
+    // ── Advanced: Read other players' role claims ──
+    if (hard && state.roleClaims) {
+      for (const [claimerId, claimedRole] of Object.entries(state.roleClaims)) {
+        const cid = Number(claimerId);
+        if (cid === p.id) continue;
+        p.aiMemory.otherClaims[cid] = claimedRole;
+        // If someone claims a role, slightly boost that role probability
+        if (p.aiMemory.roleProbs[cid] && p.aiMemory.roleProbs[cid][claimedRole] !== undefined) {
+          p.aiMemory.roleProbs[cid][claimedRole] *= 1.15;
+        }
+        // If two people claim the same role, one is lying — boost suspicion on both
+        for (const [otherId, otherRole] of Object.entries(state.roleClaims)) {
+          const oid = Number(otherId);
+          if (oid === cid || oid === p.id) continue;
+          if (otherRole === claimedRole) {
+            // Duplicate claim — one is lying, mild red boost for both
+            if (p.aiMemory.roleProbs[cid]) {
+              for (const role of Object.keys(p.aiMemory.roleProbs[cid])) {
+                if (roleMeta(role).faction === Faction.RED) {
+                  p.aiMemory.roleProbs[cid][role] *= 1.08;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // ── Advanced: Apply deduction chains ──
+    applyDeductionChains(state, p);
   }
 }
 
@@ -760,9 +987,12 @@ export function buildAiNightActions(state, opts = {}) {
           // Hard+: conservative early, aggressive late (more info = better aim)
           let activateChance = 0.6;
           if (hard) {
+            const sniperPhase = getGamePhase(state);
             const dayNum = state.dayNumber || 1;
             // Day 1: 30%, Day 2: 45%, Day 3+: 65%+
             activateChance = clamp(0.15 + dayNum * 0.15, 0.2, 0.75);
+            // Advanced: Late game boost
+            if (sniperPhase === "late") activateChance = clamp(activateChance + 0.15, 0.2, 0.85);
           }
           if (state.rng() < activateChance) {
             const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
@@ -870,7 +1100,9 @@ export function buildAiNightActions(state, opts = {}) {
           if (bestTarget) {
             const confidence = actor.aiMemory?.suspicion?.[bestTarget.id] ?? 0.5;
             // Day 1: need 70% confidence, Day 3+: 50% is enough
-            const threshold = clamp(0.75 - (state.dayNumber || 1) * 0.08, 0.4, 0.75);
+            let threshold = clamp(0.75 - (state.dayNumber || 1) * 0.08, 0.4, 0.75);
+            // Advanced: Late game = lower threshold
+            if (getGamePhase(state) === "late") threshold = clamp(threshold - 0.1, 0.3, 0.75);
             if (confidence >= threshold) {
               actions.push({ actorId: actor.id, type: "COWBOY_GAMBLE", targetId: bestTarget.id });
             }
@@ -1310,7 +1542,14 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         const s = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
         if (s > topSusp) topSusp = s;
       }
-      if (topSusp < 0.35 && state.policeRevealedRed === null && state.rng() < 0.15) {
+      // Advanced: Game phase + personality affect abstain rate
+      const votePhase = getGamePhase(state);
+      let abstainChance = 0.15;
+      if (votePhase === "early") abstainChance = 0.25;
+      if (votePhase === "late") abstainChance = 0.05;
+      if (actor.aiMemory.personality === "cautious") abstainChance += 0.1;
+      if (actor.aiMemory.personality === "aggressive") abstainChance -= 0.08;
+      if (topSusp < 0.35 && state.policeRevealedRed === null && state.rng() < abstainChance) {
         // Abstain — low confidence, no police intel
         return;
       }
@@ -1430,6 +1669,17 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
           const withMe = votePatterns.votedTogether[t.id]?.[actor.id] || 0;
           if (withMe > 0 && actor.faction === Faction.BLUE) {
             s -= 0.05 * withMe;
+          }
+        }
+        // Advanced: Personality affects vote confidence
+        if (hard) {
+          ensureAdvancedMemory(actor);
+          if (actor.aiMemory.personality === "cautious") {
+            // Cautious: more suspicion-based, less jitter
+            s = clamp(s * 1.1, 0, 1);
+          } else if (actor.aiMemory.personality === "quiet") {
+            // Quiet: heavily suspicion-based
+            s = clamp(s * 1.15, 0, 1);
           }
         }
 
@@ -1628,6 +1878,42 @@ const CHAT_TEMPLATES = {
     (s) => `${s}: I just want to help the team find the truth.||${s}：我只是想幫大家找出真相。`,
     (s, t) => `${s}: Let me share my analysis — ${t} has been helpful, probably blue.||${s}：讓我分享我的分析，${t} 一直在幫忙，應該是藍方。`,
   ],
+  // Advanced: Role claiming system
+  roleClaim: {
+    blueClaim: [
+      (s, role, roleZh) => `${s}: I'm the ${role}, don't vote me!||${s}：我是${roleZh}，別投我！`,
+      (s, role, roleZh) => `${s}: I need to reveal — I'm the ${role}.||${s}：我必須公開了，我是${roleZh}。`,
+    ],
+    redFakeClaim: [
+      (s, role, roleZh) => `${s}: I'm the ${role}, trust me.||${s}：我是${roleZh}，相信我。`,
+      (s, role, roleZh) => `${s}: I haven't said this before, but I'm the ${role}.||${s}：我之前沒說過，但我是${roleZh}。`,
+    ],
+    challenge: [
+      (s, t, role, roleZh) => `${s}: ${t} can't be the ${role} — I'm the ${role}!||${s}：${t} 不可能是${roleZh}，我才是${roleZh}！`,
+      (s, t) => `${s}: I don't believe ${t}'s claim, it's suspicious.||${s}：我不相信 ${t} 的宣告，很可疑。`,
+    ],
+    support: [
+      (s, t) => `${s}: I believe ${t}'s claim, their behavior matches.||${s}：我相信 ${t} 的宣告，行為吻合。`,
+      (s, t, role, roleZh) => `${s}: ${t} is probably telling the truth about being ${role}.||${s}：${t} 說自己是${roleZh}應該是真的。`,
+    ],
+  },
+  // Advanced: Self-defense when accused
+  selfDefense: [
+    (s, accuser) => `${s}: ${accuser}, you're wrong about me. Check my voting record.||${s}：${accuser}，你搞錯了，看看我的投票紀錄。`,
+    (s, accuser) => `${s}: ${accuser}, I voted against the killer last round — did you?||${s}：${accuser}，我上回合投了殺手，你呢？`,
+    (s, accuser) => `${s}: ${accuser}, if I was the killer, why would I speak up?||${s}：${accuser}，如果我是殺手，我為什麼要發言？`,
+    (s, accuser) => `${s}: ${accuser}, stop pointing fingers without evidence!||${s}：${accuser}，沒證據別亂指！`,
+    (s, accuser) => `${s}: ${accuser}, you're deflecting — maybe YOU should be investigated.||${s}：${accuser}，你在轉移焦點吧？也許該查的是你。`,
+  ],
+  // Advanced: Police timed reveal
+  policeTimedReveal: [
+    (s, t) => `${s}: I've been waiting for the right time — ${t} is RED.||${s}：我等到了正確時機，${t} 是紅方。`,
+    (s, t) => `${s}: I'll reveal now: ${t} is confirmed blue, protect them.||${s}：我現在公開：${t} 確認是藍方，保護他。`,
+    (s) => `${s}: I'm the police. I'm revealing now because I might not survive tonight.||${s}：我是警察。我現在公開因為我可能活不過今晚。`,
+  ],
+  policeDeathDump: [
+    (s, info) => `${s}: Before I die — here's everything I know: ${info}||${s}：在我死之前，這是我知道的一切：${info}`,
+  ],
 };
 
 function pickTemplate(rng, templates) {
@@ -1649,12 +1935,20 @@ export function generateChatLines(state, maxLines = 6) {
   // Track who accused whom in this round for bandwagon detection (improvement 6)
   const accuseCounts = {}; // accuseCounts[targetId] = count of accuse lines
 
+  // Advanced: Game phase for chat tone adjustment
+  const gamePhase = hard ? getGamePhase(state) : "mid";
+
   for (const speaker of speakers) {
     if (lines.length >= maxLines) break;
     ensureAdvancedMemory(speaker);
 
     // Hard+: some speakers skip (not everyone talks every round)
-    if (hard && state.rng() < 0.15) {
+    // Advanced: Personality affects skip chance
+    let skipChance = 0.15;
+    if (hard && speaker.aiMemory.personality === "quiet") skipChance = 0.45;
+    else if (hard && speaker.aiMemory.personality === "aggressive") skipChance = 0.05;
+    else if (hard && speaker.aiMemory.personality === "social") skipChance = 0.05;
+    if (hard && state.rng() < skipChance) {
       if (hard) speaker.aiMemory.silentRounds = (speaker.aiMemory.silentRounds || 0) + 1;
       continue;
     }
@@ -1722,7 +2016,174 @@ export function generateChatLines(state, maxLines = 6) {
       }
     }
 
-    // ── Police strategic reveal ──
+    // ── Advanced: Role claiming system ──
+    if (hard && (state.dayNumber || 1) >= 2) {
+      const selfThreat = speaker.aiMemory.selfThreat || 0;
+      const powerRoles = new Set([Roles.POLICE.id, Roles.DOCTOR.id, Roles.AGENT?.id, Roles.PURIFIER.id, Roles.EXORCIST.id, Roles.RIOT_POLICE.id]);
+
+      // Blue claiming: power role, high threat, hasn't claimed
+      if (speaker.faction === Faction.BLUE && powerRoles.has(speaker.role) &&
+          !speaker.aiMemory.claimedRole && selfThreat > 0.5) {
+        // Personality affects claim chance
+        let claimChance = 0.4;
+        if (speaker.aiMemory.personality === "aggressive") claimChance = 0.55;
+        if (speaker.aiMemory.personality === "cautious") claimChance = 0.25;
+        if (gamePhase === "late") claimChance += 0.2;
+        if (state.rng() < claimChance) {
+          speaker.aiMemory.claimedRole = speaker.role;
+          state.roleClaims = state.roleClaims || {};
+          state.roleClaims[speaker.id] = speaker.role;
+          const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.roleClaim.blueClaim);
+          lines.push(tmpl(speaker.name, speaker.role, roleNameZh(speaker.role)));
+          continue;
+        }
+      }
+
+      // Red fake-claiming: killer, high threat, hasn't claimed
+      if (speaker.faction === Faction.RED && speaker.role === Roles.KILLER.id &&
+          !speaker.aiMemory.claimedRole && selfThreat > 0.6) {
+        let fakeClaimChance = 0.15;
+        if (gamePhase === "late") fakeClaimChance = 0.3;
+        if (speaker.aiMemory.personality === "aggressive") fakeClaimChance += 0.1;
+        if (state.rng() < fakeClaimChance) {
+          const fakeRole = state.rng() < 0.5 ? Roles.CIVILIAN.id : Roles.DOCTOR.id;
+          speaker.aiMemory.claimedRole = fakeRole;
+          state.roleClaims = state.roleClaims || {};
+          state.roleClaims[speaker.id] = fakeRole;
+          const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.roleClaim.redFakeClaim);
+          lines.push(tmpl(speaker.name, fakeRole, roleNameZh(fakeRole)));
+          continue;
+        }
+      }
+
+      // Counter-claim: someone claimed MY real role
+      if (state.roleClaims && !speaker.aiMemory.claimedRole) {
+        for (const [claimerId, claimedRole] of Object.entries(state.roleClaims)) {
+          const cid = Number(claimerId);
+          if (cid === speaker.id) continue;
+          if (claimedRole === speaker.role && speaker.faction === Faction.BLUE) {
+            // Someone claimed my role — counter-claim!
+            speaker.aiMemory.claimedRole = speaker.role;
+            state.roleClaims[speaker.id] = speaker.role;
+            const claimer = getPlayer(state, cid);
+            if (claimer?.alive) {
+              const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.roleClaim.challenge);
+              lines.push(tmpl(speaker.name, claimer.name, speaker.role, roleNameZh(speaker.role)));
+              continue;
+            }
+          }
+        }
+      }
+
+      // Support or challenge other claims
+      if (state.roleClaims && state.rng() < 0.2) {
+        for (const [claimerId, claimedRole] of Object.entries(state.roleClaims)) {
+          const cid = Number(claimerId);
+          if (cid === speaker.id) continue;
+          const claimer = getPlayer(state, cid);
+          if (!claimer?.alive) continue;
+          const claimerSusp = speaker.aiMemory?.suspicion?.[cid] ?? 0.5;
+          if (claimerSusp > 0.6 && state.rng() < 0.4) {
+            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.roleClaim.challenge);
+            lines.push(tmpl(speaker.name, claimer.name, claimedRole, roleNameZh(claimedRole)));
+            break;
+          } else if (claimerSusp < 0.35 && state.rng() < 0.3) {
+            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.roleClaim.support);
+            lines.push(tmpl(speaker.name, claimer.name, claimedRole, roleNameZh(claimedRole)));
+            break;
+          }
+        }
+        if (lines.length > 0 && lines[lines.length - 1].includes(speaker.name + ":")) continue;
+      }
+
+      // Late game: blue players who haven't claimed should claim
+      if (gamePhase === "late" && speaker.faction === Faction.BLUE &&
+          !speaker.aiMemory.claimedRole && powerRoles.has(speaker.role) && state.rng() < 0.5) {
+        speaker.aiMemory.claimedRole = speaker.role;
+        state.roleClaims = state.roleClaims || {};
+        state.roleClaims[speaker.id] = speaker.role;
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.roleClaim.blueClaim);
+        lines.push(tmpl(speaker.name, speaker.role, roleNameZh(speaker.role)));
+        continue;
+      }
+    }
+
+    // ── Advanced: Strategic police timed reveal ──
+    if (hard && speaker.role === Roles.POLICE.id) {
+      const selfThreat = speaker.aiMemory.selfThreat || 0;
+      const dayNum = state.dayNumber || 1;
+
+      // Track investigation results from private logs
+      const privateLogs = state.privateLogs?.police || [];
+      for (const log of privateLogs) {
+        if (typeof log !== "string") continue;
+        const redMatch = log.match(/Investigation result: (.+) is RED/);
+        const blueMatch = log.match(/Investigation result: (.+) is BLUE/);
+        if (redMatch) {
+          const targetName = redMatch[1];
+          const targetPlayer = state.players.find((pl) => pl && pl.name === targetName);
+          if (targetPlayer && !speaker.aiMemory.investigationResults.some((r) => r.targetId === targetPlayer.id)) {
+            speaker.aiMemory.investigationResults.push({ targetId: targetPlayer.id, result: "red", day: dayNum });
+          }
+        }
+        if (blueMatch) {
+          const targetName = blueMatch[1];
+          const targetPlayer = state.players.find((pl) => pl && pl.name === targetName);
+          if (targetPlayer && !speaker.aiMemory.investigationResults.some((r) => r.targetId === targetPlayer.id)) {
+            speaker.aiMemory.investigationResults.push({ targetId: targetPlayer.id, result: "blue", day: dayNum });
+          }
+        }
+      }
+
+      const results = speaker.aiMemory.investigationResults;
+      const redResults = results.filter((r) => r.result === "red");
+      const blueResults = results.filter((r) => r.result === "blue");
+
+      // Day 1: NEVER reveal
+      if (dayNum >= 2) {
+        // About to die: dump all info
+        if (selfThreat > 0.6 && results.length > 0) {
+          const infoParts = results.map((r) => {
+            const tp = getPlayer(state, r.targetId);
+            return tp ? `${tp.name}=${r.result.toUpperCase()}` : "";
+          }).filter(Boolean);
+          if (infoParts.length > 0) {
+            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeDeathDump);
+            lines.push(tmpl(speaker.name, infoParts.join(", ")));
+            continue;
+          }
+        }
+        // Day 2: reveal only if confirmed red AND selfThreat > 0.3
+        if (dayNum === 2 && redResults.length > 0 && selfThreat > 0.3) {
+          const redTarget = getPlayer(state, redResults[0].targetId);
+          if (redTarget?.alive) {
+            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeTimedReveal);
+            lines.push(tmpl(speaker.name, redTarget.name));
+            continue;
+          }
+        }
+        // Day 3+: reveal if confirmed red exists
+        if (dayNum >= 3 && redResults.length > 0 && state.rng() < 0.8) {
+          const redTarget = getPlayer(state, redResults[0].targetId);
+          if (redTarget?.alive) {
+            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeTimedReveal);
+            lines.push(tmpl(speaker.name, redTarget.name));
+            continue;
+          }
+        }
+        // Also share blue confirmations in mid/late game
+        if (gamePhase !== "early" && blueResults.length > 0 && state.rng() < 0.3) {
+          const blueTarget = getPlayer(state, blueResults[0].targetId);
+          if (blueTarget?.alive) {
+            const tmpl = CHAT_TEMPLATES.policeTimedReveal[1]; // "confirmed blue, protect them"
+            lines.push(tmpl(speaker.name, blueTarget.name));
+            continue;
+          }
+        }
+      }
+    }
+
+    // ── Police strategic reveal (legacy, kept for non-timed reveals) ──
     if (speaker.role === Roles.POLICE.id && redFound?.alive && state.rng() < 0.8) {
       const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeReveal);
       lines.push(tmpl(speaker.name, redFound.name));
@@ -1760,15 +2221,20 @@ export function generateChatLines(state, maxLines = 6) {
     if (hard && isRedSpeaker) {
       const deceptionRoll = state.rng();
 
-      // 20%: Strategic deflection (say nothing useful)
-      if (deceptionRoll < 0.2) {
+      // Advanced: Game phase adjusts red strategy
+      // Early: more deflect, less bluff; Late: more bluff, more fake claims
+      const deflectThreshold = gamePhase === "early" ? 0.3 : gamePhase === "late" ? 0.1 : 0.2;
+      const bluffThreshold = deflectThreshold + (gamePhase === "late" ? 0.35 : 0.25);
+
+      // Strategic deflection
+      if (deceptionRoll < deflectThreshold) {
         const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.deflect);
         lines.push(tmpl(speaker.name));
         continue;
       }
 
-      // 25%: Bluff — aggressively accuse an innocent
-      if (deceptionRoll < 0.45) {
+      // Bluff — aggressively accuse an innocent
+      if (deceptionRoll < bluffThreshold) {
         const innocents = allCandidates.filter((t) => t.faction !== Faction.RED);
         const bluffTarget = randomChoice(innocents.length ? innocents : allCandidates, state.rng);
         if (bluffTarget) {
@@ -1779,8 +2245,8 @@ export function generateChatLines(state, maxLines = 6) {
         }
       }
 
-      // 15%: Defend a red ally subtly
-      if (deceptionRoll < 0.6) {
+      // Defend a red ally subtly
+      if (deceptionRoll < bluffThreshold + 0.15) {
         const allies = allCandidates.filter((t) => t.role === Roles.KILLER.id);
         const defendAlly = randomChoice(allies, state.rng);
         if (defendAlly) {
@@ -1822,7 +2288,7 @@ export function generateChatLines(state, maxLines = 6) {
       }
     }
 
-    // ── Standard chat (improved with template variety) ──
+    // ── Standard chat (improved with template variety + game phase + personality) ──
     const target =
       state.rng() < 0.5
         ? randomChoice(allCandidates, state.rng)
@@ -1833,7 +2299,22 @@ export function generateChatLines(state, maxLines = 6) {
           );
     const useTarget = target;
     const suspicion = speaker.aiMemory?.suspicion?.[useTarget?.id] ?? 0.5;
-    const tone = suspicion > 0.7 ? "accuse" : suspicion < 0.3 ? "defend" : "wonder";
+    let tone = suspicion > 0.7 ? "accuse" : suspicion < 0.3 ? "defend" : "wonder";
+    // Advanced: Game phase adjusts tone
+    if (hard) {
+      if (gamePhase === "early") {
+        // Early game: more wonder, fewer accusations
+        if (tone === "accuse" && state.rng() < 0.4) tone = "wonder";
+      } else if (gamePhase === "late") {
+        // Late game: more aggressive
+        if (tone === "wonder" && state.rng() < 0.4) tone = "accuse";
+      }
+      // Advanced: Personality adjusts tone
+      const personality = speaker.aiMemory.personality;
+      if (personality === "aggressive" && tone === "wonder" && state.rng() < 0.35) tone = "accuse";
+      if (personality === "cautious" && tone === "accuse" && state.rng() < 0.3) tone = "wonder";
+      if (personality === "social" && tone !== "wonder" && state.rng() < 0.2) tone = "wonder";
+    }
     const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES[tone]);
     const tName = (tone === "defend" && !useTarget)
       ? randomChoice(allCandidates, state.rng)?.name ?? "someone"
@@ -1895,6 +2376,45 @@ export function generateChatLines(state, maxLines = 6) {
       }
     }
     for (const rl of replyLines) lines.push(rl);
+  }
+
+  // ── Advanced: Self-defense when accused ──
+  if (hard && lines.length > 0) {
+    const defenseLines = [];
+    let defenseCount = 0;
+    for (const line of lines) {
+      if (defenseCount >= 2) break;
+      const enPart = line.split("||")[0] || line;
+      const lowerEn = enPart.toLowerCase();
+      const isAccusation = lowerEn.includes("suspicious") || lowerEn.includes("killer") ||
+        lowerEn.includes("vote them") || lowerEn.includes("doesn't add up") ||
+        lowerEn.includes("acting weird") || lowerEn.includes("don't trust");
+      if (!isAccusation) continue;
+
+      // Find who was accused
+      let accuserName = null;
+      let accusedPlayer = null;
+      for (const p of state.players) {
+        if (!p) continue;
+        if (enPart.startsWith(p.name + ":")) accuserName = p.name;
+      }
+      for (const p of state.players) {
+        if (!p) continue;
+        if (p.name === accuserName) continue;
+        if (enPart.includes(p.name) && p.alive && !p.isHuman) {
+          accusedPlayer = p;
+          break;
+        }
+      }
+      if (!accuserName || !accusedPlayer) continue;
+      if (state.rng() >= 0.5) continue; // 50% chance to defend
+
+      ensureAdvancedMemory(accusedPlayer);
+      const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.selfDefense);
+      defenseLines.push(tmpl(accusedPlayer.name, accuserName));
+      defenseCount++;
+    }
+    for (const dl of defenseLines) lines.push(dl);
   }
 
   return lines;
