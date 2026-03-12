@@ -24,49 +24,49 @@ npm start          # serves http://localhost:3001
 - 夜/日節奏固定，白天多數/最高票處決，陣營私聊（日夜皆有）即時同步隊友夜間行動。
 - 四種 AI 難度，含行為分析、欺騙策略、貝氏信念系統、個性系統、角色宣告、情緒反應。
 
-## Project Structure
+## Project Structure / 專案結構
 
-| File | Description |
+| 檔案 File | 說明 Description |
 |------|-------------|
-| `server.js` | Node.js HTTP + WebSocket server, room/lobby management, multiplayer game flow |
-| `src/engine.js` | Game engine: night resolution, vote resolution, victory checks |
-| `src/ai.js` | AI decision system: beliefs, night actions, voting, chat generation |
-| `src/state.js` | Game state initialization, player/death management, faction counts |
-| `src/roles.js` | Role/faction/theme/phase definitions, role metadata |
-| `src/view.js` | Per-player view builder (hides info based on role visibility rules) |
-| `src/rng.js` | Seeded RNG for deterministic replays |
-| `src/main.js` | Single-player client UI renderer |
-| `src/multi.js` | Multiplayer client UI renderer |
-| `index.html` | Single-player entry page |
-| `multiplayer.html` | Multiplayer entry page |
-| `styles.css` | Shared stylesheet |
-| `tests/simulate.js` | Headless simulation for win-rate analysis |
+| `server.js` | Node.js HTTP + WebSocket 伺服器，房間/大廳管理，多人遊戲流程 |
+| `src/engine.js` | 遊戲引擎：夜晚結算、投票結算、勝利判定 |
+| `src/ai.js` | AI 決策系統：信念、夜間行動、投票、聊天生成 |
+| `src/state.js` | 遊戲狀態初始化、玩家/死亡管理、陣營人數統計 |
+| `src/roles.js` | 角色/陣營/主題/階段定義、角色元資料 |
+| `src/view.js` | 玩家視角產生器（依角色可見性規則隱藏資訊） |
+| `src/rng.js` | 種子亂數產生器，確保可重現的遊戲結果 |
+| `src/main.js` | 單人模式客戶端 UI 渲染器 |
+| `src/multi.js` | 多人模式客戶端 UI 渲染器 |
+| `index.html` | 單人模式入口頁面 |
+| `multiplayer.html` | 多人模式入口頁面 |
+| `styles.css` | 共用樣式表 |
+| `tests/simulate.js` | 無頭模擬測試，勝率分析工具 |
 
-## Multiplayer
+## Multiplayer / 多人模式
 
-### Setup
-One process serves both static files and WebSocket:
+### 啟動 Setup
+一個程序同時提供靜態檔案與 WebSocket 服務：
 ```bash
 npm install && npm start
 ```
-Open `http://<host>:3001/multiplayer.html` (use `https/wss` when deployed behind TLS).
+開啟 `http://<host>:3001/multiplayer.html`（部署在 TLS 後請使用 `https/wss`）。
 
-### Flow
-1. Set WS URL and join with a name (first joiner becomes Host).
-2. Host picks a theme and clicks **Start**.
-3. Night phase: players submit actions within the timer; unsubmitted players are auto-resolved by AI.
-4. Day phase: faction chats (AI generates strategic discussion in private channels), public chat, then vote. Host can click Resolve or wait for timer.
-5. Use **Restart** then **Start** for a new match.
+### 遊戲流程 Flow
+1. 設定 WS URL 並輸入名稱加入（第一位加入者成為房主 Host）。
+2. 房主選擇主題後點擊 **開始**。
+3. 夜晚階段：玩家在計時器內提交行動；未提交的玩家由 AI 自動執行。
+4. 白天階段：陣營私聊（AI 在私人頻道產生策略性討論）、公開聊天、然後投票。房主可點擊「結算」或等待計時器結束。
+5. 使用 **重新開始** 再點 **開始** 以進行新一局。
 
-### Disconnect Handling
-When a player disconnects mid-game, their seat is taken over by the AI system. The player name is suffixed with `(AI)`. The AI difficulty for multiplayer is fixed at **Hard**.
+### 斷線處理 Disconnect Handling
+玩家中途斷線時，AI 系統接管該座位，名稱後綴顯示 `(AI)`。多人模式的 AI 難度固定為 **Hard（困難）**。
 
-### Real-time Ally Visibility
-During the night phase, same-role allies (killers/police/grudge beasts) can see each other's action choices in real time, both before and after resolution. Actions are persisted in faction chat so they survive page refreshes.
+### 即時隊友可見性 Real-time Ally Visibility
+夜晚階段，同陣營隊友（殺手/警察/怨靈獸）可即時看到彼此的行動選擇，結算前後皆可見。行動記錄保存在陣營聊天中，重新整理頁面也不會遺失。
 
-### WebSocket Protocol
+### WebSocket 協議 Protocol
 
-**Client -> Server:**
+**客戶端 → 伺服器 Client -> Server:**
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -79,7 +79,7 @@ During the night phase, same-role allies (killers/police/grudge beasts) can see 
 | `type: "resolve"` | Host | Force-resolve current phase |
 | `type: "restart"` | Host | Reset room for new game |
 
-**Server -> Client:**
+**伺服器 → 客戶端 Server -> Client:**
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -95,111 +95,111 @@ During the night phase, same-role allies (killers/police/grudge beasts) can see 
 | `type: "timer"` | UI | `label`, `remaining` (seconds) |
 | `type: "error"` | Error | `message` |
 
-## AI Difficulty System
+## AI Difficulty System / AI 難度系統
 
-All AI decisions are purely algorithmic (no external LLM). A seeded RNG ensures deterministic replays.
+所有 AI 決策皆為純演算法（不使用外部 LLM）。種子亂數確保可重現的遊戲結果。
 
-### Difficulty Levels
+### 難度等級 Difficulty Levels
 
-| Parameter | Easy | Normal | Hard | Nightmare |
+| 參數 Parameter | 簡單 Easy | 普通 Normal | 困難 Hard | 惡夢 Nightmare |
 |-----------|------|--------|------|-----------|
-| Suspicion scaling | 0.6x | 1.0x | 1.3x | 1.6x |
-| Random voting | 80% | 60% | 20% | 5% |
-| Follow police reveal | 50% | 70% | 95% | 98% |
-| Red team deception | - | - | Yes | Yes |
-| Behavioral analysis | - | - | Yes | Yes |
+| 嫌疑倍率 Suspicion scaling | 0.6x | 1.0x | 1.3x | 1.6x |
+| 隨機投票 Random voting | 80% | 60% | 20% | 5% |
+| 跟隨警察揭露 Follow police reveal | 50% | 70% | 95% | 98% |
+| 紅方欺騙 Red team deception | - | - | 有 Yes | 有 Yes |
+| 行為分析 Behavioral analysis | - | - | 有 Yes | 有 Yes |
 
-### Belief System
-Each AI maintains a Bayesian probability distribution over every other player's possible role (`aiMemory.roleProbs`). Updated each round based on observable signals:
-- Chat mentions, vote flips, vote order, bandwagon pressure
-- Police-revealed red confirmation
-- Hard+: voting pattern consistency, vote-together pair detection, silence analysis, death correlation
+### 信念系統 Belief System
+每個 AI 維護一組貝氏機率分佈，涵蓋所有其他玩家可能的角色（`aiMemory.roleProbs`）。每回合根據可觀察的訊號更新：
+- 聊天提及、投票翻轉、投票順序、跟風壓力
+- 警察揭露的紅方確認
+- Hard+：投票模式一致性、共同投票配對檢測、沉默分析、死亡相關性
 
-### Hard+ Enhancements
+### Hard+ 強化系統 Hard+ Enhancements
 
-**Core Systems:**
-- **Behavioral analysis**: Tracks cross-day voting graphs, mutual voting pairs, and chat activity patterns.
-- **Self-threat awareness**: Each AI tracks how likely they are to be voted out (vote count, mentions, police reveal).
-- **Contextual chat**: Bilingual (EN/ZH) templates that reference past votes, vote flips, and deaths.
-- **Cross-round memory**: Records who accused/defended whom each day; detects statement contradictions (accuse then defend same person → suspicious).
-- **Death attribution**: Analyzes who pushed against night-killed players in prior day chat to infer killer behavior.
-- **Emotion system**: AI reacts to events — angry after being voted, defensive under pressure, grateful when saved, anxious when threatened.
-- **AI personality**: 4 persistent types (aggressive/cautious/social/quiet) assigned per player, affecting chat frequency, accusation style, and vote confidence.
-- **Game phase awareness**: Early (gather info, cautious) → mid (push votes, reveal) → late (all-in, desperate plays). Strategy adapts automatically.
-- **Logical deduction chains**: Trust propagation from confirmed blues, suspicion propagation from confirmed reds, death pattern analysis, elimination logic.
-- **Night result inference**: Deduces saves from night outcomes; boosts doctor/agent probability for likely protectors.
+**核心系統 Core Systems:**
+- **行為分析 Behavioral analysis**：追蹤跨天投票圖譜、互投配對、聊天活躍度模式。
+- **自身威脅感知 Self-threat awareness**：AI 追蹤自己被投出的可能性（得票數、被提及次數、警察揭露）。
+- **情境聊天 Contextual chat**：雙語（EN/ZH）模板，引用過往投票、翻票、死亡事件。
+- **跨回合記憶 Cross-round memory**：記錄每天誰指控/辯護了誰；偵測矛盾言論（先指控再辯護同一人 → 可疑）。
+- **死亡歸因 Death attribution**：分析誰在白天推動處決了夜晚被殺的玩家，推斷殺手行為。
+- **情緒系統 Emotion system**：AI 對事件產生情緒反應 — 被投票後憤怒、被壓力逼迫時防禦、被救後感激、受威脅時焦慮。
+- **AI 個性 Personality**：4 種持久型人格（激進/謹慎/社交/沉默），影響聊天頻率、指控風格、投票信心。
+- **遊戲階段感知 Game phase awareness**：前期（蒐集資訊、謹慎）→ 中期（推票、揭露）→ 後期（全力出擊、孤注一擲）。策略自動調整。
+- **邏輯推理鏈 Deduction chains**：從已確認藍方傳播信任、從已確認紅方傳播嫌疑、死亡模式分析、消去法推理。
+- **夜間結果推斷 Night result inference**：從夜晚結果推斷救援；提高醫生/特務被推測為保護者的機率。
 
-**Chat & Social:**
-- **Role claiming (跳車)**: Blue power roles claim under threat (Day 2+); red killers fake-claim civilian/doctor; automatic counter-claims when someone claims your real role.
-- **Responsive chat**: AI replies to others' accusations with agree/disagree/question based on own beliefs.
-- **Bandwagon & counter**: When 3+ accuse the same person, others pile on (60%) or counter-defend (30%).
-- **Self-defense**: Accused AI responds with evidence-based rebuttals referencing their voting record.
-- **Red silence strategy**: Killers occasionally stay silent to avoid incrimination; forced to speak after 2 silent rounds.
-- **Fake police claim**: Rare killer strategy (8%, once per game) to frame a blue player by faking a police investigation result.
-- **Trust building**: Red AI defends genuinely blue players to build credibility before striking.
-- **Strategic last words**: Dying AI leaves role-aware messages — blue accuse/defend, red bluff/frame, green threaten. Police dump investigation results.
-- **Faction chat (day + night)**: Private channel discussion for killer/police/grudge — target planning, threat warnings, vote coordination, investigation sharing.
+**聊天與社交 Chat & Social:**
+- **角色宣告（跳車）Role claiming**：藍方特殊職業在受威脅時宣告身份（第 2 天起）；紅方殺手假冒平民/醫生；當有人宣告你的真實角色時自動反駁。
+- **回應式聊天 Responsive chat**：AI 根據自身信念對他人指控回覆同意/反對/質疑。
+- **跟風與反駁 Bandwagon & counter**：當 3 人以上指控同一人時，其他人跟風（60%）或反駁辯護（30%）。
+- **自我辯護 Self-defense**：被指控的 AI 以投票記錄為證據進行反駁。
+- **紅方沉默策略 Red silence**：殺手偶爾保持沉默避免露餡；連續沉默 2 輪後強制發言。
+- **假警察宣告 Fake police claim**：殺手罕見策略（8%，每局一次），偽造警察調查結果來陷害藍方。
+- **信任建立 Trust building**：紅方 AI 先為真正的藍方辯護以建立可信度，再伺機出手。
+- **策略遺言 Strategic last words**：瀕死 AI 留下角色相關訊息 — 藍方指控/辯護、紅方虛張/栽贓、綠方威脅。警察傾倒所有調查結果。
+- **陣營私聊（日夜皆有）Faction chat**：殺手/警察/怨靈獸私人頻道討論 — 目標規劃、威脅預警、投票協調、調查分享。
 
-**Vote Strategy:**
-- **Vote timing awareness**: Second-pass bandwagon voting toward consensus targets.
-- **Strategic abstaining**: Low-confidence blue AI may abstain rather than random-vote.
-- **Vote explanation**: AI explains vote reasoning in chat after voting.
-- **Vote scatter**: Killers coordinate to split votes across different targets.
+**投票策略 Vote Strategy:**
+- **投票時機感知 Vote timing**：第二輪跟風投票趨向共識目標。
+- **策略性棄權 Strategic abstaining**：低信心藍方 AI 可能棄權而非隨機投票。
+- **投票解釋 Vote explanation**：AI 投票後在聊天中解釋投票理由。
+- **分散投票 Vote scatter**：殺手協調分散票數到不同目標。
 
-**Blue Team (Police Faction):**
-- **Police**: Smart investigation targeting; strategic reveal timing (never Day 1, dumps all info when about to die).
-- **Doctor**: Self-protects based on threat level; anti-pattern avoids re-protecting same person (unless saved); predicts killer targets.
-- **Agent**: Predicts killer targets (active speakers, likely police, previously-saved players) and protects them.
-- **Heavenly Fiend**: Absorb mode mirrors agent logic; charge mode prioritizes confirmed killer-probability targets.
-- **Riot Police**: Saves smoke grenades for high-confidence red targets; won't waste on uncertain picks.
-- **Cowboy**: Only shoots when confidence exceeds threshold; more aggressive in late game.
-- **Exorcist**: Cautious chain strikes — only targets high red-probability players; more mistakes = higher confidence required.
-- **Purifier**: Prioritizes cleansing killers, necromancers (wipes souls), and police-revealed reds.
-- **Brat**: Follows the majority vote to blend in; doesn't draw attention before first death.
+**藍方（警察陣營）Blue Team:**
+- **警察 Police**：智慧調查選擇；策略性揭露時機（第 1 天不揭露，瀕死時傾倒所有情報）。
+- **醫生 Doctor**：根據威脅程度自保；避免重複保護同一人（除非成功救援）；預測殺手目標。
+- **特務 Agent**：預測殺手目標（活躍發言者、疑似警察、曾被救者）並保護。
+- **天煞 Heavenly Fiend**：吸收模式模仿特務邏輯；充能模式優先射擊高殺手機率目標。
+- **防暴警察 Riot Police**：煙霧彈只用在高信心紅方目標；不浪費在不確定的對象。
+- **牛仔 Cowboy**：信心超過門檻才開槍；後期更為激進。
+- **驅魔人 Exorcist**：謹慎連鎖攻擊 — 只對高紅方機率玩家出手；誤擊越多門檻越高。
+- **除靈師 Purifier**：優先淨化殺手、死靈（清除靈魂）、警察揭露的紅方。
+- **屁孩 Brat**：跟隨多數票以融入人群；第一次死亡前不引人注目。
 
-**Red Team (Killer Faction):**
-- **Killer**: Avoids protected targets, prioritizes active speakers and police; target rotation (skips saved targets, varies activity profiles).
-- **Sniper**: Conservative early game (30% Day 1), aggressive once intel accumulates (65%+ Day 3).
-- **Terrorist**: Holds bomb when safe, triggers when self-threat is high (about to be voted out).
-- **Kidnapper**: Targets high-value blue (doctor > police > agent) to disable them; never kidnaps killer allies.
-- **Arsonist**: Patiently marks 3+ targets before igniting; marks high-value blue; panic-ignites when threatened.
-- **Vine Demon**: Seeds targets most likely to be touched by police investigation (high suspicion + high blue probability).
-- **Nightmare Demon**: Prioritizes civilians/brats for instant kills; targets uncertain roles for intel gathering.
-- **Necromancer**: Saves souls for 3+ (stronger effect); only uses 2 souls when about to die.
+**紅方（殺手陣營）Red Team:**
+- **殺手 Killer**：避開被保護目標，優先活躍發言者與警察；目標輪替（跳過被救者、變換活躍度特徵）。
+- **狙擊手 Sniper**：前期保守（第 1 天 30%），情報累積後轉為激進（第 3 天 65%+）。
+- **恐怖份子 Terrorist**：安全時按兵不動，自身威脅高時（即將被投出）引爆。
+- **綁匪 Kidnapper**：鎖定高價值藍方（醫生 > 警察 > 特務）使其無法行動；永不綁架殺手隊友。
+- **縱火狂 Arsonist**：耐心標記 3+ 目標再引燃；標記高價值藍方；受威脅時恐慌引燃。
+- **藤魔 Vine Demon**：種子目標選擇最可能被警察調查的人（高嫌疑 + 高藍方機率）。
+- **夢魔 Nightmare Demon**：優先擊殺平民/屁孩；對不確定角色進行情報蒐集。
+- **死靈 Necromancer**：儲存靈魂至 3+（更強效果）；只在瀕死時使用 2 靈魂。
 
-**Green Team (Third Party):**
-- **Grudge Beast (judging)**: Avoids judging civilians (causes grudge beast death); prefers judging red targets (safe + useful info to police).
-- **Grudge Beast (berserk)**: Tracks which faction triggered berserk and hunts that faction; prioritizes active speakers.
-- **Zombie**: Tracks bite history — prioritizes finishing pending conversions; avoids likely-protected targets.
+**綠方（第三方）Green Team:**
+- **怨靈獸（審判）Grudge Beast (judging)**：避免審判平民（會導致怨靈獸死亡）；偏好審判紅方（安全且情報給警察）。
+- **怨靈獸（狂暴）Grudge Beast (berserk)**：追蹤觸發狂暴的陣營並追殺；優先活躍發言者。
+- **喪屍 Zombie**：追蹤咬擊歷史 — 優先完成待轉化目標；避開可能被保護的目標。
 
-### Single-player vs Multiplayer AI
-- Single-player: difficulty is chosen at game creation.
-- Multiplayer: fixed at Hard. When a player disconnects, AI takes over their seat at the same difficulty.
+### 單人 vs 多人 AI Single-player vs Multiplayer AI
+- 單人模式：難度在建立遊戲時選擇。
+- 多人模式：固定為 Hard（困難）。玩家斷線時，AI 以相同難度接管該座位。
 
-## Gameplay Loop
+## Gameplay Loop / 遊戲流程
 
-### Night Phase
-1. **Control actions** resolve first: smoke (Riot Police), purify (Purifier), kidnap (Kidnapper) — these block targets from acting.
-2. **Remaining actions** resolve: kills, protections, investigations, bites, etc.
-3. **Protection stack**: Agent shield > Fiend absorb > Doctor revive. Unstoppable causes bypass all.
-4. **Deaths resolve**: delayed kills (cowboy, necromancer) apply after instant kills.
-5. **Zombie conversions**: pending bites convert at next night start.
+### 夜晚階段 Night Phase
+1. **控制行動**優先結算：煙霧（防暴警察）、淨化（除靈師）、綁架（綁匪）— 這些會阻止目標行動。
+2. **其餘行動**結算：擊殺、保護、調查、咬擊等。
+3. **保護堆疊**：特務護盾 > 天煞吸收 > 醫生救治。不可阻擋的攻擊繞過所有保護。
+4. **死亡結算**：延遲擊殺（牛仔、死靈）在即時擊殺之後生效。
+5. **喪屍轉化**：待轉化咬擊在下一個夜晚開始時轉化。
 
-### Day Phase
-- AI-generated bilingual chat lines appear in public log (emotion-driven, responsive, with accusations/defenses/role claims).
-- Private faction channels (day + night): killers / police / grudge beasts / spectators. AI discusses targets, threats, and vote coordination.
-- Players discuss and vote.
+### 白天階段 Day Phase
+- AI 產生的雙語聊天出現在公開日誌中（情緒驅動、回應式、含指控/辯護/角色宣告）。
+- 陣營私人頻道（日夜皆有）：殺手/警察/怨靈獸/觀眾。AI 討論目標、威脅、投票協調。
+- 玩家討論並投票。
 
-### Last Words
-- Executed or night-killed players may leave last words (unless death type forbids it).
-- Hard AI generates strategic last words: blue players accuse suspects or defend allies, red players bluff and frame innocents, police dump investigation results, green players threaten.
+### 遺言 Last Words
+- 被處決或夜殺的玩家可以留下遺言（除非死亡類型禁止）。
+- Hard AI 產生策略性遺言：藍方指控嫌疑人或辯護隊友、紅方虛張聲勢或栽贓無辜、警察傾倒調查結果、綠方威脅。
 
-### Vote Phase
-- Majority vote (>50% of eligible voters) executes the target.
-- If no majority, the player with the most votes is executed.
-- Brat revives on first execution (revealed, loses future voting power).
+### 投票階段 Vote Phase
+- 多數票（>50% 有投票權的玩家）處決目標。
+- 若無多數票，最高票者被處決。
+- 屁孩第一次被處決時復活（曝光，失去未來投票權）。
 
-## Victory Conditions
+## Victory Conditions / 勝利條件 (EN)
 
 | Condition | Winner |
 |-----------|--------|
@@ -210,18 +210,18 @@ Each AI maintains a Bayesian probability distribution over every other player's 
 | Berserk grudge + police == 0 | GREEN (Grudge) wins |
 | Non-berserk grudge alive when RED/BLUE would win | Grudge overrides |
 
-## Themes (Role Counts)
+## Themes / 主題（角色組成）
 
-| Theme | Composition |
+| 主題 Theme | 角色組成 Composition |
 |-------|-------------|
-| Good vs Evil | 4 Police, 4 Killers, Doctor, Sniper, 8 Civilians |
-| Counter-Terror Crisis | 4 Police, 4 Killers, Doctor, Sniper, Agent, Terrorist, 6 Civilians |
-| Wild West | 4 Police, 4 Killers, Doctor, Sniper, Cowboy, Kidnapper, 6 Civilians |
-| Doomsday Horror | 4 Police, 4 Killers, Doctor, Sniper, Cowboy, Kidnapper, Zombie, 5 Civilians |
-| Street Fury | 4 Police, 4 Killers, Riot Police, Arsonist, Agent, Terrorist, 6 Civilians |
-| Psychic Century | 4 Police, 4 Killers, Doctor, Sniper, Heavenly Fiend, Vine Demon, Brat, 5 Civilians |
-| Other Dimension | 4 Police, 4 Killers, Exorcist, Nightmare Demon, Purifier, Necromancer, 6 Civilians |
-| Final Judgement | 4 Police, 4 Killers, 3 Grudge Beasts, Cowboy, Sniper, 5 Civilians |
+| 正邪對決 Good vs Evil | 4 警察、4 殺手、醫生、狙擊手、8 平民 |
+| 反恐危機 Counter-Terror | 4 警察、4 殺手、醫生、狙擊手、特務、恐怖份子、6 平民 |
+| 狂野西部 Wild West | 4 警察、4 殺手、醫生、狙擊手、牛仔、綁匪、6 平民 |
+| 末日恐懼 Doomsday Horror | 4 警察、4 殺手、醫生、狙擊手、牛仔、綁匪、喪屍、5 平民 |
+| 街頭暴動 Street Fury | 4 警察、4 殺手、防暴警察、縱火狂、特務、恐怖份子、6 平民 |
+| 靈能世紀 Psychic Century | 4 警察、4 殺手、醫生、狙擊手、天煞、藤魔、屁孩、5 平民 |
+| 異次元 Other Dimension | 4 警察、4 殺手、驅魔人、夢魔、除靈師、死靈、6 平民 |
+| 終極審判 Final Judgement | 4 警察、4 殺手、3 怨靈獸、牛仔、狙擊手、5 平民 |
 
 ## Roles & Rules (EN)
 - **Civilian (BLUE)**: No night action.
@@ -278,13 +278,17 @@ Each AI maintains a Bayesian probability distribution over every other player's 
 | 狂暴怨靈 + 警察 == 0 | 綠方（怨靈）勝利 |
 | 紅/藍即將獲勝但仍有未狂暴怨靈存活 | 怨靈覆寫勝利 |
 
-## Simulation
+## Simulation / 模擬測試
 ```bash
-node tests/simulate.js 500                           # 500 games, default theme/difficulty
-node tests/simulate.js 500 GOOD_VS_EVIL hard         # specify theme and difficulty
-node tests/simulate.js 200 --compare                 # compare all 4 difficulties side-by-side
-node tests/simulate.js 100 GOOD_VS_EVIL hard --json  # machine-readable JSON output
-node tests/simulate.js --help                        # show all options and available themes
+node tests/simulate.js 500                           # 500 局，預設主題/難度
+node tests/simulate.js 500 GOOD_VS_EVIL hard         # 指定主題和難度
+node tests/simulate.js 200 --compare                 # 比較全部 4 種難度
+node tests/simulate.js 100 GOOD_VS_EVIL hard --json  # 機器可讀 JSON 輸出
+node tests/simulate.js 100 --zh                      # 中文版結果輸出
+node tests/simulate.js 100 --zh --compare            # 中文版難度比較
+node tests/simulate.js --help                        # 顯示所有選項及可用主題
 ```
+
+輸出內容包括：陣營勝率、遊戲長度分佈、勝利原因、各角色統計（勝率、存活率、夜殺率、票殺率），以及可選的難度比較表。
 
 Output includes: faction win rates, game length distribution, victory reasons, per-role stats (win rate, survival rate, night-kill rate, vote-kill rate), and optional difficulty comparison table.
