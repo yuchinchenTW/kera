@@ -15,14 +15,14 @@ npm start          # serves http://localhost:3001
 ## Overview (EN)
 - Social deduction game for 18 seats with multiple themed role mixes.
 - Single-player (1 human + 17 AI) and WebSocket multiplayer (multiple humans, AI fills remaining seats and takes over on disconnect).
-- Fixed night/day cadence, majority/plurality daytime votes, private faction chats with real-time ally action visibility.
-- Four AI difficulty levels with behavioral analysis, deception strategies, and Bayesian belief systems.
+- Fixed night/day cadence, majority/plurality daytime votes, private faction chats (day + night) with real-time ally action visibility.
+- Four AI difficulty levels with behavioral analysis, deception strategies, Bayesian belief systems, personality, role claiming, and emotional responses.
 
 ## 摘要（中文）
 - 18 人社交推理遊戲，多種主題角色組合。
 - 單人模式（1 人類 + 17 AI）與 WebSocket 多人模式（多名真人，AI 填補空位並在斷線時接管）。
-- 夜/日節奏固定，白天多數/最高票處決，陣營私聊即時同步隊友夜間行動。
-- 四種 AI 難度，含行為分析、欺騙策略、貝氏信念系統。
+- 夜/日節奏固定，白天多數/最高票處決，陣營私聊（日夜皆有）即時同步隊友夜間行動。
+- 四種 AI 難度，含行為分析、欺騙策略、貝氏信念系統、個性系統、角色宣告、情緒反應。
 
 ## Project Structure
 
@@ -55,7 +55,7 @@ Open `http://<host>:3001/multiplayer.html` (use `https/wss` when deployed behind
 1. Set WS URL and join with a name (first joiner becomes Host).
 2. Host picks a theme and clicks **Start**.
 3. Night phase: players submit actions within the timer; unsubmitted players are auto-resolved by AI.
-4. Day phase: faction chats, public chat, then vote. Host can click Resolve or wait for timer.
+4. Day phase: faction chats (AI generates strategic discussion in private channels), public chat, then vote. Host can click Resolve or wait for timer.
 5. Use **Restart** then **Start** for a new match.
 
 ### Disconnect Handling
@@ -121,20 +121,44 @@ Each AI maintains a Bayesian probability distribution over every other player's 
 - **Behavioral analysis**: Tracks cross-day voting graphs, mutual voting pairs, and chat activity patterns.
 - **Self-threat awareness**: Each AI tracks how likely they are to be voted out (vote count, mentions, police reveal).
 - **Contextual chat**: Bilingual (EN/ZH) templates that reference past votes, vote flips, and deaths.
+- **Cross-round memory**: Records who accused/defended whom each day; detects statement contradictions (accuse then defend same person → suspicious).
+- **Death attribution**: Analyzes who pushed against night-killed players in prior day chat to infer killer behavior.
+- **Emotion system**: AI reacts to events — angry after being voted, defensive under pressure, grateful when saved, anxious when threatened.
+- **AI personality**: 4 persistent types (aggressive/cautious/social/quiet) assigned per player, affecting chat frequency, accusation style, and vote confidence.
+- **Game phase awareness**: Early (gather info, cautious) → mid (push votes, reveal) → late (all-in, desperate plays). Strategy adapts automatically.
+- **Logical deduction chains**: Trust propagation from confirmed blues, suspicion propagation from confirmed reds, death pattern analysis, elimination logic.
+- **Night result inference**: Deduces saves from night outcomes; boosts doctor/agent probability for likely protectors.
+
+**Chat & Social:**
+- **Role claiming (跳車)**: Blue power roles claim under threat (Day 2+); red killers fake-claim civilian/doctor; automatic counter-claims when someone claims your real role.
+- **Responsive chat**: AI replies to others' accusations with agree/disagree/question based on own beliefs.
+- **Bandwagon & counter**: When 3+ accuse the same person, others pile on (60%) or counter-defend (30%).
+- **Self-defense**: Accused AI responds with evidence-based rebuttals referencing their voting record.
+- **Red silence strategy**: Killers occasionally stay silent to avoid incrimination; forced to speak after 2 silent rounds.
+- **Fake police claim**: Rare killer strategy (8%, once per game) to frame a blue player by faking a police investigation result.
+- **Trust building**: Red AI defends genuinely blue players to build credibility before striking.
+- **Strategic last words**: Dying AI leaves role-aware messages — blue accuse/defend, red bluff/frame, green threaten. Police dump investigation results.
+- **Faction chat (day + night)**: Private channel discussion for killer/police/grudge — target planning, threat warnings, vote coordination, investigation sharing.
+
+**Vote Strategy:**
+- **Vote timing awareness**: Second-pass bandwagon voting toward consensus targets.
+- **Strategic abstaining**: Low-confidence blue AI may abstain rather than random-vote.
+- **Vote explanation**: AI explains vote reasoning in chat after voting.
+- **Vote scatter**: Killers coordinate to split votes across different targets.
 
 **Blue Team (Police Faction):**
-- **Police**: Smarter investigation targeting using killer probability weighting.
-- **Doctor**: Self-protects more when self-threat is high; predicts killer targets (active speakers) to protect.
-- **Agent**: Predicts who killers will target (active speakers, likely police, previously-saved players) and protects them.
+- **Police**: Smart investigation targeting; strategic reveal timing (never Day 1, dumps all info when about to die).
+- **Doctor**: Self-protects based on threat level; anti-pattern avoids re-protecting same person (unless saved); predicts killer targets.
+- **Agent**: Predicts killer targets (active speakers, likely police, previously-saved players) and protects them.
 - **Heavenly Fiend**: Absorb mode mirrors agent logic; charge mode prioritizes confirmed killer-probability targets.
 - **Riot Police**: Saves smoke grenades for high-confidence red targets; won't waste on uncertain picks.
-- **Cowboy**: Only shoots when confidence exceeds a threshold (high early, relaxes over time).
+- **Cowboy**: Only shoots when confidence exceeds threshold; more aggressive in late game.
 - **Exorcist**: Cautious chain strikes — only targets high red-probability players; more mistakes = higher confidence required.
 - **Purifier**: Prioritizes cleansing killers, necromancers (wipes souls), and police-revealed reds.
 - **Brat**: Follows the majority vote to blend in; doesn't draw attention before first death.
 
 **Red Team (Killer Faction):**
-- **Killer**: Avoids likely-protected targets, prioritizes active speakers and police; vote scatter to avoid suspicion.
+- **Killer**: Avoids protected targets, prioritizes active speakers and police; target rotation (skips saved targets, varies activity profiles).
 - **Sniper**: Conservative early game (30% Day 1), aggressive once intel accumulates (65%+ Day 3).
 - **Terrorist**: Holds bomb when safe, triggers when self-threat is high (about to be voted out).
 - **Kidnapper**: Targets high-value blue (doctor > police > agent) to disable them; never kidnaps killer allies.
@@ -142,8 +166,6 @@ Each AI maintains a Bayesian probability distribution over every other player's 
 - **Vine Demon**: Seeds targets most likely to be touched by police investigation (high suspicion + high blue probability).
 - **Nightmare Demon**: Prioritizes civilians/brats for instant kills; targets uncertain roles for intel gathering.
 - **Necromancer**: Saves souls for 3+ (stronger effect); only uses 2 souls when about to die.
-- **Red deception chat**: Strategic deflection (20%), aggressive bluff accusations (25%), subtle ally defense (15%).
-- **Strategic betrayal**: Sells out exposed teammates only when they're likely dead anyway.
 
 **Green Team (Third Party):**
 - **Grudge Beast (judging)**: Avoids judging civilians (causes grudge beast death); prefers judging red targets (safe + useful info to police).
@@ -164,15 +186,18 @@ Each AI maintains a Bayesian probability distribution over every other player's 
 5. **Zombie conversions**: pending bites convert at next night start.
 
 ### Day Phase
-- AI-generated chat lines appear in public log.
-- Private faction channels: killers / police / grudge beasts / spectators.
+- AI-generated bilingual chat lines appear in public log (emotion-driven, responsive, with accusations/defenses/role claims).
+- Private faction channels (day + night): killers / police / grudge beasts / spectators. AI discusses targets, threats, and vote coordination.
 - Players discuss and vote.
+
+### Last Words
+- Executed or night-killed players may leave last words (unless death type forbids it).
+- Hard AI generates strategic last words: blue players accuse suspects or defend allies, red players bluff and frame innocents, police dump investigation results, green players threaten.
 
 ### Vote Phase
 - Majority vote (>50% of eligible voters) executes the target.
 - If no majority, the player with the most votes is executed.
 - Brat revives on first execution (revealed, loses future voting power).
-- Dead players may leave last words (unless death type forbids it).
 
 ## Victory Conditions
 
@@ -255,6 +280,11 @@ Each AI maintains a Bayesian probability distribution over every other player's 
 
 ## Simulation
 ```bash
-node tests/simulate.js 500    # runs 500 all-AI games, prints win rates by faction
+node tests/simulate.js 500                           # 500 games, default theme/difficulty
+node tests/simulate.js 500 GOOD_VS_EVIL hard         # specify theme and difficulty
+node tests/simulate.js 200 --compare                 # compare all 4 difficulties side-by-side
+node tests/simulate.js 100 GOOD_VS_EVIL hard --json  # machine-readable JSON output
+node tests/simulate.js --help                        # show all options and available themes
 ```
-Increase the number for larger samples. Useful for balancing roles and difficulty tuning.
+
+Output includes: faction win rates, game length distribution, victory reasons, per-role stats (win rate, survival rate, night-kill rate, vote-kill rate), and optional difficulty comparison table.
