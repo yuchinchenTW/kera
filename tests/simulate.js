@@ -1,3 +1,6 @@
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { cpus } from "node:os";
+import { fileURLToPath } from "node:url";
 import { GameEngine } from "../src/engine.js";
 import { Phase, Theme, Roles, DeathCause, roleMeta } from "../src/roles.js";
 
@@ -19,6 +22,7 @@ const LANG = {
     hdrDiff: "Difficulty", hdrBlue: "BLUE", hdrRed: "RED", hdrOther: "OTHER",
     hdrDays: "AvgDays", hdrTime: "Time", hdrTimeout: "Timeout",
     progress: (i, n) => `Progress: ${i}/${n} (${((i / n) * 100).toFixed(0)}%)`,
+    threads: (n) => `Using ${n} threads`,
     factionName: { BLUE: "BLUE", RED: "RED", ZOMBIE: "ZOMBIE", GRUDGE: "GRUDGE", NONE: "NONE" },
     diffName: { easy: "easy", normal: "normal", hard: "hard", nightmare: "nightmare" },
     roleName: (id) => id,
@@ -60,6 +64,7 @@ Examples:
     hdrDiff: "難度", hdrBlue: "藍方", hdrRed: "紅方", hdrOther: "其他",
     hdrDays: "平均天數", hdrTime: "耗時", hdrTimeout: "超時",
     progress: (i, n) => `進度：${i}/${n}（${((i / n) * 100).toFixed(0)}%）`,
+    threads: (n) => `使用 ${n} 個執行緒`,
     factionName: { BLUE: "藍方", RED: "紅方", ZOMBIE: "殭屍", GRUDGE: "怨靈", NONE: "無" },
     diffName: { easy: "簡單", normal: "普通", hard: "困難", nightmare: "噩夢" },
     roleName: (id) => {
@@ -165,9 +170,12 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   return { victory, dayNumber, playerResults, timedOut };
 }
 
-// ─── Batch Simulator ────────────────────────────────────────────────────────
+// ─── Worker Thread Logic ────────────────────────────────────────────────────
 
-function simulateGames(count, theme, difficulty, { onProgress, L } = {}) {
+if (!isMainThread) {
+  // Worker: run assigned game range and return aggregated stats
+  const { startIdx, endIdx, baseSeed, theme, difficulty } = workerData;
+
   const tally = {};
   const roleSeen = {};
   const roleWins = {};
@@ -177,17 +185,18 @@ function simulateGames(count, theme, difficulty, { onProgress, L } = {}) {
   const dayLengths = [];
   const reasonCounts = {};
   let timeouts = 0;
+  let completed = 0;
 
-  const baseSeed = Date.now();
-
-  for (let i = 0; i < count; i++) {
-    if (onProgress && i > 0 && i % onProgress === 0) {
-      process.stderr.write(`\r  ${L.progress(i, count)}`);
-    }
-
+  for (let i = startIdx; i < endIdx; i++) {
     const seed = baseSeed + hashSeed(i);
     const result = runOne(seed, theme, difficulty);
     const { victory, dayNumber, playerResults, timedOut } = result;
+
+    completed++;
+    // Report progress every 20 games
+    if (completed % 20 === 0) {
+      parentPort.postMessage({ type: "progress", completed });
+    }
 
     if (timedOut) { timeouts++; continue; }
 
@@ -215,13 +224,141 @@ function simulateGames(count, theme, difficulty, { onProgress, L } = {}) {
     }
   }
 
-  if (onProgress) process.stderr.write("\r" + " ".repeat(50) + "\r");
+  parentPort.postMessage({
+    type: "done",
+    stats: {
+      tally, roleSeen, roleWins, roleSurvived,
+      roleDeathByVote, roleDeathByNight,
+      dayLengths, reasonCounts, timeouts,
+    },
+  });
+  process.exit(0);
+}
 
-  return {
-    tally, roleSeen, roleWins, roleSurvived,
-    roleDeathByVote, roleDeathByNight,
-    dayLengths, reasonCounts, timeouts,
+// ─── Multi-threaded Batch Simulator ─────────────────────────────────────────
+
+function mergeStats(a, b) {
+  const merged = {
+    tally: { ...a.tally },
+    roleSeen: { ...a.roleSeen },
+    roleWins: { ...a.roleWins },
+    roleSurvived: { ...a.roleSurvived },
+    roleDeathByVote: { ...a.roleDeathByVote },
+    roleDeathByNight: { ...a.roleDeathByNight },
+    dayLengths: [...a.dayLengths, ...b.dayLengths],
+    reasonCounts: { ...a.reasonCounts },
+    timeouts: a.timeouts + b.timeouts,
   };
+  for (const key of ["tally", "roleSeen", "roleWins", "roleSurvived", "roleDeathByVote", "roleDeathByNight", "reasonCounts"]) {
+    for (const [k, v] of Object.entries(b[key])) {
+      merged[key][k] = (merged[key][k] || 0) + v;
+    }
+  }
+  return merged;
+}
+
+function emptyStats() {
+  return {
+    tally: {}, roleSeen: {}, roleWins: {}, roleSurvived: {},
+    roleDeathByVote: {}, roleDeathByNight: {},
+    dayLengths: [], reasonCounts: {}, timeouts: 0,
+  };
+}
+
+function simulateGames(count, theme, difficulty, { L }) {
+  const numThreads = Math.min(cpus().length, count);
+
+  return new Promise((resolve) => {
+    if (numThreads <= 1) {
+      // Fallback to single-threaded for very small counts
+      const baseSeed = Date.now();
+      const tally = {};
+      const roleSeen = {};
+      const roleWins = {};
+      const roleSurvived = {};
+      const roleDeathByVote = {};
+      const roleDeathByNight = {};
+      const dayLengths = [];
+      const reasonCounts = {};
+      let timeouts = 0;
+
+      for (let i = 0; i < count; i++) {
+        const seed = baseSeed + hashSeed(i);
+        const result = runOne(seed, theme, difficulty);
+        const { victory, dayNumber, playerResults, timedOut } = result;
+
+        if (timedOut) { timeouts++; continue; }
+
+        const winner = victory.winner || "NONE";
+        tally[winner] = (tally[winner] || 0) + 1;
+        dayLengths.push(dayNumber);
+
+        const reason = victory.reason || "Unknown";
+        reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+
+        for (const pr of playerResults) {
+          const { role, faction, alive, nightKill, voteKill } = pr;
+          roleSeen[role] = (roleSeen[role] || 0) + 1;
+
+          const roleCountsAsWin =
+            (winner === "RED" && faction === "RED") ||
+            (winner === "BLUE" && faction === "BLUE") ||
+            (winner === "ZOMBIE" && role === Roles.ZOMBIE.id) ||
+            (winner === "GRUDGE" && role === Roles.GRUDGE_BEAST.id);
+          if (roleCountsAsWin) roleWins[role] = (roleWins[role] || 0) + 1;
+
+          if (alive) roleSurvived[role] = (roleSurvived[role] || 0) + 1;
+          if (voteKill) roleDeathByVote[role] = (roleDeathByVote[role] || 0) + 1;
+          if (nightKill) roleDeathByNight[role] = (roleDeathByNight[role] || 0) + 1;
+        }
+      }
+
+      resolve({
+        tally, roleSeen, roleWins, roleSurvived,
+        roleDeathByVote, roleDeathByNight,
+        dayLengths, reasonCounts, timeouts,
+      });
+      return;
+    }
+
+    // Multi-threaded
+    const baseSeed = Date.now();
+    const chunkSize = Math.ceil(count / numThreads);
+    let completedGames = 0;
+    let finishedWorkers = 0;
+    let merged = emptyStats();
+    const workerFile = fileURLToPath(import.meta.url);
+
+    for (let t = 0; t < numThreads; t++) {
+      const startIdx = t * chunkSize;
+      const endIdx = Math.min(startIdx + chunkSize, count);
+      if (startIdx >= count) break;
+
+      const worker = new Worker(workerFile, {
+        workerData: { startIdx, endIdx, baseSeed, theme, difficulty },
+      });
+
+      worker.on("message", (msg) => {
+        if (msg.type === "progress") {
+          completedGames += 20;
+          if (count >= 100) {
+            process.stderr.write(`\r  ${L.progress(Math.min(completedGames, count), count)}        `);
+          }
+        } else if (msg.type === "done") {
+          merged = mergeStats(merged, msg.stats);
+          finishedWorkers++;
+          if (finishedWorkers === Math.min(numThreads, Math.ceil(count / chunkSize))) {
+            if (count >= 100) process.stderr.write("\r" + " ".repeat(50) + "\r");
+            resolve(merged);
+          }
+        }
+      });
+
+      worker.on("error", (err) => {
+        console.error("Worker error:", err);
+      });
+    }
+  });
 }
 
 // ─── Pretty Print ───────────────────────────────────────────────────────────
@@ -259,145 +396,151 @@ const { id: theme, matched: themeMatched } = themeArg
   : { id: Theme.GOOD_VS_EVIL.id, matched: false };
 const difficulty = positional[2] || (!themeArg || themeMatched ? "normal" : themeArg);
 
-const progressInterval = count >= 100 ? 50 : 0;
+const numThreads = Math.min(cpus().length, count);
 
 if (!jsonMode) {
   console.log(`\n${"═".repeat(60)}`);
   console.log(`  ${L.simulating(count, theme, L.diffName[difficulty] || difficulty)}`);
+  console.log(`  ${L.threads(numThreads)}`);
   console.log(`${"═".repeat(60)}\n`);
 }
 
 const t0 = Date.now();
-const stats = simulateGames(count, theme, difficulty, { onProgress: progressInterval, L });
-const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-const total = Object.values(stats.tally).reduce((a, b) => a + b, 0);
 
-// ── JSON Mode ──
+async function main() {
+  const stats = await simulateGames(count, theme, difficulty, { L });
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  const total = Object.values(stats.tally).reduce((a, b) => a + b, 0);
+  const days = stats.dayLengths;
 
-if (jsonMode && !compareMode) {
-  console.log(JSON.stringify({ count: total, theme, difficulty, elapsed, ...stats }, null, 2));
-  process.exit(0);
-}
+  // ── JSON Mode ──
 
-// ── Faction Win Rates ──
+  if (jsonMode && !compareMode) {
+    console.log(JSON.stringify({ count: total, theme, difficulty, elapsed, ...stats }, null, 2));
+    process.exit(0);
+  }
 
-console.log(`  ${L.factionWinRates(total, elapsed)}`);
-if (stats.timeouts > 0) {
-  console.log(`  ${L.timeoutWarn(stats.timeouts)}`);
-}
-console.log(`  ${"─".repeat(50)}`);
-const factionOrder = ["BLUE", "RED", "ZOMBIE", "GRUDGE", "NONE"];
-for (const side of factionOrder) {
-  const wins = stats.tally[side] || 0;
-  if (wins === 0 && (side === "NONE" || side === "ZOMBIE" || side === "GRUDGE")) continue;
-  const ratio = wins / total;
-  console.log(`  ${(L.factionName[side] || side).padEnd(8)} ${bar(ratio)} ${pct(wins, total)} (${wins})`);
-}
+  // ── Faction Win Rates ──
 
-// ── Game Length Stats ──
-
-const days = stats.dayLengths;
-if (days.length > 0) {
-  const avgDays = (days.reduce((a, b) => a + b, 0) / days.length).toFixed(1);
-  const sorted = [...days].sort((a, b) => a - b);
-  const minDays = sorted[0];
-  const maxDays = sorted[sorted.length - 1];
-  const medianDays = sorted[Math.floor(sorted.length / 2)];
-
-  console.log(`\n  ${L.gameLength}`);
+  console.log(`  ${L.factionWinRates(total, elapsed)}`);
+  if (stats.timeouts > 0) {
+    console.log(`  ${L.timeoutWarn(stats.timeouts)}`);
+  }
   console.log(`  ${"─".repeat(50)}`);
-  console.log(`  ${L.avg}：${avgDays} | ${L.median}：${medianDays} | ${L.min}：${minDays} | ${L.max}：${maxDays}`);
-
-  const dayBuckets = {};
-  for (const d of days) dayBuckets[d] = (dayBuckets[d] || 0) + 1;
-  const bucketKeys = Object.keys(dayBuckets).map(Number).sort((a, b) => a - b);
-  for (const d of bucketKeys) {
-    const cnt = dayBuckets[d];
-    const ratio = cnt / total;
-    console.log(`  ${L.day(d)}：${bar(ratio, 30)} ${pct(cnt, total)} (${cnt})`);
+  const factionOrder = ["BLUE", "RED", "ZOMBIE", "GRUDGE", "NONE"];
+  for (const side of factionOrder) {
+    const wins = stats.tally[side] || 0;
+    if (wins === 0 && (side === "NONE" || side === "ZOMBIE" || side === "GRUDGE")) continue;
+    const ratio = wins / total;
+    console.log(`  ${(L.factionName[side] || side).padEnd(8)} ${bar(ratio)} ${pct(wins, total)} (${wins})`);
   }
-}
 
-// ── Victory Reasons ──
+  // ── Game Length Stats ──
 
-console.log(`\n  ${L.victoryReasons}`);
-console.log(`  ${"─".repeat(50)}`);
-for (const [reason, cnt] of Object.entries(stats.reasonCounts).sort((a, b) => b[1] - a[1])) {
-  console.log(`  ${L.reasonText(reason).padEnd(40)} ${pct(cnt, total)} (${cnt})`);
-}
+  if (days.length > 0) {
+    const avgDays = (days.reduce((a, b) => a + b, 0) / days.length).toFixed(1);
+    const sorted = [...days].sort((a, b) => a - b);
+    const minDays = sorted[0];
+    const maxDays = sorted[sorted.length - 1];
+    const medianDays = sorted[Math.floor(sorted.length / 2)];
 
-// ── Role Stats Table ──
+    console.log(`\n  ${L.gameLength}`);
+    console.log(`  ${"─".repeat(50)}`);
+    console.log(`  ${L.avg}：${avgDays} | ${L.median}：${medianDays} | ${L.min}：${minDays} | ${L.max}：${maxDays}`);
 
-console.log(`\n  ${L.roleStats}`);
-console.log(`  ${"─".repeat(72)}`);
-console.log(
-  `  ${L.hdrRole.padEnd(20)} ${L.hdrFaction.padEnd(7)} ${L.hdrWin.padStart(7)} ${L.hdrSurv.padStart(8)} ${L.hdrNight.padStart(9)} ${L.hdrVote.padStart(8)} ${L.hdrSeen.padStart(5)}`
-);
-console.log(`  ${"─".repeat(72)}`);
+    const dayBuckets = {};
+    for (const d of days) dayBuckets[d] = (dayBuckets[d] || 0) + 1;
+    const bucketKeys = Object.keys(dayBuckets).map(Number).sort((a, b) => a - b);
+    for (const d of bucketKeys) {
+      const cnt = dayBuckets[d];
+      const ratio = cnt / total;
+      console.log(`  ${L.day(d)}：${bar(ratio, 30)} ${pct(cnt, total)} (${cnt})`);
+    }
+  }
 
-const roles = Object.keys(stats.roleSeen).sort((a, b) => {
-  const fa = roleMeta(a)?.faction || "ZZZ";
-  const fb = roleMeta(b)?.faction || "ZZZ";
-  if (fa !== fb) return fa < fb ? -1 : 1;
-  return a < b ? -1 : 1;
-});
+  // ── Victory Reasons ──
 
-for (const role of roles) {
-  const seen = stats.roleSeen[role];
-  const wins = stats.roleWins[role] || 0;
-  const survived = stats.roleSurvived[role] || 0;
-  const nightDied = stats.roleDeathByNight[role] || 0;
-  const voteDied = stats.roleDeathByVote[role] || 0;
-  const faction = roleMeta(role)?.faction || "?";
+  console.log(`\n  ${L.victoryReasons}`);
+  console.log(`  ${"─".repeat(50)}`);
+  for (const [reason, cnt] of Object.entries(stats.reasonCounts).sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${L.reasonText(reason).padEnd(40)} ${pct(cnt, total)} (${cnt})`);
+  }
+
+  // ── Role Stats Table ──
+
+  console.log(`\n  ${L.roleStats}`);
+  console.log(`  ${"─".repeat(72)}`);
   console.log(
-    `  ${L.roleName(role).padEnd(20)} ${L.factionLabel(faction).padEnd(7)} ${pct(wins, seen)} ${pct(survived, seen)} ${pct(nightDied, seen)} ${pct(voteDied, seen)} ${String(seen).padStart(5)}`
+    `  ${L.hdrRole.padEnd(20)} ${L.hdrFaction.padEnd(7)} ${L.hdrWin.padStart(7)} ${L.hdrSurv.padStart(8)} ${L.hdrNight.padStart(9)} ${L.hdrVote.padStart(8)} ${L.hdrSeen.padStart(5)}`
   );
-}
+  console.log(`  ${"─".repeat(72)}`);
 
-// ── Difficulty Comparison Mode ──
+  const roles = Object.keys(stats.roleSeen).sort((a, b) => {
+    const fa = roleMeta(a)?.faction || "ZZZ";
+    const fb = roleMeta(b)?.faction || "ZZZ";
+    if (fa !== fb) return fa < fb ? -1 : 1;
+    return a < b ? -1 : 1;
+  });
 
-if (compareMode) {
-  console.log(`\n${"═".repeat(60)}`);
-  console.log(`  ${L.diffCompare(count)}`);
-  console.log(`${"═".repeat(60)}\n`);
-
-  const difficulties = ["easy", "normal", "hard", "nightmare"];
-  const allResults = {};
-
-  allResults[difficulty] = { stats, total, elapsed, avgDays: days.length > 0 ? (days.reduce((a, b) => a + b, 0) / days.length).toFixed(1) : "0" };
-
-  for (const diff of difficulties) {
-    if (diff === difficulty) continue;
-    const t1 = Date.now();
-    const s = simulateGames(count, theme, diff, { onProgress: progressInterval, L });
-    const dt = ((Date.now() - t1) / 1000).toFixed(1);
-    const t = Object.values(s.tally).reduce((a, b) => a + b, 0);
-    const avgD = s.dayLengths.length > 0 ? (s.dayLengths.reduce((a, b) => a + b, 0) / s.dayLengths.length).toFixed(1) : "0";
-    allResults[diff] = { stats: s, total: t, elapsed: dt, avgDays: avgD };
+  for (const role of roles) {
+    const seen = stats.roleSeen[role];
+    const wins = stats.roleWins[role] || 0;
+    const survived = stats.roleSurvived[role] || 0;
+    const nightDied = stats.roleDeathByNight[role] || 0;
+    const voteDied = stats.roleDeathByVote[role] || 0;
+    const faction = roleMeta(role)?.faction || "?";
+    console.log(
+      `  ${L.roleName(role).padEnd(20)} ${L.factionLabel(faction).padEnd(7)} ${pct(wins, seen)} ${pct(survived, seen)} ${pct(nightDied, seen)} ${pct(voteDied, seen)} ${String(seen).padStart(5)}`
+    );
   }
 
-  if (jsonMode) {
-    const jsonOut = {};
-    for (const diff of difficulties) {
-      const r = allResults[diff];
-      jsonOut[diff] = { count: r.total, elapsed: r.elapsed, ...r.stats };
-    }
-    console.log(JSON.stringify(jsonOut, null, 2));
-  } else {
-    console.log(`  ${L.hdrDiff.padEnd(12)} ${L.hdrBlue.padStart(7)} ${L.hdrRed.padStart(7)} ${L.hdrOther.padStart(7)} ${L.hdrDays.padStart(8)} ${L.hdrTime.padStart(6)} ${L.hdrTimeout.padStart(8)}`);
-    console.log(`  ${"─".repeat(62)}`);
+  // ── Difficulty Comparison Mode ──
+
+  if (compareMode) {
+    console.log(`\n${"═".repeat(60)}`);
+    console.log(`  ${L.diffCompare(count)}`);
+    console.log(`${"═".repeat(60)}\n`);
+
+    const difficulties = ["easy", "normal", "hard", "nightmare"];
+    const allResults = {};
+
+    allResults[difficulty] = { stats, total, elapsed, avgDays: days.length > 0 ? (days.reduce((a, b) => a + b, 0) / days.length).toFixed(1) : "0" };
 
     for (const diff of difficulties) {
-      const r = allResults[diff];
-      const blue = r.stats.tally["BLUE"] || 0;
-      const red = r.stats.tally["RED"] || 0;
-      const other = r.total - blue - red;
-      const to = r.stats.timeouts || 0;
-      console.log(
-        `  ${(L.diffName[diff] || diff).padEnd(12)} ${pct(blue, r.total)} ${pct(red, r.total)} ${pct(other, r.total)} ${r.avgDays.padStart(8)} ${(r.elapsed + "s").padStart(6)} ${String(to).padStart(8)}`
-      );
+      if (diff === difficulty) continue;
+      const t1 = Date.now();
+      const s = await simulateGames(count, theme, diff, { L });
+      const dt = ((Date.now() - t1) / 1000).toFixed(1);
+      const t = Object.values(s.tally).reduce((a, b) => a + b, 0);
+      const avgD = s.dayLengths.length > 0 ? (s.dayLengths.reduce((a, b) => a + b, 0) / s.dayLengths.length).toFixed(1) : "0";
+      allResults[diff] = { stats: s, total: t, elapsed: dt, avgDays: avgD };
+    }
+
+    if (jsonMode) {
+      const jsonOut = {};
+      for (const diff of difficulties) {
+        const r = allResults[diff];
+        jsonOut[diff] = { count: r.total, elapsed: r.elapsed, ...r.stats };
+      }
+      console.log(JSON.stringify(jsonOut, null, 2));
+    } else {
+      console.log(`  ${L.hdrDiff.padEnd(12)} ${L.hdrBlue.padStart(7)} ${L.hdrRed.padStart(7)} ${L.hdrOther.padStart(7)} ${L.hdrDays.padStart(8)} ${L.hdrTime.padStart(6)} ${L.hdrTimeout.padStart(8)}`);
+      console.log(`  ${"─".repeat(62)}`);
+
+      for (const diff of difficulties) {
+        const r = allResults[diff];
+        const blue = r.stats.tally["BLUE"] || 0;
+        const red = r.stats.tally["RED"] || 0;
+        const other = r.total - blue - red;
+        const to = r.stats.timeouts || 0;
+        console.log(
+          `  ${(L.diffName[diff] || diff).padEnd(12)} ${pct(blue, r.total)} ${pct(red, r.total)} ${pct(other, r.total)} ${r.avgDays.padStart(8)} ${(r.elapsed + "s").padStart(6)} ${String(to).padStart(8)}`
+        );
+      }
     }
   }
+
+  console.log("");
 }
 
-console.log("");
+main();
