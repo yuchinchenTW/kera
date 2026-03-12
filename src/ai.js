@@ -1438,3 +1438,194 @@ export function generateChatLines(state, maxLines = 6) {
   }
   return lines;
 }
+
+// ─── Last Words Generation ─────────────────────────────────────────────────
+
+const LAST_WORDS_TEMPLATES = {
+  // Blue player dies — try to leave useful intel
+  blueAccuse: [
+    (name, t) => `Watch out for ${t}...||小心 ${t}⋯`,
+    (name, t) => `I'm sure ${t} is the killer.||我確定 ${t} 是殺手。`,
+    (name, t) => `${t} did this to me. Don't let them get away.||是 ${t} 害我的，別放過他。`,
+    (name, t) => `Vote ${t} next, trust me.||下次投 ${t}，相信我。`,
+    (name, t) => `I've been watching ${t}... they're not clean.||我一直在觀察 ${t}⋯他不乾淨。`,
+  ],
+  blueDefend: [
+    (name, t) => `Protect ${t}, they're one of us.||保護 ${t}，他是自己人。`,
+    (name, t) => `${t} is innocent, I'm certain.||${t} 是無辜的，我很確定。`,
+    (name, t) => `Don't vote ${t}, I checked them.||別投 ${t}，我查過了。`,
+  ],
+  blueGeneral: [
+    (name) => `Don't trust the quiet ones...||別相信那些沉默的人⋯`,
+    (name) => `Think about who voted for me.||想想誰投了我。`,
+    (name) => `The truth will come out.||真相會大白的。`,
+    (name) => `I did my best for the team.||我為大家盡力了。`,
+  ],
+  // Police dies — reveal investigation results
+  policeReveal: [
+    (name, t) => `I confirmed ${t} is RED!||我確認 ${t} 是紅方！`,
+    (name, t) => `My investigation: ${t} is suspicious.||我的調查結果：${t} 有問題。`,
+    (name, t) => `${t} is clean, protect them.||${t} 是好人，保護他。`,
+  ],
+  // Red player dies — mislead or frame innocents
+  redBluff: [
+    (name, t) => `I know ${t} is the killer...||我知道 ${t} 是殺手⋯`,
+    (name, t) => `${t} betrayed me.||${t} 出賣了我。`,
+    (name, t) => `Look into ${t}, something's off.||去查 ${t} 吧，有問題。`,
+    (name, t) => `Don't trust ${t}.||別相信 ${t}。`,
+  ],
+  redProtectAlly: [
+    (name, t) => `${t} is definitely clean.||${t} 絕對沒問題。`,
+    (name, t) => `I trust ${t} with my life.||我用命擔保 ${t}。`,
+  ],
+  redDeflect: [
+    (name) => `I was wrongly accused...||我是被冤枉的⋯`,
+    (name) => `You got the wrong person.||你們抓錯人了。`,
+    (name) => `This was a mistake, you'll see.||這是個錯誤，你們會明白的。`,
+    (name) => `I'm innocent...||我是無辜的⋯`,
+  ],
+  // Green player dies
+  greenGrudge: [
+    (name) => `You'll pay for this...||你們會付出代價的⋯`,
+    (name) => `The beasts will avenge me.||怨獸們會替我報仇。`,
+    (name, t) => `${t} will regret this.||${t} 會後悔的。`,
+  ],
+  greenZombie: [
+    (name) => `The infection spreads...||感染在蔓延⋯`,
+    (name) => `It's too late to stop it.||已經來不及阻止了。`,
+  ],
+  // Generic (any role, low-info fallback)
+  generic: [
+    (name) => `...||⋯`,
+    (name) => `Good luck everyone.||大家加油吧。`,
+    (name) => `I have nothing to say.||我沒什麼好說的。`,
+  ],
+};
+
+/**
+ * Generate strategic last words for a dying AI player.
+ * Hard+: uses role knowledge and suspicion to leave impactful messages.
+ * Normal/Easy: generic or simple messages.
+ */
+export function generateLastWords(state, playerId) {
+  const player = getPlayer(state, playerId);
+  if (!player || player.alive) return "";
+  if (player.noLastWords) return "";
+  if (player.isHuman) return "";
+  const hard = isHard(state);
+
+  // Easy/Normal: mostly generic, occasionally accuse highest suspicion
+  if (!hard) {
+    if (state.rng() < 0.5) return "";  // 50% say nothing
+    const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.generic);
+    return tmpl(player.name);
+  }
+
+  // ── Hard+ strategic last words ──
+  const alive = alivePlayers(state).filter((p) => p.id !== player.id);
+  ensureAdvancedMemory(player);
+
+  // Find highest suspicion target
+  let mostSuspicious = null;
+  let highestSusp = -1;
+  // Find most trusted target (lowest suspicion)
+  let mostTrusted = null;
+  let lowestSusp = 2;
+  for (const t of alive) {
+    const s = player.aiMemory?.suspicion?.[t.id] ?? 0.5;
+    if (s > highestSusp) { highestSusp = s; mostSuspicious = t; }
+    if (s < lowestSusp) { lowestSusp = s; mostTrusted = t; }
+  }
+
+  // ── BLUE faction dying ──
+  if (player.faction === Faction.BLUE) {
+    // Police: reveal investigation intel
+    if (player.role === Roles.POLICE.id) {
+      // If there's a revealed red, reinforce it
+      if (state.policeRevealedRed !== null) {
+        const redTarget = getPlayer(state, state.policeRevealedRed);
+        if (redTarget?.alive) {
+          const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.policeReveal);
+          return tmpl(player.name, redTarget.name);
+        }
+      }
+      // Otherwise accuse most suspicious
+      if (mostSuspicious && highestSusp > 0.5) {
+        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.policeReveal);
+        return tmpl(player.name, mostSuspicious.name);
+      }
+    }
+
+    // Doctor/Agent: defend who they were protecting or accuse likely killer
+    if (player.role === Roles.DOCTOR.id || player.role === Roles.AGENT.id) {
+      if (mostTrusted && state.rng() < 0.4) {
+        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.blueDefend);
+        return tmpl(player.name, mostTrusted.name);
+      }
+    }
+
+    // General blue: accuse most suspicious if confidence is high
+    if (mostSuspicious && highestSusp > 0.55) {
+      const roll = state.rng();
+      if (roll < 0.6) {
+        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.blueAccuse);
+        return tmpl(player.name, mostSuspicious.name);
+      }
+      if (roll < 0.8) {
+        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.blueGeneral);
+        return tmpl(player.name);
+      }
+    }
+    // Low confidence: generic
+    const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.blueGeneral);
+    return tmpl(player.name);
+  }
+
+  // ── RED faction dying ──
+  if (player.faction === Faction.RED) {
+    const roll = state.rng();
+    // 35%: frame an innocent blue player
+    if (roll < 0.35) {
+      const innocents = alive.filter((t) => t.faction !== Faction.RED);
+      const frameTarget = innocents.length > 0
+        ? randomChoice(innocents, state.rng)
+        : mostSuspicious;
+      if (frameTarget) {
+        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.redBluff);
+        return tmpl(player.name, frameTarget.name);
+      }
+    }
+    // 20%: subtly defend a killer ally
+    if (roll < 0.55) {
+      const allies = alive.filter((t) => t.role === Roles.KILLER.id);
+      if (allies.length > 0) {
+        const ally = randomChoice(allies, state.rng);
+        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.redProtectAlly);
+        return tmpl(player.name, ally.name);
+      }
+    }
+    // 45%: deflect (claim innocence)
+    const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.redDeflect);
+    return tmpl(player.name);
+  }
+
+  // ── GREEN faction dying ──
+  if (player.faction === Faction.GREEN) {
+    if (player.role === Roles.GRUDGE_BEAST.id) {
+      if (mostSuspicious && state.rng() < 0.5) {
+        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.greenGrudge);
+        return tmpl(player.name, mostSuspicious.name);
+      }
+      const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.greenGrudge);
+      return tmpl(player.name);
+    }
+    if (player.role === Roles.ZOMBIE.id) {
+      const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.greenZombie);
+      return tmpl(player.name);
+    }
+  }
+
+  // Fallback
+  const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.generic);
+  return tmpl(player.name);
+}

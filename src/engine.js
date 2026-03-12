@@ -1,4 +1,4 @@
-import { buildAiNightActions, buildAiVoteActions, generateChatLines } from "./ai.js";
+import { buildAiNightActions, buildAiVoteActions, generateChatLines, generateLastWords } from "./ai.js";
 import {
   addPrivateLog,
   addPublicLog,
@@ -855,6 +855,11 @@ export class GameEngine {
             continue;
           }
           markDeath(this.state, target.id, k.cause, { noLastWords: !!k.noLastWords });
+          // AI generates last words for night deaths (if allowed)
+          if (!k.noLastWords && !target.isHuman) {
+            const aiLastWords = generateLastWords(this.state, target.id);
+            if (aiLastWords) this.submitLastWords(target.id, aiLastWords);
+          }
           appliedKills.push({ targetId: target.id, killerId: k.killerId, cause: k.cause });
           pending.splice(i, 1);
           i -= 1;
@@ -1055,6 +1060,10 @@ export class GameEngine {
           const candidate = lastWordsByPlayer[target.id] ?? humanLastWords;
           if (typeof candidate === "string" && candidate.trim()) {
             this.submitLastWords(target.id, candidate);
+          } else if (!target.isHuman) {
+            // AI generates strategic last words
+            const aiLastWords = generateLastWords(this.state, target.id);
+            if (aiLastWords) this.submitLastWords(target.id, aiLastWords);
           }
           for (const necro of this.state.players) {
             if (necro.alive && necro.role === Roles.NECROMANCER.id && necro.id !== target.id) {
@@ -1083,11 +1092,14 @@ export class GameEngine {
     if (!player || player.alive) return false;
     if (player.noLastWords) return false;
     if (player.lastWords && player.lastWords.trim()) return false;
-    if (this.state.phase !== Phase.DAY && this.state.phase !== Phase.VOTE) return false;
-    const trimmed = (text || "").trim().slice(0, 64);
+    if (this.state.phase !== Phase.DAY && this.state.phase !== Phase.VOTE && this.state.phase !== Phase.NIGHT) return false;
+    const trimmed = (text || "").trim().slice(0, 128);
     if (!trimmed) return false;
     player.lastWords = trimmed;
-    addPublicLog(this.state, `Last words: "${player.lastWords}"`);
+    // Bilingual last words use "EN||ZH" format — wrap entire thing for client translateLine
+    addPublicLog(this.state, trimmed.includes("||")
+      ? `Last words: "${trimmed.split("||")[0]}"||遺言：「${trimmed.split("||")[1]}」`
+      : `Last words: "${trimmed}"`);
     return true;
   }
 }

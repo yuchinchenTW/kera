@@ -571,7 +571,10 @@ function renderLastWords() {
   }
   for (const entry of entries) {
     const li = document.createElement("li");
-    li.textContent = `${entry.name}: ${entry.text}`;
+    const displayText = entry.text.includes("||")
+      ? (locale === "zh" ? entry.text.split("||")[1] : entry.text.split("||")[0])
+      : entry.text;
+    li.textContent = `${entry.name}: ${displayText}`;
     el.lastWordsList.appendChild(li);
   }
 }

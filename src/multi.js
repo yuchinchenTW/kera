@@ -744,7 +744,10 @@ function renderView() {
     } else {
       entries.forEach((e) => {
         const li = document.createElement("li");
-        li.textContent = `${e.name}: ${e.text}`;
+        const displayText = e.text.includes("||")
+          ? (locale === "zh" ? e.text.split("||")[1] : e.text.split("||")[0])
+          : e.text;
+        li.textContent = `${e.name}: ${displayText}`;
         els.lastWordsList.appendChild(li);
       });
     }
