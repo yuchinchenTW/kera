@@ -103,7 +103,12 @@ export class GameEngine {
     }
 
     // AI faction chat: night-phase strategic discussion before actions
-    generateNightFactionChat(this.state);
+    // In multiplayer, this is called before scheduleNightTimer for immediate display.
+    // Skip if already generated for this night (nightFactionChatDay tracks last generated day).
+    if (this.state.nightFactionChatDay !== this.state.dayNumber) {
+      this.state.nightFactionChatDay = this.state.dayNumber;
+      generateNightFactionChat(this.state);
+    }
   }
 
   resolveNight(humanAction = null, opts = {}) {

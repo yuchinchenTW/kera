@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import { GameEngine } from "./src/engine.js";
 import { buildPlayerView, buildSpectatorView } from "./src/view.js";
 import { Theme, Phase } from "./src/roles.js";
+import { generateNightFactionChat } from "./src/ai.js";
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 18;
@@ -172,6 +173,12 @@ function startTimer(phase, durationMs, onFire) {
 }
 
 function scheduleNightTimer() {
+  // Generate AI night faction chat so players see it during the night phase
+  if (room.engine) {
+    room.engine.state.nightFactionChatDay = room.engine.state.dayNumber;
+    generateNightFactionChat(room.engine.state);
+    broadcastViews();
+  }
   startTimer("NIGHT", DURATIONS.night, () => {
     const humanActions = Object.fromEntries(room.nightActions.entries());
     room.engine.resolveNight(null, { humanActions, includeHuman: false });
