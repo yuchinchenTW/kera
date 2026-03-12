@@ -12,12 +12,119 @@ function rolePriorCounts(themeId) {
   return counts;
 }
 
+function isHard(state) {
+  return state.difficulty === "hard" || state.difficulty === "nightmare";
+}
+
+// ─── Behavioral Analysis ───────────────────────────────────────────────────
+
+function ensureAdvancedMemory(p) {
+  if (!p.aiMemory) p.aiMemory = { suspicion: {}, roleProbs: {} };
+  if (!p.aiMemory.roleProbs) p.aiMemory.roleProbs = {};
+  if (!p.aiMemory.suspicion) p.aiMemory.suspicion = {};
+  if (!p.aiMemory.voteHistory) p.aiMemory.voteHistory = {};
+  if (!p.aiMemory.defenseHistory) p.aiMemory.defenseHistory = {};
+  if (!p.aiMemory.selfThreat) p.aiMemory.selfThreat = 0;
+  if (!p.aiMemory.chatActivity) p.aiMemory.chatActivity = {};
+}
+
+/**
+ * Analyze voting patterns across all historical rounds.
+ * Returns per-player signals: consistency, mutual voting pairs, etc.
+ */
+function analyzeVotingPatterns(state) {
+  const voteHist = state.history?.votes || [];
+  // who voted for whom, how many times
+  const voteGraph = {}; // voteGraph[actorId][targetId] = count
+  const votedTogether = {}; // votedTogether[a][b] = times a and b voted for the same target
+  const beenVotedFor = {}; // beenVotedFor[targetId] = total times targeted
+
+  for (const round of voteHist) {
+    const targetByActor = {};
+    for (const entry of round.order || []) {
+      const { actorId, targetId } = entry;
+      if (!voteGraph[actorId]) voteGraph[actorId] = {};
+      voteGraph[actorId][targetId] = (voteGraph[actorId][targetId] || 0) + 1;
+      beenVotedFor[targetId] = (beenVotedFor[targetId] || 0) + 1;
+      targetByActor[actorId] = targetId;
+    }
+    // Detect vote-together pairs (actors who voted for the same target)
+    const actors = Object.keys(targetByActor);
+    for (let i = 0; i < actors.length; i++) {
+      for (let j = i + 1; j < actors.length; j++) {
+        const a = actors[i], b = actors[j];
+        if (targetByActor[a] === targetByActor[b]) {
+          if (!votedTogether[a]) votedTogether[a] = {};
+          if (!votedTogether[b]) votedTogether[b] = {};
+          votedTogether[a][b] = (votedTogether[a][b] || 0) + 1;
+          votedTogether[b][a] = (votedTogether[b][a] || 0) + 1;
+        }
+      }
+    }
+  }
+
+  return { voteGraph, votedTogether, beenVotedFor, rounds: voteHist.length };
+}
+
+/**
+ * Track chat activity: who mentions whom, who defends/accuses whom.
+ */
+function analyzeChatBehavior(state) {
+  const chats = state.dayChat || [];
+  const speakCount = {};
+  const mentionedBy = {}; // mentionedBy[targetId] = [speakerId, ...]
+
+  for (const line of chats) {
+    for (const p of state.players) {
+      if (!p) continue;
+      if (line.startsWith(p.name + ":")) {
+        speakCount[p.id] = (speakCount[p.id] || 0) + 1;
+      }
+      // Track mentions
+      if (line.includes(p.name) && !line.startsWith(p.name + ":")) {
+        if (!mentionedBy[p.id]) mentionedBy[p.id] = [];
+        for (const speaker of state.players) {
+          if (speaker && line.startsWith(speaker.name + ":") && speaker.id !== p.id) {
+            mentionedBy[p.id].push(speaker.id);
+          }
+        }
+      }
+    }
+  }
+  return { speakCount, mentionedBy };
+}
+
+/**
+ * Compute self-threat level: how suspicious am I to others?
+ */
+function computeSelfThreat(state, actor) {
+  let threat = 0;
+  const voteHist = state.history?.votes || [];
+  const lastRound = voteHist[voteHist.length - 1];
+  if (lastRound) {
+    // How many votes did I receive last round?
+    const tally = lastRound.tally || {};
+    const myVotes = tally[actor.id] || 0;
+    const maxVotes = Math.max(1, ...Object.values(tally));
+    threat += (myVotes / maxVotes) * 0.4;
+    // Was I mentioned a lot in chat?
+    const mentions = lastRound.mentions || {};
+    const myMentions = mentions[actor.id] || 0;
+    const maxMention = Math.max(1, ...Object.values(mentions));
+    threat += (myMentions / maxMention) * 0.2;
+  }
+  // Am I the police-revealed red?
+  if (state.policeRevealedRed === actor.id) threat += 0.5;
+  return clamp(threat, 0, 1);
+}
+
+// ─── Enhanced Belief System ────────────────────────────────────────────────
+
 function ensureBeliefs(state) {
   const living = alivePlayers(state).map((p) => p.id);
   const diffScaleMap = { easy: 0.6, normal: 1, hard: 1.3, nightmare: 1.6 };
   const diffScale = diffScaleMap[state.difficulty || "normal"] ?? 1;
-  const human = state.players.find((p) => p.isHuman);
-  const humanFaction = human?.faction || null;
+  const hard = isHard(state);
   const revealedRed = state.policeRevealedRed;
   const lastVoteHist = state.history?.votes?.[state.history.votes.length - 1] || null;
   const mentionMax = lastVoteHist?.mentions ? Math.max(1, ...Object.values(lastVoteHist.mentions)) : 1;
@@ -29,24 +136,32 @@ function ensureBeliefs(state) {
   const allRoles = Object.keys(rolePriors);
   const totalPrior = Math.max(1, Object.values(rolePriors).reduce((a, b) => a + b, 0));
 
+  // Hard+ behavioral analysis
+  const votePatterns = hard ? analyzeVotingPatterns(state) : null;
+  const chatBehavior = hard ? analyzeChatBehavior(state) : null;
+
+  // Identify dead players and their death correlations
+  const recentDeaths = state.players.filter((p) => !p.alive && p.deathCause);
+
   for (const p of alivePlayers(state)) {
     if (p.isHuman) continue;
-    if (!p.aiMemory) p.aiMemory = { suspicion: {}, roleProbs: {} };
-    if (!p.aiMemory.roleProbs) p.aiMemory.roleProbs = {};
-    if (!p.aiMemory.suspicion) p.aiMemory.suspicion = {};
+    ensureAdvancedMemory(p);
+
+    // Update self-threat
+    if (hard) {
+      p.aiMemory.selfThreat = computeSelfThreat(state, p);
+    }
+
     for (const targetId of living) {
       if (targetId === p.id) continue;
-      const target = getPlayer(state, targetId);
       // 初始化或衰減到先驗
       if (!p.aiMemory.roleProbs[targetId]) p.aiMemory.roleProbs[targetId] = {};
       const decay = 0.9;
-      let mass = 0;
       for (const role of allRoles) {
         const prior = (rolePriors[role] || 0) / totalPrior;
         const prev = p.aiMemory.roleProbs[targetId][role] ?? prior;
         const blended = prior * (1 - decay) + prev * decay;
         p.aiMemory.roleProbs[targetId][role] = blended;
-        mass += blended;
       }
       // likelihood bumps
       let redBoost = 0;
@@ -67,6 +182,55 @@ function ensureBeliefs(state) {
       if (revealedRed && targetId === revealedRed && p.faction === Faction.BLUE) {
         redBoost += 0.6 * diffScale;
       }
+
+      // ── Hard+ behavioral signals (no cheating, purely observable) ──
+
+      if (hard && votePatterns) {
+        // Signal 1: Vote consistency — someone who always votes the same person is suspicious
+        const targetVoteGraph = votePatterns.voteGraph[targetId];
+        if (targetVoteGraph && votePatterns.rounds >= 2) {
+          const targets = Object.keys(targetVoteGraph);
+          const totalVotes = Object.values(targetVoteGraph).reduce((a, b) => a + b, 0);
+          // If they always vote the same person, slight blue boost (consistent = less suspicious)
+          if (targets.length === 1 && totalVotes >= 2) {
+            blueBoost += 0.03 * diffScale;
+          }
+        }
+
+        // Signal 2: Mutual voting pairs — two people never voting each other = potential allies
+        const togetherCount = votePatterns.votedTogether[targetId]?.[p.id] || 0;
+        if (votePatterns.rounds >= 2 && togetherCount >= 2) {
+          // They vote with me a lot — could be same faction
+          blueBoost += 0.05 * diffScale;
+        }
+
+        // Signal 3: Someone who voted for a player who turned out innocent (died blue) — less reliable
+        for (const dead of recentDeaths) {
+          if (dead.faction === Faction.BLUE && dead.deathCause === "VOTE_EXECUTION") {
+            const votedForInnocent = votePatterns.voteGraph[targetId]?.[dead.id] || 0;
+            if (votedForInnocent > 0) {
+              redBoost += 0.1 * diffScale;
+            }
+          }
+          // Someone who defended a dead red player — suspicious
+          if (dead.faction === Faction.RED) {
+            const defenseCount = p.aiMemory.defenseHistory[targetId]?.[dead.id] || 0;
+            if (defenseCount > 0) {
+              redBoost += 0.12 * diffScale;
+            }
+          }
+        }
+      }
+
+      if (hard && chatBehavior) {
+        // Signal 4: Silence analysis — people who never speak are slightly more suspicious
+        const spoken = chatBehavior.speakCount[targetId] || 0;
+        const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount));
+        if (spoken === 0 && maxSpoken > 0) {
+          redBoost += 0.04 * diffScale;
+        }
+      }
+
       // 不使用真實陣營偏置，避免作弊。
       // 應用到角色分布
       for (const role of allRoles) {
@@ -75,7 +239,6 @@ function ensureBeliefs(state) {
         if (meta.faction === Faction.RED) mult += redBoost;
         if (meta.faction === Faction.BLUE) mult += blueBoost;
         p.aiMemory.roleProbs[targetId][role] = clamp(p.aiMemory.roleProbs[targetId][role] * Math.max(0.01, mult), 0.0001, 1);
-        mass += 0; // no-op
       }
       // normalize
       const sum = Object.values(p.aiMemory.roleProbs[targetId]).reduce((a, b) => a + b, 0) || 1;
@@ -91,6 +254,8 @@ function ensureBeliefs(state) {
     }
   }
 }
+
+// ─── Target Selection Helpers ──────────────────────────────────────────────
 
 function pickTargetBySuspicion(state, actor, filterFn = () => true) {
   let best = null;
@@ -196,11 +361,67 @@ function pickZombieTarget(state, actor) {
   return best;
 }
 
+// ─── Hard+ Killer Smart Targeting ──────────────────────────────────────────
+
+/**
+ * Hard+ killer target selection: avoid likely protected targets, prioritize threats.
+ * - Avoids players likely protected by doctor (high blue prob + high police/doctor prob)
+ * - Prioritizes active speakers (threats who influence votes)
+ * - Considers who is most dangerous to red team
+ */
+function pickKillerSmartTarget(state, actor) {
+  const chatBehavior = analyzeChatBehavior(state);
+  const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount || {}));
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const t of shuffled(alivePlayers(state), state.rng)) {
+    if (t.role === Roles.KILLER.id) continue;
+    if (t.id === actor.id) continue;
+
+    const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+    const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+    const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
+    const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
+
+    // Base: prefer blue targets
+    let score = blueProb;
+
+    // Bonus: police are high-value targets
+    score += policeProb * 0.5;
+
+    // Bonus: active speakers are threats (they influence votes)
+    const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+    score += speakRatio * 0.3;
+
+    // Penalty: likely protected by doctor/agent — avoid wasting a kill
+    const protectionLikelihood = doctorProb * 0.4 + agentProb * 0.3;
+    score -= protectionLikelihood * 0.6;
+
+    // Penalty: same person was killed last night and survived → likely protected
+    const lastSummary = state.lastNightSummary || [];
+    for (const entry of lastSummary) {
+      if (typeof entry === "string" && entry.includes(t.name) && entry.includes("saved")) {
+        score -= 0.4;
+      }
+    }
+
+    if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+      bestScore = score;
+      best = t;
+    }
+  }
+  return best;
+}
+
+// ─── Night Actions ─────────────────────────────────────────────────────────
+
 export function buildAiNightActions(state, opts = {}) {
   const includeHuman = opts.includeHuman === true;
   const humanChoice = opts.humanChoice || null;
   const humanActionsRaw = opts.humanActions || null;
   const human = state.players.find((p) => p.isHuman);
+  const hard = isHard(state);
   ensureBeliefs(state);
   const actions = [];
 
@@ -231,10 +452,15 @@ export function buildAiNightActions(state, opts = {}) {
   const humanKillerTarget = pickHumanTarget("KILLER_VOTE");
   let sharedKillerTarget = humanKillerTarget;
   if (!sharedKillerTarget) {
-    sharedKillerTarget =
-      state.rng() < 0.6
-        ? pickGroupTarget(state, killerActors, (t) => t.role !== Roles.KILLER.id)
-        : null;
+    // Hard+: use smart targeting instead of simple group suspicion
+    if (hard && killerActors.length > 0) {
+      sharedKillerTarget = pickKillerSmartTarget(state, killerActors[0]);
+    } else {
+      sharedKillerTarget =
+        state.rng() < 0.6
+          ? pickGroupTarget(state, killerActors, (t) => t.role !== Roles.KILLER.id)
+          : null;
+    }
   }
   // Pre-pick a shared police target to avoid split votes.
   const policeActors = alivePlayers(state).filter((p) => p.role === Roles.POLICE.id && (!p.isHuman || includeHuman));
@@ -296,18 +522,23 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.KILLER.id: {
         let target = sharedKillerTarget;
         if (!target) {
-          let best = null;
-          let bestScore = -Infinity;
-          for (const t of shuffled(alivePlayers(state), state.rng)) {
-            if (t.role === Roles.KILLER.id) continue;
-            const redProb = factionProb(actor, t.id, Faction.BLUE) ?? 0;
-            const priority = redProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
-            if (priority > bestScore || (priority === bestScore && state.rng() < 0.5)) {
-              bestScore = priority;
-              best = t;
-            }
+          if (hard) {
+            target = pickKillerSmartTarget(state, actor);
           }
-          target = best;
+          if (!target) {
+            let best = null;
+            let bestScore = -Infinity;
+            for (const t of shuffled(alivePlayers(state), state.rng)) {
+              if (t.role === Roles.KILLER.id) continue;
+              const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0;
+              const priority = blueProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+              if (priority > bestScore || (priority === bestScore && state.rng() < 0.5)) {
+                bestScore = priority;
+                best = t;
+              }
+            }
+            target = best;
+          }
         }
         if (target) actions.push({ actorId: actor.id, type: "KILLER_VOTE", targetId: target.id });
         break;
@@ -315,16 +546,30 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.DOCTOR.id: {
         if (state.usage.doctorInjections < (Roles.DOCTOR.maxInjections || 0)) {
           let target = actor;
-          if (state.rng() <= 0.7) {
+          // Hard+: self-protect decision based on self-threat level
+          const selfThreat = actor.aiMemory?.selfThreat ?? 0;
+          const selfProtectChance = hard
+            ? clamp(0.15 + selfThreat * 0.6, 0.15, 0.7) // high threat = more self-protect
+            : 0.3;
+          if (state.rng() > selfProtectChance) {
+            // Protect someone else
             let best = null;
             let bestScore = -Infinity;
             for (const t of shuffled(alivePlayers(state), state.rng)) {
+              if (t.id === actor.id) continue;
               const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
               const specialProb =
                 (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0) +
                 (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0) +
                 (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0);
-              const score = blueProb + specialProb;
+              let score = blueProb + specialProb;
+              // Hard+: boost score for players who spoke a lot (killers target active players)
+              if (hard) {
+                const chatBehavior = analyzeChatBehavior(state);
+                const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount || {}));
+                const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+                score += speakRatio * 0.2;
+              }
               if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
                 bestScore = score;
                 best = t;
@@ -337,9 +582,18 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.SNIPER.id: {
-        if (state.usage.sniperShots < (Roles.SNIPER.maxShots || 0) && state.rng() > 0.4) {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-          if (target) actions.push({ actorId: actor.id, type: "SNIPER_SHOT", targetId: target.id });
+        if (state.usage.sniperShots < (Roles.SNIPER.maxShots || 0)) {
+          // Hard+: conservative early, aggressive late (more info = better aim)
+          let activateChance = 0.6;
+          if (hard) {
+            const dayNum = state.dayNumber || 1;
+            // Day 1: 30%, Day 2: 45%, Day 3+: 65%+
+            activateChance = clamp(0.15 + dayNum * 0.15, 0.2, 0.75);
+          }
+          if (state.rng() < activateChance) {
+            const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+            if (target) actions.push({ actorId: actor.id, type: "SNIPER_SHOT", targetId: target.id });
+          }
         }
         break;
       }
@@ -383,8 +637,17 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.TERRORIST.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-        if (target && state.rng() > 0.35) actions.push({ actorId: actor.id, type: "TERROR_BOMB", targetId: target.id });
+        // Hard+: terrorist triggers when self-threat is high (about to be voted out = suicide bomb)
+        let triggerChance = 0.65;
+        if (hard) {
+          const selfThreat = actor.aiMemory?.selfThreat ?? 0;
+          // Low threat = hold bomb (20%), high threat = use it (80%)
+          triggerChance = clamp(0.1 + selfThreat * 0.8, 0.1, 0.85);
+        }
+        if (state.rng() < triggerChance) {
+          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (target) actions.push({ actorId: actor.id, type: "TERROR_BOMB", targetId: target.id });
+        }
         break;
       }
       case Roles.COWBOY.id: {
@@ -466,25 +729,25 @@ export function buildAiNightActions(state, opts = {}) {
         }
         break;
       }
-    case Roles.PURIFIER.id: {
-      const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-      if (target) actions.push({ actorId: actor.id, type: "PURIFY", targetId: target.id });
-      break;
-    }
-    case Roles.GRUDGE_BEAST.id: {
-      const leaderChoice = sharedGrudgeTarget && sharedGrudgeTarget.alive ? sharedGrudgeTarget : null;
-      if (state.grudgeState.berserk) {
-        const target =
-          leaderChoice ||
-          pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.GRUDGE_BEAST.id);
-        if (target) actions.push({ actorId: actor.id, type: "GRUDGE_KILL_VOTE", targetId: target.id });
-      } else {
-        const target =
-          leaderChoice ||
-          pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-        if (target) actions.push({ actorId: actor.id, type: "GRUDGE_JUDGE", targetId: target.id });
+      case Roles.PURIFIER.id: {
+        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+        if (target) actions.push({ actorId: actor.id, type: "PURIFY", targetId: target.id });
+        break;
       }
-      break;
+      case Roles.GRUDGE_BEAST.id: {
+        const leaderChoice = sharedGrudgeTarget && sharedGrudgeTarget.alive ? sharedGrudgeTarget : null;
+        if (state.grudgeState.berserk) {
+          const target =
+            leaderChoice ||
+            pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.GRUDGE_BEAST.id);
+          if (target) actions.push({ actorId: actor.id, type: "GRUDGE_KILL_VOTE", targetId: target.id });
+        } else {
+          const target =
+            leaderChoice ||
+            pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (target) actions.push({ actorId: actor.id, type: "GRUDGE_JUDGE", targetId: target.id });
+        }
+        break;
       }
       default:
         break;
@@ -493,8 +756,11 @@ export function buildAiNightActions(state, opts = {}) {
   return actions;
 }
 
+// ─── Voting ────────────────────────────────────────────────────────────────
+
 export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const includeHuman = opts.includeHuman === true;
+  const hard = isHard(state);
   ensureBeliefs(state);
   const chatMentions = {};
   const chats = state.dayChat || [];
@@ -510,12 +776,19 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const maxMention = Math.max(1, ...Object.values(chatMentions));
   const chatWeight = (id) => (chatMentions[id] || 0) / maxMention;
 
+  // Hard+: behavioral analysis for vote scoring
+  const votePatterns = hard ? analyzeVotingPatterns(state) : null;
+
   const votes = [];
   const aiVoters = alivePlayers(state).filter(
     (p) => (includeHuman || !p.isHuman) && !(p.role === Roles.BRAT.id && p.status.bratRevived)
   );
   const randomVoteChance = { easy: 0.8, normal: 0.6, hard: 0.2, nightmare: 0.05 };
   const chaosVoteChance = randomVoteChance[state.difficulty || "normal"] ?? 0.6;
+
+  // Hard+: Killers pre-coordinate to scatter votes (avoid all voting the same target)
+  const killerVoteTargets = new Set();
+
   aiVoters.forEach((actor, idx) => {
     // force at least one vote by making the last AI always vote
     const abstainChance = idx === aiVoters.length - 1 ? 0 : 0.05;
@@ -546,14 +819,38 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         : everyone;
     const candidates = pruned.length ? pruned : everyone;
 
-    // Hard+ 紅方：若有暴露隊友，偶爾賣隊友以博信任。
-    if ((state.difficulty === "hard" || state.difficulty === "nightmare") && actor.faction === Faction.RED) {
+    // Hard+ 紅方策略投票
+    if (hard && actor.faction === Faction.RED) {
       const redTargetId = state.policeRevealedRed;
       const exposedRed =
-        redTargetId !== null ? getPlayer(state, redTargetId) : candidates.find((t) => t.role === Roles.KILLER.id && t.id !== actor.id);
-      if (exposedRed?.alive && state.rng() < 0.5) {
-        votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: exposedRed.id });
-        return;
+        redTargetId !== null ? getPlayer(state, redTargetId) : null;
+
+      // Only sell out exposed teammates (police-confirmed), not hidden allies
+      if (exposedRed?.alive && exposedRed.id !== actor.id) {
+        // Check if teammate is likely to die anyway (many votes against them)
+        const lastTally = state.history?.votes?.[state.history.votes.length - 1]?.tally || {};
+        const exposedVotes = lastTally[exposedRed.id] || 0;
+        const aliveCount = alivePlayers(state).length;
+        const likelyToDie = exposedVotes >= aliveCount * 0.3;
+        // Sell out when they're likely dead anyway (ride the wave), or occasionally to build trust
+        const sellChance = likelyToDie ? 0.7 : 0.3;
+        if (state.rng() < sellChance) {
+          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: exposedRed.id });
+          return;
+        }
+      }
+
+      // Hard+ killer vote scatter: avoid all killers voting same non-exposed target
+      if (actor.role === Roles.KILLER.id && killerVoteTargets.size > 0) {
+        const scatterCandidates = candidates.filter((t) => !killerVoteTargets.has(t.id));
+        if (scatterCandidates.length > 0 && state.rng() < 0.6) {
+          const target = randomChoice(scatterCandidates, state.rng);
+          if (target) {
+            killerVoteTargets.add(target.id);
+            votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: target.id });
+            return;
+          }
+        }
       }
     }
 
@@ -568,6 +865,23 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         const base = jitter(redProb);
         const chatBonus = actor.role !== Roles.POLICE.id ? chatWeight(t.id) * 0.05 : 0;
         let s = clamp(base + chatBonus, 0, 1);
+
+        // Hard+: behavioral voting bonuses
+        if (hard && votePatterns) {
+          // Bonus: players who voted together with known-dead reds are suspicious
+          for (const dead of state.players.filter((dp) => !dp.alive && dp.faction === Faction.RED)) {
+            const togetherCount = votePatterns.votedTogether[t.id]?.[dead.id] || 0;
+            if (togetherCount > 0) {
+              s += 0.08 * togetherCount;
+            }
+          }
+          // Penalty: players who voted together with me are less suspicious
+          const withMe = votePatterns.votedTogether[t.id]?.[actor.id] || 0;
+          if (withMe > 0 && actor.faction === Faction.BLUE) {
+            s -= 0.05 * withMe;
+          }
+        }
+
         s = clamp(s, 0, 1);
         if (s > bestScore || (s === bestScore && state.rng() < 0.5)) {
           bestScore = s;
@@ -576,7 +890,10 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       }
       target = best || randomChoice(candidates, state.rng);
     }
-    if (target) votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: target.id });
+    if (target) {
+      if (hard && actor.role === Roles.KILLER.id) killerVoteTargets.add(target.id);
+      votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: target.id });
+    }
   });
 
   if (votes.length === 0 && aiVoters.length > 0) {
@@ -587,47 +904,181 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   return votes;
 }
 
+// ─── Chat Generation ───────────────────────────────────────────────────────
+
+// Chat templates categorized by type for more human-like variety
+const CHAT_TEMPLATES = {
+  accuse: [
+    (s, t) => `${s}: I think ${t} is suspicious.`,
+    (s, t) => `${s}: ${t} feels off to me.`,
+    (s, t) => `${s}: Something about ${t} doesn't add up.`,
+    (s, t) => `${s}: We should look into ${t}.`,
+    (s, t) => `${s}: ${t} has been acting weird.`,
+    (s, t) => `${s}: I don't trust ${t} at all.`,
+  ],
+  defend: [
+    (s, t) => `${s}: I think ${t} is on our side.`,
+    (s, t) => `${s}: ${t} seems fine to me.`,
+    (s, t) => `${s}: Leave ${t} alone, they're not the problem.`,
+    (s, t) => `${s}: ${t} has been helpful so far.`,
+  ],
+  wonder: [
+    (s, t) => `${s}: What does everyone think about ${t}?`,
+    (s, t) => `${s}: I'm not sure about ${t} yet.`,
+    (s, t) => `${s}: Anyone have thoughts on ${t}?`,
+    (s, t) => `${s}: ${t} is hard to read...`,
+  ],
+  // Hard+ vote reference
+  voteRef: [
+    (s, t, extra) => `${s}: ${t} voted for ${extra} last time, that's suspicious.`,
+    (s, t, extra) => `${s}: Why did ${t} switch their vote to ${extra}?`,
+    (s, t, extra) => `${s}: ${t} keeps targeting ${extra}, are they allies?`,
+  ],
+  // Hard+ death reference
+  deathRef: [
+    (s, t, dead) => `${s}: ${t} defended ${dead} before they died... think about that.`,
+    (s, t, dead) => `${s}: Ever since ${dead} died, ${t} has been quiet.`,
+    (s, t, dead) => `${s}: After ${dead} died, I started watching ${t} more closely.`,
+  ],
+  // Hard+ red deception
+  bluff: [
+    (s, t) => `${s}: I'm pretty sure ${t} is the killer.`,
+    (s, t) => `${s}: ${t} is definitely suspicious, I've been watching them.`,
+    (s, t) => `${s}: We need to vote ${t} out today!`,
+    (s, t) => `${s}: Trust me on this, ${t} is not who they seem.`,
+  ],
+  // Hard+ red strategic silence (say nothing useful)
+  deflect: [
+    (s) => `${s}: I'm not sure who to suspect right now.`,
+    (s) => `${s}: Let's think about this carefully.`,
+    (s) => `${s}: I want to hear what others think first.`,
+    (s) => `${s}: This is getting complicated...`,
+  ],
+  // Hard+ strategic police reveal
+  policeReveal: [
+    (s, t) => `${s}: I investigated ${t} and they're RED!`,
+    (s, t) => `${s}: ${t} is confirmed red, we need to vote them out.`,
+  ],
+  policeClear: [
+    (s, t) => `${s}: I checked ${t}, they're clean.`,
+    (s, t) => `${s}: ${t} is confirmed blue, leave them alone.`,
+  ],
+};
+
+function pickTemplate(rng, templates) {
+  return templates[Math.floor(rng() * templates.length)];
+}
+
 export function generateChatLines(state, maxLines = 6) {
   const lines = [];
   const living = alivePlayers(state).filter((p) => !p.isHuman);
-    const redFound = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
-  for (const speaker of living) {
-    if (lines.length >= maxLines) break;
-    const allCandidates = alivePlayers(state).filter((t) => t.id !== speaker.id);
-    const accusePool = allCandidates;
-    const defendPool = allCandidates;
+  const hard = isHard(state);
+  const redFound = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
+  const voteHist = state.history?.votes || [];
+  const lastRound = voteHist[voteHist.length - 1];
+  const recentDeaths = state.players.filter((p) => !p.alive && p.deathCause);
 
+  // Shuffle speakers for natural order variety
+  const speakers = shuffled(living, state.rng);
+
+  for (const speaker of speakers) {
+    if (lines.length >= maxLines) break;
+
+    // Hard+: some speakers skip (not everyone talks every round)
+    if (hard && state.rng() < 0.15) continue;
+
+    const allCandidates = alivePlayers(state).filter((t) => t.id !== speaker.id);
+    const isRedSpeaker = speaker.faction === Faction.RED;
+
+    // ── Police strategic reveal ──
+    if (speaker.role === Roles.POLICE.id && redFound?.alive && state.rng() < 0.8) {
+      const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeReveal);
+      lines.push(tmpl(speaker.name, redFound.name));
+      continue;
+    }
+
+    // ── Hard+ RED deception strategies ──
+    if (hard && isRedSpeaker) {
+      const deceptionRoll = state.rng();
+
+      // 20%: Strategic deflection (say nothing useful)
+      if (deceptionRoll < 0.2) {
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.deflect);
+        lines.push(tmpl(speaker.name));
+        continue;
+      }
+
+      // 25%: Bluff — aggressively accuse an innocent
+      if (deceptionRoll < 0.45) {
+        const innocents = allCandidates.filter((t) => t.faction !== Faction.RED);
+        const bluffTarget = randomChoice(innocents.length ? innocents : allCandidates, state.rng);
+        if (bluffTarget) {
+          const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.bluff);
+          lines.push(tmpl(speaker.name, bluffTarget.name));
+          continue;
+        }
+      }
+
+      // 15%: Defend a red ally subtly
+      if (deceptionRoll < 0.6) {
+        const allies = allCandidates.filter((t) => t.role === Roles.KILLER.id);
+        const defendAlly = randomChoice(allies, state.rng);
+        if (defendAlly) {
+          const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.defend);
+          lines.push(tmpl(speaker.name, defendAlly.name));
+          continue;
+        }
+      }
+      // else: fall through to normal chat
+    }
+
+    // ── Hard+ vote/death references ──
+    if (hard && state.rng() < 0.35 && lastRound) {
+      // Reference someone's voting behavior
+      const flips = lastRound.flips || [];
+      if (flips.length > 0 && state.rng() < 0.5) {
+        const flipperId = randomChoice(flips, state.rng);
+        const flipper = getPlayer(state, flipperId);
+        if (flipper?.alive) {
+          const voteTarget = lastRound.order?.find((e) => e.actorId === flipperId);
+          const votedFor = voteTarget ? getPlayer(state, voteTarget.targetId) : null;
+          if (votedFor) {
+            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.voteRef);
+            lines.push(tmpl(speaker.name, flipper.name, votedFor.name));
+            continue;
+          }
+        }
+      }
+      // Reference a recent death
+      if (recentDeaths.length > 0 && state.rng() < 0.4) {
+        const dead = randomChoice(recentDeaths, state.rng);
+        const suspect = randomChoice(allCandidates, state.rng);
+        if (dead && suspect) {
+          const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.deathRef);
+          // Some templates use 2 args, some 3
+          lines.push(tmpl(speaker.name, suspect.name, dead.name));
+          continue;
+        }
+      }
+    }
+
+    // ── Standard chat (improved with template variety) ──
     const target =
       state.rng() < 0.5
-        ? randomChoice(accusePool.length ? accusePool : allCandidates, state.rng)
+        ? randomChoice(allCandidates, state.rng)
         : pickTargetBySuspicion(
             state,
             speaker,
-            (t) => t.alive && t.id !== speaker.id && (accusePool.includes(t) || accusePool.length === 0)
+            (t) => t.alive && t.id !== speaker.id
           );
-    let useTarget = target;
-    if (redFound?.alive && speaker.role === Roles.POLICE.id && state.rng() < 0.8) {
-      useTarget = redFound;
-    }
-    // Hard+紅方偶爾賊喊捉賊，提高迷惑性。仍然不使用真實陣營，只隨機指向任何人。
-    const deceptive = (state.difficulty === "hard" || state.difficulty === "nightmare") && speaker.faction === Faction.RED;
-    if (deceptive && state.rng() < 0.25) {
-      const anyone = allCandidates;
-      const bluff = randomChoice(anyone, state.rng);
-      if (bluff) useTarget = bluff;
-    }
+    const useTarget = target;
     const suspicion = speaker.aiMemory?.suspicion?.[useTarget?.id] ?? 0.5;
-    const tone = suspicion > 0.7 ? "accuses" : suspicion < 0.3 && defendPool.length ? "defends" : "wonders";
-    const defendTarget =
-      useTarget ||
-      (defendPool.length ? randomChoice(defendPool, state.rng) : null);
-    const line =
-      tone === "accuses"
-        ? `${speaker.name}: ${useTarget?.name ?? "someone"} feels off.`
-        : tone === "defends"
-        ? `${speaker.name}: ${defendTarget?.name ?? "someone"} seems fine to me.`
-        : `${speaker.name}: What's everyone thinking about ${useTarget?.name ?? "this"}?`;
-    lines.push(line);
+    const tone = suspicion > 0.7 ? "accuse" : suspicion < 0.3 ? "defend" : "wonder";
+    const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES[tone]);
+    const tName = (tone === "defend" && !useTarget)
+      ? randomChoice(allCandidates, state.rng)?.name ?? "someone"
+      : useTarget?.name ?? "someone";
+    lines.push(tmpl(speaker.name, tName));
   }
   return lines;
 }
