@@ -1,6 +1,115 @@
 import { GameEngine } from "../src/engine.js";
 import { Phase, Theme, Roles, DeathCause, roleMeta } from "../src/roles.js";
 
+// ─── i18n ───────────────────────────────────────────────────────────────────
+
+const LANG = {
+  en: {
+    simulating: (n, t, d) => `Simulating ${n} games | theme: ${t} | difficulty: ${d}`,
+    factionWinRates: (n, s) => `FACTION WIN RATES (${n} games, ${s}s)`,
+    timeoutWarn: (n) => `Warning: ${n} games timed out (excluded)`,
+    gameLength: "GAME LENGTH",
+    avg: "Average", median: "Median", min: "Min", max: "Max",
+    day: (d) => `Day ${String(d).padStart(2)}`,
+    victoryReasons: "VICTORY REASONS",
+    roleStats: "ROLE STATS",
+    hdrRole: "Role", hdrFaction: "Faction", hdrWin: "WinRate", hdrSurv: "Survive",
+    hdrNight: "NightDie", hdrVote: "VoteDie", hdrSeen: "Seen",
+    diffCompare: (n) => `DIFFICULTY COMPARISON (${n} games each)`,
+    hdrDiff: "Difficulty", hdrBlue: "BLUE", hdrRed: "RED", hdrOther: "OTHER",
+    hdrDays: "AvgDays", hdrTime: "Time", hdrTimeout: "Timeout",
+    progress: (i, n) => `Progress: ${i}/${n} (${((i / n) * 100).toFixed(0)}%)`,
+    factionName: { BLUE: "BLUE", RED: "RED", ZOMBIE: "ZOMBIE", GRUDGE: "GRUDGE", NONE: "NONE" },
+    diffName: { easy: "easy", normal: "normal", hard: "hard", nightmare: "nightmare" },
+    roleName: (id) => id,
+    factionLabel: (f) => f,
+    reasonText: (r) => r,
+    helpText: (themes) => `
+Usage: node tests/simulate.js [count] [theme] [difficulty] [flags]
+
+Arguments:
+  count       Number of games to simulate (default: 200)
+  theme       Theme id: ${themes}
+  difficulty  easy | normal | hard | nightmare (default: normal)
+
+Flags:
+  --compare   Run all 4 difficulties side-by-side
+  --json      Output raw stats as JSON (no formatting)
+  --zh        Output in Chinese
+  --help      Show this help
+
+Examples:
+  node tests/simulate.js 500 GOOD_VS_EVIL hard
+  node tests/simulate.js 200 --compare
+  node tests/simulate.js 100 GOOD_VS_EVIL hard --json
+  node tests/simulate.js 200 GOOD_VS_EVIL hard --zh
+`,
+  },
+  zh: {
+    simulating: (n, t, d) => `模擬 ${n} 場遊戲 | 主題：${t} | 難度：${d}`,
+    factionWinRates: (n, s) => `陣營勝率（${n} 場，${s} 秒）`,
+    timeoutWarn: (n) => `警告：${n} 場遊戲超時（已排除）`,
+    gameLength: "遊戲長度",
+    avg: "平均", median: "中位數", min: "最短", max: "最長",
+    day: (d) => `第${String(d).padStart(2)}天`,
+    victoryReasons: "勝利原因",
+    roleStats: "角色統計",
+    hdrRole: "角色", hdrFaction: "陣營", hdrWin: "勝率", hdrSurv: "存活率",
+    hdrNight: "夜殺率", hdrVote: "票殺率", hdrSeen: "場次",
+    diffCompare: (n) => `難度比較（每個難度 ${n} 場）`,
+    hdrDiff: "難度", hdrBlue: "藍方", hdrRed: "紅方", hdrOther: "其他",
+    hdrDays: "平均天數", hdrTime: "耗時", hdrTimeout: "超時",
+    progress: (i, n) => `進度：${i}/${n}（${((i / n) * 100).toFixed(0)}%）`,
+    factionName: { BLUE: "藍方", RED: "紅方", ZOMBIE: "殭屍", GRUDGE: "怨靈", NONE: "無" },
+    diffName: { easy: "簡單", normal: "普通", hard: "困難", nightmare: "噩夢" },
+    roleName: (id) => {
+      const map = {
+        CIVILIAN: "平民", POLICE: "警察", KILLER: "殺手", DOCTOR: "醫生",
+        SNIPER: "狙擊手", AGENT: "特務", TERRORIST: "恐怖份子", COWBOY: "牛仔",
+        KIDNAPPER: "綁匪", ZOMBIE: "殭屍", RIOT_POLICE: "鎮暴警察",
+        ARSONIST: "縱火犯", HEAVENLY_FIEND: "天煞", VINE_DEMON: "藤魔",
+        BRAT: "屁孩", NIGHTMARE_DEMON: "夢魔", EXORCIST: "驅魔師",
+        NECROMANCER: "死靈法師", PURIFIER: "淨化者", GRUDGE_BEAST: "怨靈獸",
+      };
+      return map[id] || id;
+    },
+    factionLabel: (f) => ({ BLUE: "藍", RED: "紅", GREEN: "綠" }[f] || f),
+    reasonText: (r) => {
+      const map = {
+        "All killers eliminated.": "所有殺手被消滅。",
+        "Red faction satisfied elimination condition.": "紅方達成殲滅條件。",
+        "Zombies outnumber the living.": "殭屍數量超過存活者。",
+        "Grudge Beasts finished their rage condition.": "怨靈獸完成狂暴條件。",
+        "Grudge Beasts survive without berserk (overriding red win).": "怨靈獸未狂暴存活（覆寫紅方勝利）。",
+        "Grudge Beasts survive without berserk (overriding blue win).": "怨靈獸未狂暴存活（覆寫藍方勝利）。",
+        "Grudge co-win after berserk triggered by BLUE; RED cleared police.": "怨靈共贏（藍方觸發狂暴，紅方消滅警察）。",
+        "Grudge co-win after berserk triggered by RED; BLUE cleared killers.": "怨靈共贏（紅方觸發狂暴，藍方消滅殺手）。",
+      };
+      return map[r] || r;
+    },
+    helpText: (themes) => `
+用法：node tests/simulate.js [場數] [主題] [難度] [選項]
+
+參數：
+  場數        模擬遊戲數量（預設：200）
+  主題        主題 ID：${themes}
+  難度        easy | normal | hard | nightmare（預設：normal）
+
+選項：
+  --compare   比較所有 4 種難度
+  --json      輸出 JSON 格式
+  --zh        中文輸出
+  --help      顯示說明
+
+範例：
+  node tests/simulate.js 500 GOOD_VS_EVIL hard
+  node tests/simulate.js 200 --compare
+  node tests/simulate.js 100 GOOD_VS_EVIL hard --json
+  node tests/simulate.js 200 GOOD_VS_EVIL hard --zh
+`,
+  },
+};
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function resolveTheme(input) {
@@ -58,7 +167,7 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
 
 // ─── Batch Simulator ────────────────────────────────────────────────────────
 
-function simulateGames(count, theme, difficulty, { onProgress } = {}) {
+function simulateGames(count, theme, difficulty, { onProgress, L } = {}) {
   const tally = {};
   const roleSeen = {};
   const roleWins = {};
@@ -73,7 +182,7 @@ function simulateGames(count, theme, difficulty, { onProgress } = {}) {
 
   for (let i = 0; i < count; i++) {
     if (onProgress && i > 0 && i % onProgress === 0) {
-      process.stderr.write(`\r  Progress: ${i}/${count} (${((i / count) * 100).toFixed(0)}%)`);
+      process.stderr.write(`\r  ${L.progress(i, count)}`);
     }
 
     const seed = baseSeed + hashSeed(i);
@@ -127,38 +236,20 @@ function bar(ratio, width = 20) {
   return "█".repeat(filled) + "░".repeat(width - filled);
 }
 
-function printHelp() {
-  const themes = Object.values(Theme).map((t) => t.id).join(", ");
-  console.log(`
-Usage: node tests/simulate.js [count] [theme] [difficulty] [flags]
-
-Arguments:
-  count       Number of games to simulate (default: 200)
-  theme       Theme id: ${themes}
-  difficulty  easy | normal | hard | nightmare (default: normal)
-
-Flags:
-  --compare   Run all 4 difficulties side-by-side
-  --json      Output raw stats as JSON (no formatting)
-  --help      Show this help
-
-Examples:
-  node tests/simulate.js 500 GOOD_VS_EVIL hard
-  node tests/simulate.js 200 --compare
-  node tests/simulate.js 100 GOOD_VS_EVIL hard --json
-`);
-}
-
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
 if (args.includes("--help") || args.includes("-h")) {
-  printHelp();
+  const L = args.includes("--zh") ? LANG.zh : LANG.en;
+  const themes = Object.values(Theme).map((t) => t.id).join(", ");
+  console.log(L.helpText(themes));
   process.exit(0);
 }
 
+const zhMode = args.includes("--zh");
 const jsonMode = args.includes("--json");
 const compareMode = args.includes("--compare");
+const L = zhMode ? LANG.zh : LANG.en;
 const positional = args.filter((a) => !a.startsWith("--"));
 
 const count = Number(positional[0]) || 200;
@@ -168,17 +259,16 @@ const { id: theme, matched: themeMatched } = themeArg
   : { id: Theme.GOOD_VS_EVIL.id, matched: false };
 const difficulty = positional[2] || (!themeArg || themeMatched ? "normal" : themeArg);
 
-// Progress indicator: show every 50 games for large runs
 const progressInterval = count >= 100 ? 50 : 0;
 
 if (!jsonMode) {
   console.log(`\n${"═".repeat(60)}`);
-  console.log(`  Simulating ${count} games | theme: ${theme} | difficulty: ${difficulty}`);
+  console.log(`  ${L.simulating(count, theme, L.diffName[difficulty] || difficulty)}`);
   console.log(`${"═".repeat(60)}\n`);
 }
 
 const t0 = Date.now();
-const stats = simulateGames(count, theme, difficulty, { onProgress: progressInterval });
+const stats = simulateGames(count, theme, difficulty, { onProgress: progressInterval, L });
 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
 const total = Object.values(stats.tally).reduce((a, b) => a + b, 0);
 
@@ -191,9 +281,9 @@ if (jsonMode && !compareMode) {
 
 // ── Faction Win Rates ──
 
-console.log(`  FACTION WIN RATES (${total} games, ${elapsed}s)`);
+console.log(`  ${L.factionWinRates(total, elapsed)}`);
 if (stats.timeouts > 0) {
-  console.log(`  ⚠ ${stats.timeouts} games timed out (excluded from stats)`);
+  console.log(`  ${L.timeoutWarn(stats.timeouts)}`);
 }
 console.log(`  ${"─".repeat(50)}`);
 const factionOrder = ["BLUE", "RED", "ZOMBIE", "GRUDGE", "NONE"];
@@ -201,7 +291,7 @@ for (const side of factionOrder) {
   const wins = stats.tally[side] || 0;
   if (wins === 0 && (side === "NONE" || side === "ZOMBIE" || side === "GRUDGE")) continue;
   const ratio = wins / total;
-  console.log(`  ${side.padEnd(8)} ${bar(ratio)} ${pct(wins, total)} (${wins})`);
+  console.log(`  ${(L.factionName[side] || side).padEnd(8)} ${bar(ratio)} ${pct(wins, total)} (${wins})`);
 }
 
 // ── Game Length Stats ──
@@ -214,9 +304,9 @@ if (days.length > 0) {
   const maxDays = sorted[sorted.length - 1];
   const medianDays = sorted[Math.floor(sorted.length / 2)];
 
-  console.log(`\n  GAME LENGTH`);
+  console.log(`\n  ${L.gameLength}`);
   console.log(`  ${"─".repeat(50)}`);
-  console.log(`  Average: ${avgDays} days | Median: ${medianDays} | Min: ${minDays} | Max: ${maxDays}`);
+  console.log(`  ${L.avg}：${avgDays} | ${L.median}：${medianDays} | ${L.min}：${minDays} | ${L.max}：${maxDays}`);
 
   const dayBuckets = {};
   for (const d of days) dayBuckets[d] = (dayBuckets[d] || 0) + 1;
@@ -224,24 +314,24 @@ if (days.length > 0) {
   for (const d of bucketKeys) {
     const cnt = dayBuckets[d];
     const ratio = cnt / total;
-    console.log(`  Day ${String(d).padStart(2)}: ${bar(ratio, 30)} ${pct(cnt, total)} (${cnt})`);
+    console.log(`  ${L.day(d)}：${bar(ratio, 30)} ${pct(cnt, total)} (${cnt})`);
   }
 }
 
 // ── Victory Reasons ──
 
-console.log(`\n  VICTORY REASONS`);
+console.log(`\n  ${L.victoryReasons}`);
 console.log(`  ${"─".repeat(50)}`);
 for (const [reason, cnt] of Object.entries(stats.reasonCounts).sort((a, b) => b[1] - a[1])) {
-  console.log(`  ${reason.padEnd(40)} ${pct(cnt, total)} (${cnt})`);
+  console.log(`  ${L.reasonText(reason).padEnd(40)} ${pct(cnt, total)} (${cnt})`);
 }
 
 // ── Role Stats Table ──
 
-console.log(`\n  ROLE STATS`);
+console.log(`\n  ${L.roleStats}`);
 console.log(`  ${"─".repeat(72)}`);
 console.log(
-  `  ${"Role".padEnd(20)} ${"Faction".padEnd(7)} ${"WinRate".padStart(7)} ${"Survive".padStart(8)} ${"NightDie".padStart(9)} ${"VoteDie".padStart(8)} ${"Seen".padStart(5)}`
+  `  ${L.hdrRole.padEnd(20)} ${L.hdrFaction.padEnd(7)} ${L.hdrWin.padStart(7)} ${L.hdrSurv.padStart(8)} ${L.hdrNight.padStart(9)} ${L.hdrVote.padStart(8)} ${L.hdrSeen.padStart(5)}`
 );
 console.log(`  ${"─".repeat(72)}`);
 
@@ -260,7 +350,7 @@ for (const role of roles) {
   const voteDied = stats.roleDeathByVote[role] || 0;
   const faction = roleMeta(role)?.faction || "?";
   console.log(
-    `  ${role.padEnd(20)} ${faction.padEnd(7)} ${pct(wins, seen)} ${pct(survived, seen)} ${pct(nightDied, seen)} ${pct(voteDied, seen)} ${String(seen).padStart(5)}`
+    `  ${L.roleName(role).padEnd(20)} ${L.factionLabel(faction).padEnd(7)} ${pct(wins, seen)} ${pct(survived, seen)} ${pct(nightDied, seen)} ${pct(voteDied, seen)} ${String(seen).padStart(5)}`
   );
 }
 
@@ -268,19 +358,18 @@ for (const role of roles) {
 
 if (compareMode) {
   console.log(`\n${"═".repeat(60)}`);
-  console.log(`  DIFFICULTY COMPARISON (${count} games each)`);
+  console.log(`  ${L.diffCompare(count)}`);
   console.log(`${"═".repeat(60)}\n`);
 
   const difficulties = ["easy", "normal", "hard", "nightmare"];
   const allResults = {};
 
-  // Reuse the already-computed stats for the current difficulty
   allResults[difficulty] = { stats, total, elapsed, avgDays: days.length > 0 ? (days.reduce((a, b) => a + b, 0) / days.length).toFixed(1) : "0" };
 
   for (const diff of difficulties) {
     if (diff === difficulty) continue;
     const t1 = Date.now();
-    const s = simulateGames(count, theme, diff, { onProgress: progressInterval });
+    const s = simulateGames(count, theme, diff, { onProgress: progressInterval, L });
     const dt = ((Date.now() - t1) / 1000).toFixed(1);
     const t = Object.values(s.tally).reduce((a, b) => a + b, 0);
     const avgD = s.dayLengths.length > 0 ? (s.dayLengths.reduce((a, b) => a + b, 0) / s.dayLengths.length).toFixed(1) : "0";
@@ -295,7 +384,7 @@ if (compareMode) {
     }
     console.log(JSON.stringify(jsonOut, null, 2));
   } else {
-    console.log(`  ${"Difficulty".padEnd(12)} ${"BLUE".padStart(7)} ${"RED".padStart(7)} ${"OTHER".padStart(7)} ${"AvgDays".padStart(8)} ${"Time".padStart(6)} ${"Timeout".padStart(8)}`);
+    console.log(`  ${L.hdrDiff.padEnd(12)} ${L.hdrBlue.padStart(7)} ${L.hdrRed.padStart(7)} ${L.hdrOther.padStart(7)} ${L.hdrDays.padStart(8)} ${L.hdrTime.padStart(6)} ${L.hdrTimeout.padStart(8)}`);
     console.log(`  ${"─".repeat(62)}`);
 
     for (const diff of difficulties) {
@@ -305,7 +394,7 @@ if (compareMode) {
       const other = r.total - blue - red;
       const to = r.stats.timeouts || 0;
       console.log(
-        `  ${diff.padEnd(12)} ${pct(blue, r.total)} ${pct(red, r.total)} ${pct(other, r.total)} ${r.avgDays.padStart(8)} ${(r.elapsed + "s").padStart(6)} ${String(to).padStart(8)}`
+        `  ${(L.diffName[diff] || diff).padEnd(12)} ${pct(blue, r.total)} ${pct(red, r.total)} ${pct(other, r.total)} ${r.avgDays.padStart(8)} ${(r.elapsed + "s").padStart(6)} ${String(to).padStart(8)}`
       );
     }
   }
