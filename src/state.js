@@ -93,9 +93,8 @@ export function createInitialState(
   },
     spectatorChat: [],
     killerChat: [],
-  policeChat: [],
-  killerChat: [],
-  grudgeChat: [],
+    policeChat: [],
+    grudgeChat: [],
     pendingActions: {
       night: [],
       vote: [],

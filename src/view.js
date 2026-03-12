@@ -107,6 +107,7 @@ export function buildSpectatorView(state) {
     // Do not expose private channels to spectators to prevent leakage.
     killerChat: [],
     policeChat: [],
+    grudgeChat: [],
     spectatorChat: [...(state.spectatorChat || [])],
   };
 }

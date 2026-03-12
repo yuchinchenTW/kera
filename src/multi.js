@@ -35,10 +35,6 @@ const els = {
   grudgeChatLines: document.getElementById("grudgeChatLines"),
   grudgeChatInput: document.getElementById("grudgeChatInput"),
   sendGrudgeChat: document.getElementById("sendGrudgeChat"),
-  grudgeChatInput: document.getElementById("grudgeChatInput"),
-  sendGrudgeChat: document.getElementById("sendGrudgeChat"),
-  grudgeChatBox: document.getElementById("grudgeChatBox"),
-  grudgeChatLines: document.getElementById("grudgeChatLines"),
   policeChatBox: document.getElementById("policeChatBox"),
   policeChatLines: document.getElementById("policeChatLines"),
   policeChatInput: document.getElementById("policeChatInput"),
@@ -182,10 +178,10 @@ const translations = {
       AGENT: "特務",
       TERRORIST: "恐怖分子",
       COWBOY: "牛仔",
-      KIDNAPPER: "綁匯",
+      KIDNAPPER: "綁匪",
       ZOMBIE: "死靈",
       RIOT_POLICE: "防暴警",
-      ARSONIST: "縫火犯",
+      ARSONIST: "縱火犯",
       HEAVENLY_FIEND: "天罰使",
       VINE_DEMON: "藤妖",
       BRAT: "熊孩子",
@@ -293,14 +289,14 @@ function translateLine(line) {
     AGENT: "特工",
     TERRORIST: "恐怖份子",
     COWBOY: "牛仔",
-    KIDNAPPER: "綁匭",
+    KIDNAPPER: "綁匪",
     ZOMBIE: "殘屍",
     RIOT_POLICE: "防暴警",
     ARSONIST: "縱火犯",
     HEAVENLY_FIEND: "天罰者",
     VINE_DEMON: "藤蔓魔",
     BRAT: "熊孩子",
-    NIGHTMARE_DEMON: "夢鬜魔",
+    NIGHTMARE_DEMON: "夢魘魔",
     EXORCIST: "驅魔人",
     NECROMANCER: "死靈法師",
     PURIFIER: "淨化者",
@@ -314,16 +310,16 @@ function translateLine(line) {
     "executed by vote": "被公投處決",
     "died in a bomb blast": "死於炸彈爆炸",
     "burned by arson": "被縱火燒死",
-    "executed by ransom": "被綁匭處決",
+    "executed by ransom": "被綁匪處決",
     "killed by infection": "死於感染",
-    "choked in smoke": "窮息於濃煙",
+    "choked in smoke": "窒息於濃煙",
     "died with their agent": "與特工連命而死",
     "shot by a cowboy": "被牛仔射殺",
     "cowboy backfire": "牛仔反噬身亡",
     "petrified by an exorcist": "被驅魔鎖魂",
-    "cursed by a necromancer": "遭死靈諼咒",
+    "cursed by a necromancer": "遭死靈詛咒",
     "smited by a heavenly fiend": "被天罰擊殺",
-    "slain by nightmare demon": "被夢鬜擊殺",
+    "slain by nightmare demon": "被夢魘擊殺",
     "cut down by grudge beasts": "被怨獸撕裂",
     "sacrificed by vine seed": "為藤種換命",
     "unknown": "未知原因",
@@ -333,13 +329,13 @@ function translateLine(line) {
     const [, prefix = "", name, faction, role] = intelMatch;
     const factionText = factionMap[faction] || faction;
     const roleText = roleMap[role] || role;
-    return `${prefix}${name} ? ${factionText} (${roleText})`;
+    return `${prefix}調查結果：${name} 是 ${factionText} (${roleText})`;
   }
   const deathMatch = line.match(/^(.+) died \((.+)\)\.$/);
   if (deathMatch) {
     const [, name, causeEn] = deathMatch;
     const causeZh = deathMap[causeEn] || causeEn;
-    return `${name} ?? (${causeZh})`;
+    return `${name} 死亡 (${causeZh})`;
   }
   const rules = [
 [/Someone deployed smoke on (.+)\./, "有人對 $1 投擲了煙霧彈。"],
@@ -364,7 +360,7 @@ function translateLine(line) {
     [/Grudge Beasts entered berserk rage\./, "怨獸進入狂暴狀態。"],
     [/(.+) turned into a zombie overnight\./, "$1 在夜裡變成了殘屍。"],
     [/(.+) was overwhelmed and turned into a zombie immediately\./, "$1 被壓制後立刻變成殘屍。"],
-    [/feels off\./, "覺得不對動。"],
+    [/feels off\./, "覺得不對勁。"],
     [/seems fine to me\./, "在我看來沒問題。"],
     [/What's everyone thinking about (.+)\?/, "大家覺得 $1 怎麼樣？"],
   ];
