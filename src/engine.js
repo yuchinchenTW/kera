@@ -1,4 +1,4 @@
-import { buildAiNightActions, buildAiVoteActions, generateChatLines, generateLastWords, generateFactionChat } from "./ai.js";
+import { buildAiNightActions, buildAiVoteActions, generateChatLines, generateLastWords, generateFactionChat, generateNightFactionChat } from "./ai.js";
 import {
   addPrivateLog,
   addPublicLog,
@@ -101,6 +101,9 @@ export class GameEngine {
       p.status.zombieBites = 0;
       p.status.exorcistChainsUsed = 0;
     }
+
+    // AI faction chat: night-phase strategic discussion before actions
+    generateNightFactionChat(this.state);
   }
 
   resolveNight(humanAction = null, opts = {}) {

@@ -1523,8 +1523,271 @@ const FACTION_CHAT = {
   },
 };
 
+// ── Night-specific faction chat templates ──
+const NIGHT_FACTION_CHAT = {
+  killer: {
+    planKill: [
+      (s, t) => `${s}: Kill ${t} tonight, they're the biggest threat.||${s}：今晚殺 ${t}，他威脅最大。`,
+      (s, t) => `${s}: ${t} is exposed, let's finish them off.||${s}：${t} 暴露了，解決掉他。`,
+      (s, t) => `${s}: I'll handle ${t} tonight.||${s}：今晚我來處理 ${t}。`,
+      (s, t) => `${s}: Let's take out ${t} before they expose us.||${s}：趁 ${t} 揭發我們之前先下手。`,
+    ],
+    avoidWarn: [
+      (s, t) => `${s}: Don't touch ${t}, doctor might be guarding them.||${s}：別動 ${t}，醫生可能在守他。`,
+      (s, t) => `${s}: ${t} survived last time, someone is protecting them.||${s}：${t} 上次沒死，有人在保他。`,
+      (s, t) => `${s}: Skip ${t}, too risky tonight.||${s}：跳過 ${t}，今晚太危險了。`,
+    ],
+    tomorrowPlan: [
+      (s, t) => `${s}: After the kill, we frame ${t} tomorrow in chat.||${s}：殺完之後，明天帶風向指控 ${t}。`,
+      (s) => `${s}: Stay calm tomorrow, vote separately.||${s}：明天保持冷靜，分散投票。`,
+      (s) => `${s}: If one of us gets suspected, the others play dumb.||${s}：如果有人被懷疑，其他人裝傻。`,
+      (s, t) => `${s}: Tomorrow let's push suspicion toward ${t}.||${s}：明天把嫌疑引向 ${t}。`,
+    ],
+    urgency: [
+      (s) => `${s}: We're running out of time, need big kills now.||${s}：時間不多了，必須殺關鍵的人。`,
+      (s) => `${s}: They're closing in, pick carefully tonight.||${s}：他們快查到了，今晚要選好目標。`,
+      (s) => `${s}: Only a few rounds left, make this count.||${s}：剩沒幾回合了，要殺對人。`,
+    ],
+  },
+  police: {
+    planInvestigate: [
+      (s, t) => `${s}: I'll investigate ${t} tonight, they're suspicious.||${s}：今晚我查 ${t}，他很可疑。`,
+      (s, t) => `${s}: ${t} has been too quiet, checking them tonight.||${s}：${t} 太安靜了，今晚查他。`,
+      (s, t) => `${s}: Let me verify ${t}, their voting is off.||${s}：讓我驗一下 ${t}，他的投票很奇怪。`,
+      (s, t) => `${s}: Focus on ${t} tonight, could be a killer.||${s}：今晚查 ${t}，可能是殺手。`,
+    ],
+    shareResult: [
+      (s, t) => `${s}: Last check confirmed ${t} is RED — be careful.||${s}：上次查驗確認 ${t} 是紅方，小心。`,
+      (s, t) => `${s}: Good news, ${t} is blue. One less to worry about.||${s}：好消息，${t} 是藍方，少一個要擔心的。`,
+      (s, t) => `${s}: ${t} is clean, I verified them already.||${s}：${t} 是好人，我已經查過了。`,
+    ],
+    protectAdvice: [
+      (s, t) => `${s}: We should keep an eye on ${t}, they might be targeted.||${s}：注意 ${t}，他可能被殺手盯上了。`,
+      (s, t) => `${s}: Hope the doctor protects ${t} tonight.||${s}：希望醫生今晚保 ${t}。`,
+      (s) => `${s}: Stay safe tonight everyone, killers will be aggressive.||${s}：今晚大家小心，殺手會很積極。`,
+    ],
+    tomorrowPlan: [
+      (s, t) => `${s}: If ${t} is red, we reveal them tomorrow and vote.||${s}：如果 ${t} 是紅方，明天就公開投他。`,
+      (s) => `${s}: Let's coordinate tomorrow — don't split votes.||${s}：明天要協調好，別分散投票。`,
+      (s, t) => `${s}: Tomorrow we push for voting out ${t}, everyone agree?||${s}：明天大家一起投 ${t}，同意嗎？`,
+    ],
+  },
+  grudge: {
+    planJudge: [
+      (s, t) => `${s}: Let's judge ${t} tonight, I have a feeling.||${s}：今晚審判 ${t} 吧，我有預感。`,
+      (s, t) => `${s}: ${t} is suspicious, worth judging tonight.||${s}：${t} 很可疑，今晚審他。`,
+      (s, t) => `${s}: If we judge ${t} and they're red, we gain a lot.||${s}：如果審 ${t} 是紅方，我們賺到了。`,
+    ],
+    caution: [
+      (s) => `${s}: Be careful tonight, a wrong judgment kills one of us.||${s}：今晚小心，審判錯了我們要死人。`,
+      (s, t) => `${s}: Not sure about ${t}, maybe skip judging tonight.||${s}：不確定 ${t}，今晚或許別審判。`,
+      (s) => `${s}: Let's observe one more round before judging.||${s}：再觀察一回合再審判吧。`,
+    ],
+    berserkHunt: [
+      (s, t) => `${s}: We're berserk! Go for ${t} tonight!||${s}：狂暴了！今晚衝 ${t}！`,
+      (s, t) => `${s}: Hunt ${t} down, no mercy.||${s}：追殺 ${t}，不留情。`,
+      (s) => `${s}: Berserk mode — eliminate as many as we can!||${s}：狂暴模式，盡量多殺！`,
+    ],
+  },
+};
+
 /**
- * Generate private faction chat lines for AI players.
+ * Generate night-phase private faction chat lines for AI players.
+ * Hard+: pre-action strategy discussions about tonight's plans.
+ */
+export function generateNightFactionChat(state) {
+  if (!isHard(state)) return;
+
+  const alive = alivePlayers(state);
+
+  // ── Killer Night Chat ──
+  const killers = alive.filter((p) => p.role === Roles.KILLER.id && !p.isHuman);
+  if (killers.length > 0) {
+    state.killerChat = state.killerChat || [];
+    const speaker = randomChoice(killers, state.rng);
+    if (speaker) {
+      ensureAdvancedMemory(speaker);
+      const nonKillers = alive.filter((t) => t.role !== Roles.KILLER.id);
+
+      // Check if a target was saved recently
+      const savedRecently = (state.lastNightSummary || []).some(
+        (e) => typeof e === "string" && e.includes("saved")
+      );
+
+      const roll = state.rng();
+      let line = null;
+
+      // Pick high-value target
+      let bestTarget = null;
+      let bestScore = -Infinity;
+      for (const t of nonKillers) {
+        const blueProb = factionProb(speaker, t.id, Faction.BLUE) ?? 0.5;
+        const policeProb = speaker.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+        const score = blueProb + policeProb * 0.5;
+        if (score > bestScore) { bestScore = score; bestTarget = t; }
+      }
+      const target = bestTarget || randomChoice(nonKillers, state.rng);
+
+      if (savedRecently && target && roll < 0.3) {
+        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.avoidWarn);
+        line = tmpl(speaker.name, target.name);
+      } else if (roll < 0.5 && target) {
+        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.planKill);
+        line = tmpl(speaker.name, target.name);
+      } else if (roll < 0.75 && target) {
+        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.tomorrowPlan);
+        line = tmpl(speaker.name, target.name);
+      } else {
+        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.urgency);
+        line = tmpl(speaker.name);
+      }
+
+      if (line) {
+        state.killerChat.push(line);
+        state.privateLogs.killer = state.privateLogs.killer || [];
+        state.privateLogs.killer.push(line);
+      }
+
+      // Second killer responds
+      const otherKillers = killers.filter((k) => k.id !== speaker.id);
+      if (otherKillers.length > 0 && state.rng() < 0.5) {
+        const responder = randomChoice(otherKillers, state.rng);
+        const t2 = randomChoice(nonKillers, state.rng);
+        const r2 = state.rng();
+        let reply = null;
+        if (r2 < 0.4 && t2) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.planKill);
+          reply = tmpl(responder.name, t2.name);
+        } else if (r2 < 0.7) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.tomorrowPlan);
+          reply = t2 ? tmpl(responder.name, t2.name) : tmpl(responder.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.urgency);
+          reply = tmpl(responder.name);
+        }
+        if (reply) {
+          state.killerChat.push(reply);
+          state.privateLogs.killer.push(reply);
+        }
+      }
+    }
+  }
+
+  // ── Police Night Chat ──
+  const police = alive.filter((p) => p.role === Roles.POLICE.id && !p.isHuman);
+  if (police.length > 0) {
+    state.policeChat = state.policeChat || [];
+    const speaker = randomChoice(police, state.rng);
+    if (speaker) {
+      ensureAdvancedMemory(speaker);
+      const nonPolice = alive.filter((t) => t.role !== Roles.POLICE.id);
+      const roll = state.rng();
+      let line = null;
+
+      // Share last investigation result if available
+      const revealedRed = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
+      if (revealedRed?.alive && state.rng() < 0.4) {
+        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.shareResult);
+        line = tmpl(speaker.name, revealedRed.name);
+      }
+
+      if (!line) {
+        // Pick most suspicious to investigate
+        let suspect = null;
+        let highSusp = -1;
+        for (const t of nonPolice) {
+          const s = speaker.aiMemory?.suspicion?.[t.id] ?? 0.5;
+          if (s > highSusp) { highSusp = s; suspect = t; }
+        }
+        const target = suspect || randomChoice(nonPolice, state.rng);
+
+        if (roll < 0.4 && target) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.planInvestigate);
+          line = tmpl(speaker.name, target.name);
+        } else if (roll < 0.65 && target) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.tomorrowPlan);
+          line = tmpl(speaker.name, target.name);
+        } else if (roll < 0.85 && target) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdvice);
+          line = tmpl(speaker.name, target.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdvice);
+          line = tmpl(speaker.name);
+        }
+      }
+
+      if (line) {
+        state.policeChat.push(line);
+        state.privateLogs.police = state.privateLogs.police || [];
+        state.privateLogs.police.push(line);
+      }
+
+      // Second police responds
+      const otherPolice = police.filter((p) => p.id !== speaker.id);
+      if (otherPolice.length > 0 && state.rng() < 0.5) {
+        const responder = randomChoice(otherPolice, state.rng);
+        const target = randomChoice(nonPolice, state.rng);
+        let reply = null;
+        const r2 = state.rng();
+        if (r2 < 0.5 && target) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.planInvestigate);
+          reply = tmpl(responder.name, target.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdvice);
+          reply = target ? tmpl(responder.name, target.name) : tmpl(responder.name);
+        }
+        if (reply) {
+          state.policeChat.push(reply);
+          state.privateLogs.police.push(reply);
+        }
+      }
+    }
+  }
+
+  // ── Grudge Night Chat ──
+  const grudge = alive.filter((p) => p.role === Roles.GRUDGE_BEAST.id && !p.isHuman);
+  if (grudge.length > 0) {
+    state.grudgeChat = state.grudgeChat || [];
+    const speaker = randomChoice(grudge, state.rng);
+    if (speaker) {
+      ensureAdvancedMemory(speaker);
+      const nonGrudge = alive.filter((t) => t.role !== Roles.GRUDGE_BEAST.id);
+      const target = randomChoice(nonGrudge, state.rng);
+      const roll = state.rng();
+      let line = null;
+
+      if (state.grudgeState.berserk) {
+        if (target && roll < 0.6) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.berserkHunt);
+          line = tmpl(speaker.name, target.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.berserkHunt);
+          line = tmpl(speaker.name);
+        }
+      } else {
+        if (target && roll < 0.4) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.planJudge);
+          line = tmpl(speaker.name, target.name);
+        } else if (roll < 0.7) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.caution);
+          line = target ? tmpl(speaker.name, target.name) : tmpl(speaker.name);
+        } else if (target) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.planJudge);
+          line = tmpl(speaker.name, target.name);
+        }
+      }
+
+      if (line) {
+        state.grudgeChat.push(line);
+        state.privateLogs.grudge = state.privateLogs.grudge || [];
+        state.privateLogs.grudge.push(line);
+      }
+    }
+  }
+}
+
+/**
+ * Generate day-phase private faction chat lines for AI players.
  * Hard+: strategic discussions about targets, threats, coordination.
  * Normal/Easy: no faction chat.
  */
