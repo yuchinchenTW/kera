@@ -611,7 +611,7 @@ function renderKillerChat() {
   }
   for (const line of lines.slice(-10)) {
     const p = document.createElement("p");
-    p.textContent = line;
+    p.textContent = translateLine(line);
     el.killerChatLines.appendChild(p);
   }
 }
@@ -632,7 +632,7 @@ function renderPoliceChat() {
   }
   for (const line of lines.slice(-10)) {
     const p = document.createElement("p");
-    p.textContent = line;
+    p.textContent = translateLine(line);
     el.policeChatLines.appendChild(p);
   }
 }

@@ -1,4 +1,4 @@
-import { buildAiNightActions, buildAiVoteActions, generateChatLines, generateLastWords } from "./ai.js";
+import { buildAiNightActions, buildAiVoteActions, generateChatLines, generateLastWords, generateFactionChat } from "./ai.js";
 import {
   addPrivateLog,
   addPublicLog,
@@ -918,6 +918,7 @@ export class GameEngine {
 
     this.state.phase = Phase.DAY;
     this.state.dayChat = generateChatLines(this.state);
+    generateFactionChat(this.state);
     this.state.chatLoggedForDay = this.state.dayNumber;
     for (const line of this.state.dayChat) {
       this.state.publicLog.push(line);

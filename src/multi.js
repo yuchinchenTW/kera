@@ -800,7 +800,7 @@ function renderView() {
     } else {
       lines.forEach((line) => {
         const p = document.createElement("p");
-        p.textContent = line;
+        p.textContent = translateLine(line);
         els.killerChatLines.appendChild(p);
       });
     }
@@ -820,7 +820,7 @@ function renderView() {
     } else {
       glines.forEach((line) => {
         const p = document.createElement("p");
-        p.textContent = line;
+        p.textContent = translateLine(line);
         els.grudgeChatLines.appendChild(p);
       });
     }
@@ -840,7 +840,7 @@ function renderView() {
     } else {
       plines.forEach((line) => {
         const p = document.createElement("p");
-        p.textContent = line;
+        p.textContent = translateLine(line);
         els.policeChatLines.appendChild(p);
       });
     }

@@ -1439,6 +1439,303 @@ export function generateChatLines(state, maxLines = 6) {
   return lines;
 }
 
+// ─── Faction Private Chat Generation ───────────────────────────────────────
+
+const FACTION_CHAT = {
+  killer: {
+    // Discuss who to kill tonight
+    targetPlan: [
+      (s, t) => `${s}: Let's go for ${t} tonight.||${s}：今晚殺 ${t} 吧。`,
+      (s, t) => `${s}: I think we should take out ${t}.||${s}：我覺得該除掉 ${t}。`,
+      (s, t) => `${s}: ${t} is getting dangerous, target them.||${s}：${t} 越來越危險了，鎖定他。`,
+    ],
+    // Warn about threats
+    threat: [
+      (s, t) => `${s}: Watch out for ${t}, they might be police.||${s}：小心 ${t}，可能是警察。`,
+      (s, t) => `${s}: ${t} is asking too many questions...||${s}：${t} 問太多問題了⋯`,
+      (s, t) => `${s}: I think ${t} is onto us.||${s}：我覺得 ${t} 懷疑我們了。`,
+    ],
+    // Coordinate voting strategy
+    voteStrategy: [
+      (s, t) => `${s}: Vote separately today, don't all target the same person.||${s}：今天分散投票，別都投同一個人。`,
+      (s, t) => `${s}: Let's frame ${t} in chat and vote them out.||${s}：白天帶風向指控 ${t}，把他投出去。`,
+      (s, t) => `${s}: If they suspect one of us, the others should defend.||${s}：如果有人被懷疑，其他人幫忙辯護。`,
+    ],
+    // React to events
+    react: [
+      (s) => `${s}: We need to be careful, they're getting close.||${s}：要小心了，他們越來越接近真相。`,
+      (s) => `${s}: Good, that went well last night.||${s}：不錯，昨晚很順利。`,
+      (s) => `${s}: Things are getting tight, stay calm.||${s}：局勢越來越緊，大家冷靜。`,
+      (s, t) => `${s}: ${t} is protected, don't waste a kill on them.||${s}：${t} 有人保護，別浪費機會。`,
+    ],
+    // Avoid doctor
+    avoidProtected: [
+      (s, t) => `${s}: ${t} was saved last night, skip them.||${s}：${t} 昨晚被救了，跳過他。`,
+      (s, t) => `${s}: Someone is protecting ${t}, pick another target.||${s}：有人在保 ${t}，換目標吧。`,
+    ],
+  },
+  police: {
+    // Share investigation results
+    shareIntel: [
+      (s, t) => `${s}: I checked ${t}, they're RED.||${s}：我查了 ${t}，是紅方。`,
+      (s, t) => `${s}: ${t} is confirmed blue, they're clean.||${s}：${t} 確認是藍方，沒問題。`,
+      (s, t) => `${s}: Investigation result: ${t} is suspicious.||${s}：查驗結果：${t} 有嫌疑。`,
+    ],
+    // Discuss who to investigate
+    investigatePlan: [
+      (s, t) => `${s}: Let's check ${t} tonight.||${s}：今晚查 ${t} 吧。`,
+      (s, t) => `${s}: We should investigate ${t}, they've been quiet.||${s}：應該查查 ${t}，他一直很安靜。`,
+      (s, t) => `${s}: ${t} voted strangely, worth checking.||${s}：${t} 投票很奇怪，值得查。`,
+    ],
+    // Coordinate vote
+    voteCoordinate: [
+      (s, t) => `${s}: We all vote ${t} today, agreed?||${s}：今天大家都投 ${t}，同意嗎？`,
+      (s, t) => `${s}: Focus fire on ${t}, don't split votes.||${s}：集火投 ${t}，別分散。`,
+      (s) => `${s}: Let's not reveal too much in public chat.||${s}：公開發言別透露太多。`,
+    ],
+    // Analysis
+    analysis: [
+      (s, t) => `${s}: ${t} defended a known red last round.||${s}：${t} 上回合幫已知紅方說話。`,
+      (s, t) => `${s}: ${t} keeps voting with the killers.||${s}：${t} 一直跟殺手投一樣的人。`,
+      (s) => `${s}: We're losing people, need to be more aggressive.||${s}：我們一直在死人，要積極一點。`,
+      (s) => `${s}: Who should we protect tonight?||${s}：今晚要保護誰？`,
+    ],
+  },
+  grudge: {
+    // Discuss judgment target
+    judgePlan: [
+      (s, t) => `${s}: Let's judge ${t}, I think they're red.||${s}：審判 ${t} 吧，我覺得他是紅方。`,
+      (s, t) => `${s}: Don't judge ${t}, might be civilian — dangerous for us.||${s}：別審判 ${t}，可能是平民，會害到我們。`,
+      (s, t) => `${s}: ${t} is worth judging, could reveal useful info.||${s}：${t} 值得審判，可能有有用的情報。`,
+    ],
+    // Berserk coordination
+    berserkPlan: [
+      (s, t) => `${s}: We're berserk now. Target ${t}.||${s}：我們狂暴了，鎖定 ${t}。`,
+      (s, t) => `${s}: Let's hunt down ${t} tonight.||${s}：今晚獵殺 ${t}。`,
+      (s) => `${s}: Focus on one faction, don't split.||${s}：專注打一個陣營，別分散。`,
+    ],
+    // Survival strategy
+    survival: [
+      (s) => `${s}: We need to stay alive, be careful with judgments.||${s}：我們要活下去，審判要謹慎。`,
+      (s) => `${s}: If we judge wrong, one of us dies.||${s}：如果審判錯了，我們會死一個。`,
+      (s) => `${s}: Let's lay low in public and not draw attention.||${s}：公開場合低調點，別引起注意。`,
+    ],
+  },
+};
+
+/**
+ * Generate private faction chat lines for AI players.
+ * Hard+: strategic discussions about targets, threats, coordination.
+ * Normal/Easy: no faction chat.
+ */
+export function generateFactionChat(state) {
+  if (!isHard(state)) return;
+
+  const alive = alivePlayers(state);
+
+  // ── Killer Chat ──
+  const killers = alive.filter((p) => p.role === Roles.KILLER.id && !p.isHuman);
+  if (killers.length > 0) {
+    state.killerChat = state.killerChat || [];
+    const speaker = randomChoice(killers, state.rng);
+    if (speaker) {
+      ensureAdvancedMemory(speaker);
+      const nonKillers = alive.filter((t) => t.role !== Roles.KILLER.id);
+
+      // Check if someone was saved last night
+      const savedTarget = (state.lastNightSummary || []).find(
+        (e) => typeof e === "string" && e.includes("saved")
+      );
+
+      const roll = state.rng();
+      let line = null;
+
+      if (savedTarget && state.rng() < 0.5) {
+        // Warn about protected target
+        const protectedName = nonKillers.find((t) =>
+          typeof savedTarget === "string" && savedTarget.includes(t.name)
+        );
+        if (protectedName) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.avoidProtected);
+          line = tmpl(speaker.name, protectedName.name);
+        }
+      }
+
+      if (!line) {
+        // Pick highest-value target to discuss
+        let bestTarget = null;
+        let bestScore = -Infinity;
+        for (const t of nonKillers) {
+          const blueProb = factionProb(speaker, t.id, Faction.BLUE) ?? 0.5;
+          const policeProb = speaker.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+          const score = blueProb + policeProb * 0.5;
+          if (score > bestScore) { bestScore = score; bestTarget = t; }
+        }
+        const target = bestTarget || randomChoice(nonKillers, state.rng);
+
+        if (roll < 0.35 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.targetPlan);
+          line = tmpl(speaker.name, target.name);
+        } else if (roll < 0.55 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.threat);
+          line = tmpl(speaker.name, target.name);
+        } else if (roll < 0.75 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.voteStrategy);
+          line = tmpl(speaker.name, target.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.react);
+          line = target ? tmpl(speaker.name, target.name) : tmpl(speaker.name);
+        }
+      }
+
+      if (line) {
+        state.killerChat.push(line);
+        state.privateLogs.killer = state.privateLogs.killer || [];
+        state.privateLogs.killer.push(line);
+      }
+
+      // Second killer may respond (50% chance)
+      const otherKillers = killers.filter((k) => k.id !== speaker.id);
+      if (otherKillers.length > 0 && state.rng() < 0.5) {
+        const responder = randomChoice(otherKillers, state.rng);
+        const target = randomChoice(nonKillers, state.rng);
+        const roll2 = state.rng();
+        let reply = null;
+        if (roll2 < 0.4 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.targetPlan);
+          reply = tmpl(responder.name, target.name);
+        } else if (roll2 < 0.7) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.react);
+          reply = target ? tmpl(responder.name, target.name) : tmpl(responder.name);
+        } else if (target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.threat);
+          reply = tmpl(responder.name, target.name);
+        }
+        if (reply) {
+          state.killerChat.push(reply);
+          state.privateLogs.killer.push(reply);
+        }
+      }
+    }
+  }
+
+  // ── Police Chat ──
+  const police = alive.filter((p) => p.role === Roles.POLICE.id && !p.isHuman);
+  if (police.length > 0) {
+    state.policeChat = state.policeChat || [];
+    const speaker = randomChoice(police, state.rng);
+    if (speaker) {
+      ensureAdvancedMemory(speaker);
+      const nonPolice = alive.filter((t) => t.role !== Roles.POLICE.id);
+      const roll = state.rng();
+      let line = null;
+
+      // If police have revealed a red, coordinate around it
+      const revealedRed = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
+      if (revealedRed?.alive && state.rng() < 0.5) {
+        const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.voteCoordinate);
+        line = tmpl(speaker.name, revealedRed.name);
+      }
+
+      if (!line) {
+        // Find most suspicious target to discuss
+        let suspect = null;
+        let highSusp = -1;
+        for (const t of nonPolice) {
+          const s = speaker.aiMemory?.suspicion?.[t.id] ?? 0.5;
+          if (s > highSusp) { highSusp = s; suspect = t; }
+        }
+        const target = suspect || randomChoice(nonPolice, state.rng);
+
+        if (roll < 0.3 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.shareIntel);
+          line = tmpl(speaker.name, target.name);
+        } else if (roll < 0.55 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.investigatePlan);
+          line = tmpl(speaker.name, target.name);
+        } else if (roll < 0.75 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.voteCoordinate);
+          line = tmpl(speaker.name, target.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysis);
+          line = target ? tmpl(speaker.name, target.name) : tmpl(speaker.name);
+        }
+      }
+
+      if (line) {
+        state.policeChat.push(line);
+        state.privateLogs.police = state.privateLogs.police || [];
+        state.privateLogs.police.push(line);
+      }
+
+      // Second police may respond
+      const otherPolice = police.filter((p) => p.id !== speaker.id);
+      if (otherPolice.length > 0 && state.rng() < 0.5) {
+        const responder = randomChoice(otherPolice, state.rng);
+        const target = randomChoice(nonPolice, state.rng);
+        let reply = null;
+        const roll2 = state.rng();
+        if (roll2 < 0.4 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.investigatePlan);
+          reply = tmpl(responder.name, target.name);
+        } else if (roll2 < 0.7 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysis);
+          reply = tmpl(responder.name, target.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysis);
+          reply = tmpl(responder.name);
+        }
+        if (reply) {
+          state.policeChat.push(reply);
+          state.privateLogs.police.push(reply);
+        }
+      }
+    }
+  }
+
+  // ── Grudge Chat ──
+  const grudge = alive.filter((p) => p.role === Roles.GRUDGE_BEAST.id && !p.isHuman);
+  if (grudge.length > 0) {
+    state.grudgeChat = state.grudgeChat || [];
+    const speaker = randomChoice(grudge, state.rng);
+    if (speaker) {
+      ensureAdvancedMemory(speaker);
+      const nonGrudge = alive.filter((t) => t.role !== Roles.GRUDGE_BEAST.id);
+      const roll = state.rng();
+      let line = null;
+
+      const target = randomChoice(nonGrudge, state.rng);
+
+      if (state.grudgeState.berserk) {
+        if (roll < 0.6 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.grudge.berserkPlan);
+          line = tmpl(speaker.name, target.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.grudge.berserkPlan);
+          line = tmpl(speaker.name);
+        }
+      } else {
+        if (roll < 0.4 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.grudge.judgePlan);
+          line = tmpl(speaker.name, target.name);
+        } else if (roll < 0.7) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.grudge.survival);
+          line = tmpl(speaker.name);
+        } else if (target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.grudge.judgePlan);
+          line = tmpl(speaker.name, target.name);
+        }
+      }
+
+      if (line) {
+        state.grudgeChat.push(line);
+        state.privateLogs.grudge = state.privateLogs.grudge || [];
+        state.privateLogs.grudge.push(line);
+      }
+    }
+  }
+}
+
 // ─── Last Words Generation ─────────────────────────────────────────────────
 
 const LAST_WORDS_TEMPLATES = {
