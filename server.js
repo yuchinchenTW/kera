@@ -578,24 +578,53 @@ wss.on("connection", (ws, req) => {
           targetId: msg.action.targetId,
           targetName,
         });
-        if (msg.action.type === "KILLER_VOTE") {
-          const line = `${actorName} targets ${targetName || "abstain"}`;
-          for (const [otherWs, meta] of room.connections.entries()) {
-            const pid = meta?.playerId;
-            if (pid === undefined || pid === null) continue;
-            const p = room.engine?.state?.players?.[pid];
-            if (p?.role === "KILLER" && p.alive) {
-              send(otherWs, { type: "action_log_killer", text: line });
+        // Notify alive allies with the same role about this action.
+        {
+          const actorPlayer = room.engine.state.players?.[seat.playerId];
+          const actorRole = actorPlayer?.role;
+          const actionLabel = msg.action.type.replace(/_/g, " ").toLowerCase();
+          const line = `[${actorName}] ${actionLabel} → ${targetName || "abstain"}`;
+
+          // Only KILLER, POLICE, GRUDGE_BEAST share action logs with same-role allies.
+          let chatArray = null;
+          let privateLogChannel = null;
+          let wsType = null;
+          if (actorRole === "KILLER") {
+            room.engine.state.killerChat = room.engine.state.killerChat || [];
+            chatArray = room.engine.state.killerChat;
+            privateLogChannel = "killer";
+            wsType = "action_log_killer";
+          } else if (actorRole === "POLICE") {
+            room.engine.state.policeChat = room.engine.state.policeChat || [];
+            chatArray = room.engine.state.policeChat;
+            privateLogChannel = "police";
+            wsType = "action_log_police";
+          } else if (actorRole === "GRUDGE_BEAST") {
+            room.engine.state.grudgeChat = room.engine.state.grudgeChat || [];
+            chatArray = room.engine.state.grudgeChat;
+            privateLogChannel = "grudge";
+            wsType = "action_log_grudge";
+          }
+
+          if (chatArray) {
+            chatArray.push(line);
+            if (privateLogChannel) {
+              room.engine.state.privateLogs[privateLogChannel] = room.engine.state.privateLogs[privateLogChannel] || [];
+              room.engine.state.privateLogs[privateLogChannel].push(line);
             }
           }
-        } else if (msg.action.type === "POLICE_INVESTIGATE") {
-          const line = `${actorName} investigates ${targetName || "abstain"}`;
-          for (const [otherWs, meta] of room.connections.entries()) {
-            const pid = meta?.playerId;
-            if (pid === undefined || pid === null) continue;
-            const p = room.engine?.state?.players?.[pid];
-            if (p?.role === "POLICE" && p.alive) {
-              send(otherWs, { type: "action_log_police", text: line });
+
+          // Real-time push to all alive allies with the same role.
+          if (wsType && actorRole) {
+            for (const [otherWs, meta] of room.connections.entries()) {
+              const pid = meta?.playerId;
+              if (pid === undefined || pid === null) continue;
+              const p = room.engine?.state?.players?.[pid];
+              if (!p?.alive) continue;
+              const shouldNotify = p.role === actorRole;
+              if (shouldNotify) {
+                send(otherWs, { type: wsType, text: line });
+              }
             }
           }
         }

@@ -470,7 +470,7 @@ function send(payload) {
 }
 
 function handleMessage(msg) {
-  if ((msg?.type === "action_log_killer" || msg?.type === "action_log_police") && msg.text) {
+  if ((msg?.type === "action_log_killer" || msg?.type === "action_log_police" || msg?.type === "action_log_grudge") && msg.text) {
     log(msg.text);
     return;
   }
@@ -513,6 +513,12 @@ function handleMessage(msg) {
       if (msg.text) log(msg.text);
       break;
     case "action_log_killer":
+      if (msg.text) log(msg.text);
+      break;
+    case "action_log_police":
+      if (msg.text) log(msg.text);
+      break;
+    case "action_log_grudge":
       if (msg.text) log(msg.text);
       break;
     case "lobby":
