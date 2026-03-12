@@ -598,13 +598,30 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.AGENT.id: {
+        // Hard+: predict who killers will target (active speakers, police candidates)
+        // and protect them instead of just highest blue prob
         let best = null;
         let bestScore = -Infinity;
+        const chatInfo = hard ? analyzeChatBehavior(state) : null;
+        const maxSpoken = chatInfo ? Math.max(1, ...Object.values(chatInfo.speakCount || {})) : 1;
         for (const t of alivePlayers(state)) {
           if (t.id === actor.id) continue;
           const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
           const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
-          const score = blueProb - redProb;
+          let score = blueProb - redProb;
+          if (hard) {
+            // Killers target active speakers and police — mirror their logic
+            const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+            score += policeProb * 0.4;
+            const speakRatio = (chatInfo?.speakCount[t.id] || 0) / maxSpoken;
+            score += speakRatio * 0.25;
+            // If someone was saved last night, they're likely targeted again
+            for (const entry of state.lastNightSummary || []) {
+              if (typeof entry === "string" && entry.includes(t.name) && entry.includes("saved")) {
+                score += 0.3;
+              }
+            }
+          }
           if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
             bestScore = score;
             best = t;
@@ -616,13 +633,22 @@ export function buildAiNightActions(state, opts = {}) {
       }
       case Roles.HEAVENLY_FIEND.id: {
         if (actor.status.fiendMode === "ABSORB") {
+          // Hard+: same logic as agent — predict killer targets
           let best = null;
           let bestScore = -Infinity;
+          const fiendChat = hard ? analyzeChatBehavior(state) : null;
+          const fiendMaxSpoken = fiendChat ? Math.max(1, ...Object.values(fiendChat.speakCount || {})) : 1;
           for (const t of shuffled(alivePlayers(state), state.rng)) {
             if (t.id === actor.id) continue;
             const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
             const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
-            const score = blueProb - redProb;
+            let score = blueProb - redProb;
+            if (hard) {
+              const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+              score += policeProb * 0.4;
+              const speakRatio = (fiendChat?.speakCount[t.id] || 0) / fiendMaxSpoken;
+              score += speakRatio * 0.25;
+            }
             if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
               bestScore = score;
               best = t;
@@ -631,7 +657,20 @@ export function buildAiNightActions(state, opts = {}) {
           const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "FIEND_PROTECT", targetId: target.id });
         } else {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          // CHARGE mode: Hard+ pick highest red-prob, not just suspicion
+          let best = null;
+          let bestScore = -Infinity;
+          for (const t of alivePlayers(state)) {
+            if (t.id === actor.id) continue;
+            const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+            const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
+            const score = hard ? (killerProb * 2 + redProb) : redProb;
+            if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+              bestScore = score;
+              best = t;
+            }
+          }
+          const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "FIEND_SHOOT", targetId: target.id });
         }
         break;
@@ -651,18 +690,45 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.COWBOY.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-        if (target) actions.push({ actorId: actor.id, type: "COWBOY_GAMBLE", targetId: target.id });
+        // Hard+: only shoot when confidence is high enough (avoid wasting on uncertainty)
+        if (hard) {
+          const bestTarget = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (bestTarget) {
+            const confidence = actor.aiMemory?.suspicion?.[bestTarget.id] ?? 0.5;
+            // Day 1: need 70% confidence, Day 3+: 50% is enough
+            const threshold = clamp(0.75 - (state.dayNumber || 1) * 0.08, 0.4, 0.75);
+            if (confidence >= threshold) {
+              actions.push({ actorId: actor.id, type: "COWBOY_GAMBLE", targetId: bestTarget.id });
+            }
+            // else: skip — hold the shot for a better opportunity
+          }
+        } else {
+          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (target) actions.push({ actorId: actor.id, type: "COWBOY_GAMBLE", targetId: target.id });
+        }
         break;
       }
       case Roles.KIDNAPPER.id: {
+        // Hard+: kidnap high-value blue targets to disable them (doctor, police, agent)
+        // instead of targeting high-suspicion (which is red-leaning = your own team)
         let best = null;
         let bestScore = -Infinity;
         for (const t of shuffled(alivePlayers(state), state.rng)) {
           if (t.id === actor.id) continue;
+          if (t.role === Roles.KILLER.id) continue; // never kidnap allies
           if (actor.lastKidnapTarget !== null && t.id === actor.lastKidnapTarget) continue;
-          const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
-          const score = redProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+          let score;
+          if (hard) {
+            const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+            const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+            const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
+            const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
+            // Prioritize disabling doctor (prevents saves) and police (prevents investigation)
+            score = blueProb + doctorProb * 0.8 + policeProb * 0.6 + agentProb * 0.4;
+          } else {
+            const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+            score = redProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+          }
           if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
             bestScore = score;
             best = t;
@@ -673,79 +739,345 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.ZOMBIE.id: {
-        const target = pickZombieTarget(state, actor);
-        if (target) actions.push({ actorId: actor.id, type: "ZOMBIE_BITE", targetId: target.id });
+        // Hard+: prioritize finishing pending conversions (bite count tracking)
+        // and avoid likely-protected targets
+        if (hard) {
+          let best = null;
+          let bestScore = -Infinity;
+          for (const t of shuffled(alivePlayers(state), state.rng)) {
+            if (t.id === actor.id) continue;
+            if (t.role === Roles.ZOMBIE.id) continue; // biting zombie = death
+            const zombieProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.ZOMBIE.id] ?? 0;
+            let score = 1 - zombieProb; // prefer non-zombies
+            // Huge bonus: if target has pending conversion, finish them off
+            if (t.status?.pendingZombieConversion) score += 1.0;
+            // Bonus: if target was bitten before (zombieBites > 0), easier to convert
+            if ((t.status?.zombieBites || 0) > 0) score += 0.5;
+            // Penalty: likely protected by agent/doctor
+            const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
+            const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
+            score -= (doctorProb + agentProb) * 0.3;
+            if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+              bestScore = score;
+              best = t;
+            }
+          }
+          const target = best || pickZombieTarget(state, actor);
+          if (target) actions.push({ actorId: actor.id, type: "ZOMBIE_BITE", targetId: target.id });
+        } else {
+          const target = pickZombieTarget(state, actor);
+          if (target) actions.push({ actorId: actor.id, type: "ZOMBIE_BITE", targetId: target.id });
+        }
         break;
       }
       case Roles.RIOT_POLICE.id: {
         if (state.usage.riotGrenades < (Roles.RIOT_POLICE.maxGrenades || 0)) {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-          if (target) actions.push({ actorId: actor.id, type: "RIOT_SMOKE", targetId: target.id });
+          if (hard) {
+            // Hard+: save grenades for confirmed/high-confidence red targets
+            // Also consider smoking the revealed red to block their night action
+            const remaining = (Roles.RIOT_POLICE.maxGrenades || 0) - state.usage.riotGrenades;
+            let best = null;
+            let bestScore = -Infinity;
+            for (const t of alivePlayers(state)) {
+              if (t.id === actor.id) continue;
+              const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+              const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
+              let score = killerProb * 2 + redProb;
+              // Big bonus for police-revealed red
+              if (state.policeRevealedRed === t.id) score += 0.8;
+              if (score > bestScore) {
+                bestScore = score;
+                best = t;
+              }
+            }
+            // Only use if confidence is high enough, or few grenades left (use it or lose it)
+            const confThreshold = remaining <= 1 ? 0.3 : 0.5;
+            if (best && bestScore >= confThreshold) {
+              actions.push({ actorId: actor.id, type: "RIOT_SMOKE", targetId: best.id });
+            }
+          } else {
+            const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+            if (target) actions.push({ actorId: actor.id, type: "RIOT_SMOKE", targetId: target.id });
+          }
         }
         break;
       }
       case Roles.ARSONIST.id: {
         const marked = state.players.filter((p) => p.status.arsonMarked && p.alive).length;
-        const doIgnite = marked >= 2 || state.rng() > 0.65;
-        if (doIgnite) {
-          actions.push({ actorId: actor.id, type: "ARSON_IGNITE" });
+        if (hard) {
+          // Hard+: be patient — mark more before igniting for bigger impact
+          // Ignite when 3+ marked, or 2+ if self-threat is high (about to die)
+          const selfThreat = actor.aiMemory?.selfThreat ?? 0;
+          const igniteThreshold = selfThreat > 0.5 ? 1 : 3;
+          if (marked >= igniteThreshold) {
+            actions.push({ actorId: actor.id, type: "ARSON_IGNITE" });
+          } else if (state.usage.arsonMarks < (Roles.ARSONIST.maxMarks || 4)) {
+            // Mark high-value blue targets (police, doctor, agent)
+            let best = null;
+            let bestScore = -Infinity;
+            for (const t of shuffled(alivePlayers(state), state.rng)) {
+              if (t.id === actor.id || t.role === Roles.KILLER.id) continue;
+              if (t.status.arsonMarked) continue; // already marked
+              const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+              const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+              const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
+              const score = blueProb + policeProb * 0.5 + doctorProb * 0.4;
+              if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+                bestScore = score;
+                best = t;
+              }
+            }
+            const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id && !t.status.arsonMarked);
+            if (target) actions.push({ actorId: actor.id, type: "ARSON_MARK", targetId: target.id });
+          } else {
+            // All marks used, ignite whatever we have
+            if (marked > 0) actions.push({ actorId: actor.id, type: "ARSON_IGNITE" });
+          }
         } else {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-          if (target) actions.push({ actorId: actor.id, type: "ARSON_MARK", targetId: target.id });
+          const doIgnite = marked >= 2 || state.rng() > 0.65;
+          if (doIgnite) {
+            actions.push({ actorId: actor.id, type: "ARSON_IGNITE" });
+          } else {
+            const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+            if (target) actions.push({ actorId: actor.id, type: "ARSON_MARK", targetId: target.id });
+          }
         }
         break;
       }
       case Roles.VINE_DEMON.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-        if (target) actions.push({ actorId: actor.id, type: "VINE_SEED", targetId: target.id });
+        // Hard+: seed targets most likely to be touched by blue actions
+        // (police investigation target, agent protection target, etc.)
+        if (hard) {
+          let best = null;
+          let bestScore = -Infinity;
+          for (const t of shuffled(alivePlayers(state), state.rng)) {
+            if (t.id === actor.id || t.role === Roles.KILLER.id) continue;
+            // High suspicion targets are likely to be investigated by police
+            const suspicion = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
+            // High blue prob targets are likely to be protected by agent
+            const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+            // Best seed target: someone both suspicious AND likely blue (police will investigate)
+            const score = suspicion * 0.6 + blueProb * 0.4;
+            if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+              bestScore = score;
+              best = t;
+            }
+          }
+          const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (target) actions.push({ actorId: actor.id, type: "VINE_SEED", targetId: target.id });
+        } else {
+          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (target) actions.push({ actorId: actor.id, type: "VINE_SEED", targetId: target.id });
+        }
         break;
       }
       case Roles.NIGHTMARE_DEMON.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-        if (target) actions.push({ actorId: actor.id, type: "NIGHTMARE_ATTACK", targetId: target.id });
+        // Hard+: prioritize unknown roles for intel, avoid re-scouting known roles
+        // Attack civilians/brats for kills, attack unknowns for role info
+        if (hard) {
+          let best = null;
+          let bestScore = -Infinity;
+          const knownRoles = actor.aiMemory?.grudgeKnownRole || {};
+          for (const t of shuffled(alivePlayers(state), state.rng)) {
+            if (t.id === actor.id || t.role === Roles.KILLER.id) continue;
+            const civProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.CIVILIAN.id] ?? 0;
+            const bratProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.BRAT.id] ?? 0;
+            // Civilians/brats die instantly — high value kill
+            let score = (civProb + bratProb) * 1.5;
+            // Unknown role intel is also valuable
+            const maxRoleProb = Math.max(...Object.values(actor.aiMemory?.roleProbs?.[t.id] || {}), 0);
+            const uncertainty = 1 - maxRoleProb; // high uncertainty = more info gain
+            score += uncertainty * 0.4;
+            if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+              bestScore = score;
+              best = t;
+            }
+          }
+          const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (target) actions.push({ actorId: actor.id, type: "NIGHTMARE_ATTACK", targetId: target.id });
+        } else {
+          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (target) actions.push({ actorId: actor.id, type: "NIGHTMARE_ATTACK", targetId: target.id });
+        }
         break;
       }
       case Roles.EXORCIST.id: {
         if ((actor.exorcistMistakes || 0) >= 3) break;
         const maxChains = Math.max(0, actor.maxChains ?? Roles.EXORCIST.maxChain);
         if (maxChains <= 0) break;
-        const ordered = shuffled(alivePlayers(state), state.rng)
-          .filter((t) => t.id !== actor.id)
-          .sort((a, b) => {
-          const sa = actor.aiMemory?.suspicion?.[a.id] ?? 0.5;
-          const sb = actor.aiMemory?.suspicion?.[b.id] ?? 0.5;
-          return sb - sa;
-        });
-        const picks = ordered.slice(0, maxChains);
-        for (const t of picks) {
-          actions.push({ actorId: actor.id, type: "EXORCIST_STRIKE", targetId: t.id });
+        if (hard) {
+          // Hard+: be careful with chains — only strike high-confidence red targets
+          // Mistakes reduce maxChains, so avoid uncertain targets
+          const mistakes = actor.exorcistMistakes || 0;
+          const cautionLevel = mistakes * 0.15; // more mistakes = more cautious
+          const candidates = shuffled(alivePlayers(state), state.rng)
+            .filter((t) => t.id !== actor.id)
+            .map((t) => ({
+              player: t,
+              redProb: factionProb(actor, t.id, Faction.RED) ?? 0.5,
+              killerProb: actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0,
+            }))
+            .sort((a, b) => (b.killerProb * 2 + b.redProb) - (a.killerProb * 2 + a.redProb));
+          const minConfidence = 0.4 + cautionLevel; // 0.4 base, up to 0.85 with 3 mistakes
+          const picks = [];
+          for (const c of candidates) {
+            if (picks.length >= maxChains) break;
+            if (c.redProb >= minConfidence) {
+              picks.push(c.player);
+            }
+          }
+          // If no confident targets, still strike the top 1 (use it or lose it)
+          if (picks.length === 0 && candidates.length > 0 && candidates[0].redProb > 0.3) {
+            picks.push(candidates[0].player);
+          }
+          for (const t of picks) {
+            actions.push({ actorId: actor.id, type: "EXORCIST_STRIKE", targetId: t.id });
+          }
+        } else {
+          const ordered = shuffled(alivePlayers(state), state.rng)
+            .filter((t) => t.id !== actor.id)
+            .sort((a, b) => {
+              const sa = actor.aiMemory?.suspicion?.[a.id] ?? 0.5;
+              const sb = actor.aiMemory?.suspicion?.[b.id] ?? 0.5;
+              return sb - sa;
+            });
+          const picks = ordered.slice(0, maxChains);
+          for (const t of picks) {
+            actions.push({ actorId: actor.id, type: "EXORCIST_STRIKE", targetId: t.id });
+          }
         }
         break;
       }
       case Roles.NECROMANCER.id: {
         if (actor.souls >= 2) {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-          if (target) actions.push({ actorId: actor.id, type: "NECROMANCER_CURSE", targetId: target.id });
+          if (hard) {
+            // Hard+: save souls for 3+ when possible (instant kill, harder to block)
+            // Only use at 2 if self-threat is high (about to die, use it now)
+            const selfThreat = actor.aiMemory?.selfThreat ?? 0;
+            const useAt2 = selfThreat > 0.4 || state.rng() < 0.25;
+            if (actor.souls >= 3 || useAt2) {
+              // Target high-value blue: police > doctor > agent
+              let best = null;
+              let bestScore = -Infinity;
+              for (const t of alivePlayers(state)) {
+                if (t.id === actor.id || t.role === Roles.KILLER.id) continue;
+                const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+                const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
+                const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+                const score = policeProb * 0.5 + doctorProb * 0.4 + blueProb;
+                if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+                  bestScore = score;
+                  best = t;
+                }
+              }
+              const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+              if (target) actions.push({ actorId: actor.id, type: "NECROMANCER_CURSE", targetId: target.id });
+            }
+            // else: hold souls, wait for 3+
+          } else {
+            const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+            if (target) actions.push({ actorId: actor.id, type: "NECROMANCER_CURSE", targetId: target.id });
+          }
         }
         break;
       }
       case Roles.PURIFIER.id: {
-        const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-        if (target) actions.push({ actorId: actor.id, type: "PURIFY", targetId: target.id });
+        if (hard) {
+          // Hard+: prioritize cleansing necromancers (wipe souls) and high-threat red
+          // Also consider cleansing arsonist-marked allies to protect them
+          let best = null;
+          let bestScore = -Infinity;
+          for (const t of alivePlayers(state)) {
+            if (t.id === actor.id) continue;
+            const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+            const necroProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.NECROMANCER.id] ?? 0;
+            const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
+            let score = killerProb * 1.5 + redProb + necroProb * 1.0;
+            // Bonus: revealed red — cleanse to block their night action
+            if (state.policeRevealedRed === t.id) score += 0.6;
+            if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+              bestScore = score;
+              best = t;
+            }
+          }
+          const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (target) actions.push({ actorId: actor.id, type: "PURIFY", targetId: target.id });
+        } else {
+          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          if (target) actions.push({ actorId: actor.id, type: "PURIFY", targetId: target.id });
+        }
         break;
       }
       case Roles.GRUDGE_BEAST.id: {
         const leaderChoice = sharedGrudgeTarget && sharedGrudgeTarget.alive ? sharedGrudgeTarget : null;
         if (state.grudgeState.berserk) {
-          const target =
-            leaderChoice ||
-            pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.GRUDGE_BEAST.id);
-          if (target) actions.push({ actorId: actor.id, type: "GRUDGE_KILL_VOTE", targetId: target.id });
+          // Berserk: vote to kill
+          if (hard && !leaderChoice) {
+            // Hard+: prioritize killing the faction that triggered berserk
+            // If killers triggered it, hunt killers; if police triggered it, hunt police
+            const triggerFaction = state.grudgeState.triggerFaction;
+            let best = null;
+            let bestScore = -Infinity;
+            for (const t of shuffled(alivePlayers(state), state.rng)) {
+              if (t.role === Roles.GRUDGE_BEAST.id) continue;
+              let score = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
+              if (triggerFaction === Faction.RED) {
+                // Hunt killers — boost killer probability
+                const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
+                score += killerProb * 1.0;
+              } else if (triggerFaction === Faction.BLUE) {
+                // Hunt police — boost police probability
+                const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+                score += policeProb * 1.0;
+              }
+              // Also factor in chat activity — active talkers are more threatening
+              const chatInfo = analyzeChatBehavior(state);
+              const maxSpoken = Math.max(1, ...Object.values(chatInfo.speakCount || {}));
+              const speakRatio = (chatInfo.speakCount[t.id] || 0) / maxSpoken;
+              score += speakRatio * 0.2;
+              if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+                bestScore = score;
+                best = t;
+              }
+            }
+            const target = best || pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.GRUDGE_BEAST.id);
+            if (target) actions.push({ actorId: actor.id, type: "GRUDGE_KILL_VOTE", targetId: target.id });
+          } else {
+            const target =
+              leaderChoice ||
+              pickTargetBySuspicion(state, actor, (t) => t.role !== Roles.GRUDGE_BEAST.id);
+            if (target) actions.push({ actorId: actor.id, type: "GRUDGE_KILL_VOTE", targetId: target.id });
+          }
         } else {
-          const target =
-            leaderChoice ||
-            pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-          if (target) actions.push({ actorId: actor.id, type: "GRUDGE_JUDGE", targetId: target.id });
+          // Judging mode: pick who to judge
+          if (hard && !leaderChoice) {
+            // Hard+: strategically judge RED targets (reveals info to police, safe for grudge)
+            // Avoid judging civilians (random grudge beast dies!)
+            // Prefer high red-prob targets (judging red = info to police, no penalty)
+            let best = null;
+            let bestScore = -Infinity;
+            for (const t of shuffled(alivePlayers(state), state.rng)) {
+              if (t.id === actor.id || t.role === Roles.GRUDGE_BEAST.id) continue;
+              const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+              const civProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.CIVILIAN.id] ?? 0;
+              // Judging red = safe + useful; judging civilian = grudge beast dies
+              let score = redProb * 1.5 - civProb * 1.0;
+              // Blue non-civilian is medium risk (info goes to killers)
+              const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+              score -= blueProb * 0.3;
+              if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+                bestScore = score;
+                best = t;
+              }
+            }
+            const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+            if (target) actions.push({ actorId: actor.id, type: "GRUDGE_JUDGE", targetId: target.id });
+          } else {
+            const target =
+              leaderChoice ||
+              pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+            if (target) actions.push({ actorId: actor.id, type: "GRUDGE_JUDGE", targetId: target.id });
+          }
         }
         break;
       }
@@ -793,6 +1125,35 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     // force at least one vote by making the last AI always vote
     const abstainChance = idx === aiVoters.length - 1 ? 0 : 0.05;
     if (state.rng() < abstainChance) return;
+
+    // Hard+: Brat strategy — follow the majority, don't stand out
+    // Before revealed: blend in by voting with the crowd
+    if (hard && actor.role === Roles.BRAT.id && !actor.status.bratRevealed) {
+      // Follow police reveal if available
+      if (state.policeRevealedRed !== null) {
+        const redTarget = getPlayer(state, state.policeRevealedRed);
+        if (redTarget?.alive) {
+          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
+          return;
+        }
+      }
+      // Otherwise vote with whoever has the most votes so far in this round
+      if (votes.length > 0) {
+        const tally = {};
+        for (const v of votes) tally[v.targetId] = (tally[v.targetId] || 0) + 1;
+        let topTarget = null;
+        let topCount = 0;
+        for (const [tid, cnt] of Object.entries(tally)) {
+          if (cnt > topCount) { topCount = cnt; topTarget = Number(tid); }
+        }
+        if (topTarget !== null && topTarget !== actor.id) {
+          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: topTarget });
+          return;
+        }
+      }
+      // Fallback: random safe vote
+    }
+
     const roll = state.rng();
     const jitter = (val) => clamp(val + (state.rng() - 0.5) * 0.3, 0, 1);
     const everyone = alivePlayers(state).filter((t) => t.id !== actor.id && t.alive && t.id !== humanVoteTargetId);

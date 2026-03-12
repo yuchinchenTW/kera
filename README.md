@@ -116,13 +116,39 @@ Each AI maintains a Bayesian probability distribution over every other player's 
 - Hard+: voting pattern consistency, vote-together pair detection, silence analysis, death correlation
 
 ### Hard+ Enhancements
+
+**Core Systems:**
 - **Behavioral analysis**: Tracks cross-day voting graphs, mutual voting pairs, and chat activity patterns.
-- **Smart killer targeting**: Avoids likely-protected targets, prioritizes active speakers and police.
-- **Self-threat awareness**: Doctor self-protects more when threatened; terrorist triggers when about to be voted out.
-- **Sniper timing**: Conservative early game, aggressive once enough intel accumulates.
-- **Red deception**: Strategic deflection (20%), aggressive bluff accusations (25%), subtle ally defense (15%), vote scattering among killers.
-- **Contextual chat**: References past votes, vote flips, and deaths instead of generic statements.
+- **Self-threat awareness**: Each AI tracks how likely they are to be voted out (vote count, mentions, police reveal).
+- **Contextual chat**: Bilingual (EN/ZH) templates that reference past votes, vote flips, and deaths.
+
+**Blue Team (Police Faction):**
+- **Police**: Smarter investigation targeting using killer probability weighting.
+- **Doctor**: Self-protects more when self-threat is high; predicts killer targets (active speakers) to protect.
+- **Agent**: Predicts who killers will target (active speakers, likely police, previously-saved players) and protects them.
+- **Heavenly Fiend**: Absorb mode mirrors agent logic; charge mode prioritizes confirmed killer-probability targets.
+- **Riot Police**: Saves smoke grenades for high-confidence red targets; won't waste on uncertain picks.
+- **Cowboy**: Only shoots when confidence exceeds a threshold (high early, relaxes over time).
+- **Exorcist**: Cautious chain strikes — only targets high red-probability players; more mistakes = higher confidence required.
+- **Purifier**: Prioritizes cleansing killers, necromancers (wipes souls), and police-revealed reds.
+- **Brat**: Follows the majority vote to blend in; doesn't draw attention before first death.
+
+**Red Team (Killer Faction):**
+- **Killer**: Avoids likely-protected targets, prioritizes active speakers and police; vote scatter to avoid suspicion.
+- **Sniper**: Conservative early game (30% Day 1), aggressive once intel accumulates (65%+ Day 3).
+- **Terrorist**: Holds bomb when safe, triggers when self-threat is high (about to be voted out).
+- **Kidnapper**: Targets high-value blue (doctor > police > agent) to disable them; never kidnaps killer allies.
+- **Arsonist**: Patiently marks 3+ targets before igniting; marks high-value blue; panic-ignites when threatened.
+- **Vine Demon**: Seeds targets most likely to be touched by police investigation (high suspicion + high blue probability).
+- **Nightmare Demon**: Prioritizes civilians/brats for instant kills; targets uncertain roles for intel gathering.
+- **Necromancer**: Saves souls for 3+ (stronger effect); only uses 2 souls when about to die.
+- **Red deception chat**: Strategic deflection (20%), aggressive bluff accusations (25%), subtle ally defense (15%).
 - **Strategic betrayal**: Sells out exposed teammates only when they're likely dead anyway.
+
+**Green Team (Third Party):**
+- **Grudge Beast (judging)**: Avoids judging civilians (causes grudge beast death); prefers judging red targets (safe + useful info to police).
+- **Grudge Beast (berserk)**: Tracks which faction triggered berserk and hunts that faction; prioritizes active speakers.
+- **Zombie**: Tracks bite history — prioritizes finishing pending conversions; avoids likely-protected targets.
 
 ### Single-player vs Multiplayer AI
 - Single-player: difficulty is chosen at game creation.
