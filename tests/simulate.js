@@ -2,7 +2,7 @@ import { Worker, isMainThread, parentPort, workerData } from "node:worker_thread
 import { cpus } from "node:os";
 import { fileURLToPath } from "node:url";
 import { GameEngine } from "../src/engine.js";
-import { Phase, Theme, Roles, DeathCause, roleMeta } from "../src/roles.js";
+import { Phase, Theme, Roles, DeathCause, roleMeta, roleListFromTheme } from "../src/roles.js";
 
 // ─── i18n ───────────────────────────────────────────────────────────────────
 
@@ -26,7 +26,10 @@ const LANG = {
     actionStats: "ACTION STATS",
     doctorSaves: "Doctor saves", agentBlocks: "Agent/Fiend blocks",
     voteNoExec: "No-execution votes", perGame: "/game",
-    voteAccuracy: "Vote accuracy (red killed)", zombieConverts: "Zombie conversions",
+    voteAccuracy: "Vote accuracy (red killed)",
+    blueVoteAcc: "Blue voted red", redVoteAcc: "Red voted blue",
+    stddev: "StdDev", ci95: "95% CI",
+    zombieConverts: "Zombie conversions",
     kidnaps: "Kidnaps", arsonMarks: "Arson marks",
     cowboyStats: "Cowboy actions",
     cowboyHit: "Hit", cowboyMiss: "Miss", cowboyBackfire: "Backfire",
@@ -88,7 +91,10 @@ Examples:
     actionStats: "行動統計",
     doctorSaves: "醫生救援", agentBlocks: "特務/天煞擋下",
     voteNoExec: "未處決投票", perGame: "/場",
-    voteAccuracy: "投票準確率（殺到紅方）", zombieConverts: "殭屍轉化",
+    voteAccuracy: "投票準確率（殺到紅方）",
+    blueVoteAcc: "藍方投中紅方", redVoteAcc: "紅方投中藍方",
+    stddev: "標準差", ci95: "95% 信賴區間",
+    zombieConverts: "殭屍轉化",
     kidnaps: "綁架次數", arsonMarks: "縱火標記",
     cowboyStats: "牛仔行動",
     cowboyHit: "命中", cowboyMiss: "空轉", cowboyBackfire: "暴走",
@@ -201,6 +207,10 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   let noExecutionRounds = 0;
   let correctVoteKills = 0;
   let totalVoteKills = 0;
+  let blueVotedRed = 0;   // blue voter correctly voted to kill red
+  let blueVotedBlue = 0;  // blue voter mistakenly voted to kill blue
+  let redVotedRed = 0;    // red voter voted to kill red (sacrifice/sellout)
+  let redVotedBlue = 0;   // red voter voted to kill blue (success)
   let zombieConversions = 0;
   let kidnaps = 0;
   let arsonMarks = 0;
@@ -259,14 +269,43 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     if (aliveBefore === aliveAfter) {
       noExecutionRounds++;
     } else {
-      // Track correct vote kills (was the executed player red?)
-      totalVoteKills++;
+      // Track correct vote kills (was the executed player red at time of death?)
+      // Use current faction (not startFaction) to handle zombie conversions correctly.
+      // Also handle Brat revival: Brat dies then revives, so check _countedVoteKill
+      // AND skip Brat who revived (alive again after execution).
       const executed = engine.state.players.find(
-        (p) => !p.alive && p.deathCause === DeathCause.VOTE_EXECUTION && !p._countedVoteKill
+        (p) => p.deathCause === DeathCause.VOTE_EXECUTION && !p._countedVoteKill
+          && (!p.alive || (p.role === Roles.BRAT.id && p.status.bratRevived))
       );
       if (executed) {
         executed._countedVoteKill = true;
-        if (executed.startFaction === "RED") correctVoteKills++;
+        // Brat revival doesn't count as a real execution
+        if (executed.alive && executed.role === Roles.BRAT.id && executed.status.bratRevived) {
+          // Don't count — Brat survived
+        } else {
+          totalVoteKills++;
+          if (executed.faction === "RED") correctVoteKills++;
+        }
+      }
+
+      // Per-faction vote breakdown: who voted for whom?
+      const lastVoteRound = engine.state.history?.votes?.[engine.state.history.votes.length - 1];
+      if (lastVoteRound?.order && executed && !executed.alive) {
+        const executedFaction = executed.faction;
+        for (const entry of lastVoteRound.order) {
+          if (entry.targetId !== executed.id) continue;
+          const voter = engine.state.players.find((p) => p.id === entry.actorId);
+          if (!voter) continue;
+          // Use current faction for voter too (zombie converts vote as green)
+          const vFaction = voter.faction || voter.startFaction;
+          if (vFaction === "BLUE") {
+            if (executedFaction === "RED") blueVotedRed++;
+            else blueVotedBlue++;
+          } else if (vFaction === "RED") {
+            if (executedFaction === "RED") redVotedRed++;
+            else redVotedBlue++;
+          }
+        }
       }
     }
   }
@@ -300,6 +339,7 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     correctVoteKills, totalVoteKills, zombieConversions,
     kidnaps, arsonMarks, cowboyShots, cowboyHits, cowboyMisses, cowboyBackfires,
     deathCauseCounts, aliveCurve, firstNightKills,
+    blueVotedRed, blueVotedBlue, redVotedRed, redVotedBlue,
   };
 }
 
@@ -333,6 +373,10 @@ if (!isMainThread) {
   let totalCowboyHits = 0;
   let totalCowboyMisses = 0;
   let totalCowboyBackfires = 0;
+  let totalBlueVotedRed = 0;
+  let totalBlueVotedBlue = 0;
+  let totalRedVotedRed = 0;
+  let totalRedVotedBlue = 0;
   const deathCauseTotals = {};
   const aliveCurveSums = {};  // day -> total alive across games
   const aliveCurveCounts = {}; // day -> number of games that reached this day
@@ -365,6 +409,10 @@ if (!isMainThread) {
     totalCowboyHits += result.cowboyHits || 0;
     totalCowboyMisses += result.cowboyMisses || 0;
     totalCowboyBackfires += result.cowboyBackfires || 0;
+    totalBlueVotedRed += result.blueVotedRed || 0;
+    totalBlueVotedBlue += result.blueVotedBlue || 0;
+    totalRedVotedRed += result.redVotedRed || 0;
+    totalRedVotedBlue += result.redVotedBlue || 0;
 
     // Death cause aggregation
     for (const [cause, cnt] of Object.entries(result.deathCauseCounts || {})) {
@@ -413,6 +461,7 @@ if (!isMainThread) {
       totalCorrectVoteKills, totalVoteKills, totalZombieConversions,
       totalKidnaps, totalArsonMarks,
       totalCowboyShots, totalCowboyHits, totalCowboyMisses, totalCowboyBackfires,
+      totalBlueVotedRed, totalBlueVotedBlue, totalRedVotedRed, totalRedVotedBlue,
       deathCauseTotals, aliveCurveSums, aliveCurveCounts,
     },
   });
@@ -432,6 +481,7 @@ const MERGE_SCALAR_KEYS = [
   "totalCorrectVoteKills", "totalVoteKills", "totalZombieConversions",
   "totalKidnaps", "totalArsonMarks",
   "totalCowboyShots", "totalCowboyHits", "totalCowboyMisses", "totalCowboyBackfires",
+  "totalBlueVotedRed", "totalBlueVotedBlue", "totalRedVotedRed", "totalRedVotedBlue",
 ];
 
 function mergeStats(a, b) {
@@ -487,6 +537,10 @@ function simulateGames(count, theme, difficulty, { L }) {
         acc.totalCowboyHits += result.cowboyHits || 0;
         acc.totalCowboyMisses += result.cowboyMisses || 0;
         acc.totalCowboyBackfires += result.cowboyBackfires || 0;
+        acc.totalBlueVotedRed += result.blueVotedRed || 0;
+        acc.totalBlueVotedBlue += result.blueVotedBlue || 0;
+        acc.totalRedVotedRed += result.redVotedRed || 0;
+        acc.totalRedVotedBlue += result.redVotedBlue || 0;
 
         for (const [cause, cnt] of Object.entries(result.deathCauseCounts || {})) {
           acc.deathCauseTotals[cause] = (acc.deathCauseTotals[cause] || 0) + cnt;
@@ -636,21 +690,27 @@ async function main() {
     const wins = stats.tally[side] || 0;
     if (wins === 0 && (side === "NONE" || side === "ZOMBIE" || side === "GRUDGE")) continue;
     const ratio = wins / total;
-    console.log(`  ${(L.factionName[side] || side).padEnd(8)} ${bar(ratio)} ${pct(wins, total)} (${wins})`);
+    // 95% CI: p ± 1.96 * sqrt(p*(1-p)/n)
+    const margin = total > 0 ? 1.96 * Math.sqrt(ratio * (1 - ratio) / total) : 0;
+    const ciStr = `±${(margin * 100).toFixed(1)}%`;
+    console.log(`  ${(L.factionName[side] || side).padEnd(8)} ${bar(ratio)} ${pct(wins, total)} (${wins})  ${ciStr}`);
   }
 
   // ── Game Length Stats ──
 
   if (days.length > 0) {
-    const avgDays = (days.reduce((a, b) => a + b, 0) / days.length).toFixed(1);
+    const avgDaysNum = days.reduce((a, b) => a + b, 0) / days.length;
+    const avgDays = avgDaysNum.toFixed(1);
     const sorted = [...days].sort((a, b) => a - b);
     const minDays = sorted[0];
     const maxDays = sorted[sorted.length - 1];
     const medianDays = sorted[Math.floor(sorted.length / 2)];
+    const variance = days.reduce((sum, d) => sum + (d - avgDaysNum) ** 2, 0) / days.length;
+    const stddev = Math.sqrt(variance).toFixed(1);
 
     console.log(`\n  ${L.gameLength}`);
     console.log(`  ${"─".repeat(50)}`);
-    console.log(`  ${L.avg}：${avgDays} | ${L.median}：${medianDays} | ${L.min}：${minDays} | ${L.max}：${maxDays}`);
+    console.log(`  ${L.avg}：${avgDays} | ${L.median}：${medianDays} | ${L.min}：${minDays} | ${L.max}：${maxDays} | ${L.stddev}：${stddev}`);
 
     const dayBuckets = {};
     for (const d of days) dayBuckets[d] = (dayBuckets[d] || 0) + 1;
@@ -714,6 +774,15 @@ async function main() {
     console.log(`  ${L.agentBlocks.padEnd(24)} ${avgAgentBlocks} ${L.perGame}`);
     console.log(`  ${L.voteNoExec.padEnd(24)} ${noExecPct} (${stats.totalNoExecRounds}/${stats.totalVoteRounds})`);
     console.log(`  ${L.voteAccuracy.padEnd(24)} ${voteAccPct} (${stats.totalCorrectVoteKills}/${stats.totalVoteKills})`);
+    // Per-faction vote breakdown
+    const blueTotal = (stats.totalBlueVotedRed || 0) + (stats.totalBlueVotedBlue || 0);
+    const redTotal = (stats.totalRedVotedRed || 0) + (stats.totalRedVotedBlue || 0);
+    if (blueTotal > 0) {
+      console.log(`    ${L.blueVoteAcc.padEnd(22)} ${pct(stats.totalBlueVotedRed, blueTotal)} (${stats.totalBlueVotedRed}/${blueTotal})`);
+    }
+    if (redTotal > 0) {
+      console.log(`    ${L.redVoteAcc.padEnd(22)} ${pct(stats.totalRedVotedBlue, redTotal)} (${stats.totalRedVotedBlue}/${redTotal})`);
+    }
     if (stats.totalZombieConversions > 0) {
       console.log(`  ${L.zombieConverts.padEnd(24)} ${avgZombie} ${L.perGame}`);
     }
@@ -763,11 +832,12 @@ async function main() {
 
   const curveKeys = Object.keys(stats.aliveCurveSums || {}).map(Number).sort((a, b) => a - b);
   if (curveKeys.length > 0) {
+    const totalPlayers = roleListFromTheme(theme).length;
     console.log(`\n  ${L.aliveCurve}`);
     console.log(`  ${"─".repeat(50)}`);
     for (const day of curveKeys) {
       const avg = (stats.aliveCurveSums[day] / stats.aliveCurveCounts[day]).toFixed(1);
-      const ratio = stats.aliveCurveSums[day] / stats.aliveCurveCounts[day] / 18;
+      const ratio = stats.aliveCurveSums[day] / stats.aliveCurveCounts[day] / totalPlayers;
       console.log(`  ${L.day(day)}：${bar(ratio, 18)} ${avg}`);
     }
   }
