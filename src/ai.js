@@ -2387,6 +2387,16 @@ export function buildAiNightActions(state, opts = {}) {
             }
           }
 
+          // Purified by purifier = suspected red by another blue (public log signal)
+          const exPurifiedIds = new Set();
+          for (const entry of state.publicLog || []) {
+            if (typeof entry === "string" && entry.includes("cleansed")) {
+              for (const p of state.players) {
+                if (p.alive && entry.includes(p.name)) exPurifiedIds.add(p.id);
+              }
+            }
+          }
+
           // Red execution opposers
           const exRedOpposers = {};
           const exVoteExecReds = state.players.filter((p) => !p.alive && p.deathCause === "VOTE_EXECUTION" && p.faction === Faction.RED);
@@ -2454,6 +2464,10 @@ export function buildAiNightActions(state, opts = {}) {
               const speakRatio = (exChatBehavior.speakCount[t.id] || 0) / exMaxSpoken;
               if (speakRatio < 0.2 && redProb > 0.4) score += 0.1;
 
+              // Bonus: purified by purifier = another blue suspected them
+              // Public log: "Someone cleansed X" — observable information
+              if (exPurifiedIds.has(t.id)) score += 0.2;
+
               // Penalty: confirmed blue signals — hitting blue is catastrophic
               if (exSavedIds.has(t.id)) score -= 1.5;
               if (exArsonIds.has(t.id)) score -= 1.0;
@@ -2493,7 +2507,9 @@ export function buildAiNightActions(state, opts = {}) {
               picks.push(c.player);
               continue;
             }
-            if (c.redProb >= threshold) {
+            // Allow score to also trigger strike: behavioral signals matter
+            // Score threshold ~2× redProb threshold (score includes redProb + role weights + signals)
+            if (c.redProb >= threshold || c.score >= threshold * 2.2) {
               picks.push(c.player);
             }
           }
