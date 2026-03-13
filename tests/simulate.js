@@ -16,8 +16,8 @@ const LANG = {
     day: (d) => `Day ${String(d).padStart(2)}`,
     victoryReasons: "VICTORY REASONS",
     roleStats: "ROLE STATS",
-    hdrRole: "Role", hdrFaction: "Faction", hdrWin: "WinRate", hdrSurv: "Survive",
-    hdrNight: "NightDie", hdrVote: "VoteDie", hdrSeen: "Seen",
+    hdrRole: "Role", hdrFaction: "Faction", hdrWin: "WinRate", hdrWinCi: "WinCI",
+    hdrSurv: "Survive", hdrNight: "NightDie", hdrVote: "VoteDie", hdrSeen: "Seen",
     diffCompare: (n) => `DIFFICULTY COMPARISON (${n} games each)`,
     hdrDiff: "Difficulty", hdrBlue: "BLUE", hdrRed: "RED", hdrOther: "OTHER",
     hdrDays: "AvgDays", hdrTime: "Time", hdrTimeout: "Timeout",
@@ -27,7 +27,7 @@ const LANG = {
     doctorSaves: "Doctor saves", agentBlocks: "Agent/Fiend blocks",
     voteNoExec: "No-execution votes", perGame: "/game",
     voteAccuracy: "Vote accuracy (red killed)",
-    blueVoteAcc: "Blue voted red", redVoteAcc: "Red voted blue",
+    blueVoteAcc: "Blue voted red", redVoteAcc: "Red voted blue", greenVoteAcc: "Green voted red",
     stddev: "StdDev", ci95: "95% CI",
     zombieConverts: "Zombie conversions",
     kidnaps: "Kidnaps", arsonMarks: "Arson marks",
@@ -81,8 +81,8 @@ Examples:
     day: (d) => `第${String(d).padStart(2)}天`,
     victoryReasons: "勝利原因",
     roleStats: "角色統計",
-    hdrRole: "角色", hdrFaction: "陣營", hdrWin: "勝率", hdrSurv: "存活率",
-    hdrNight: "夜殺率", hdrVote: "票殺率", hdrSeen: "場次",
+    hdrRole: "角色", hdrFaction: "陣營", hdrWin: "勝率", hdrWinCi: "勝率CI",
+    hdrSurv: "存活率", hdrNight: "夜殺率", hdrVote: "票殺率", hdrSeen: "場次",
     diffCompare: (n) => `難度比較（每個難度 ${n} 場）`,
     hdrDiff: "難度", hdrBlue: "藍方", hdrRed: "紅方", hdrOther: "其他",
     hdrDays: "平均天數", hdrTime: "耗時", hdrTimeout: "超時",
@@ -92,7 +92,7 @@ Examples:
     doctorSaves: "醫生救援", agentBlocks: "特務/天煞擋下",
     voteNoExec: "未處決投票", perGame: "/場",
     voteAccuracy: "投票準確率（殺到紅方）",
-    blueVoteAcc: "藍方投中紅方", redVoteAcc: "紅方投中藍方",
+    blueVoteAcc: "藍方投中紅方", redVoteAcc: "紅方投中藍方", greenVoteAcc: "綠方投中紅方",
     stddev: "標準差", ci95: "95% 信賴區間",
     zombieConverts: "殭屍轉化",
     kidnaps: "綁架次數", arsonMarks: "縱火標記",
@@ -211,6 +211,9 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   let blueVotedBlue = 0;  // blue voter mistakenly voted to kill blue
   let redVotedRed = 0;    // red voter voted to kill red (sacrifice/sellout)
   let redVotedBlue = 0;   // red voter voted to kill blue (success)
+  let greenVotedRed = 0;  // green voter voted to kill red
+  let greenVotedBlue = 0; // green voter voted to kill blue
+  let greenVotedGreen = 0; // green voter voted to kill green
   let zombieConversions = 0;
   let kidnaps = 0;
   let arsonMarks = 0;
@@ -304,6 +307,10 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
           } else if (vFaction === "RED") {
             if (executedFaction === "RED") redVotedRed++;
             else redVotedBlue++;
+          } else if (vFaction === "GREEN") {
+            if (executedFaction === "RED") greenVotedRed++;
+            else if (executedFaction === "BLUE") greenVotedBlue++;
+            else greenVotedGreen++;
           }
         }
       }
@@ -316,7 +323,7 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
 
   const playerResults = engine.state.players.map((p) => ({
     role: p.startRole,
-    faction: p.startFaction,
+    faction: p.faction,
     finalRole: p.role,
     finalFaction: p.faction,
     alive: p.alive,
@@ -340,6 +347,7 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     kidnaps, arsonMarks, cowboyShots, cowboyHits, cowboyMisses, cowboyBackfires,
     deathCauseCounts, aliveCurve, firstNightKills,
     blueVotedRed, blueVotedBlue, redVotedRed, redVotedBlue,
+    greenVotedRed, greenVotedBlue, greenVotedGreen,
   };
 }
 
@@ -377,6 +385,9 @@ if (!isMainThread) {
   let totalBlueVotedBlue = 0;
   let totalRedVotedRed = 0;
   let totalRedVotedBlue = 0;
+  let totalGreenVotedRed = 0;
+  let totalGreenVotedBlue = 0;
+  let totalGreenVotedGreen = 0;
   const deathCauseTotals = {};
   const aliveCurveSums = {};  // day -> total alive across games
   const aliveCurveCounts = {}; // day -> number of games that reached this day
@@ -413,6 +424,9 @@ if (!isMainThread) {
     totalBlueVotedBlue += result.blueVotedBlue || 0;
     totalRedVotedRed += result.redVotedRed || 0;
     totalRedVotedBlue += result.redVotedBlue || 0;
+    totalGreenVotedRed += result.greenVotedRed || 0;
+    totalGreenVotedBlue += result.greenVotedBlue || 0;
+    totalGreenVotedGreen += result.greenVotedGreen || 0;
 
     // Death cause aggregation
     for (const [cause, cnt] of Object.entries(result.deathCauseCounts || {})) {
@@ -441,8 +455,8 @@ if (!isMainThread) {
       const roleCountsAsWin =
         (winner === "RED" && faction === "RED") ||
         (winner === "BLUE" && faction === "BLUE") ||
-        (winner === "ZOMBIE" && role === Roles.ZOMBIE.id) ||
-        (winner === "GRUDGE" && role === Roles.GRUDGE_BEAST.id);
+        (winner === "ZOMBIE" && (role === Roles.ZOMBIE.id || pr.finalRole === Roles.ZOMBIE.id)) ||
+        (winner === "GRUDGE" && (role === Roles.GRUDGE_BEAST.id || pr.finalRole === Roles.GRUDGE_BEAST.id));
       if (roleCountsAsWin) roleWins[role] = (roleWins[role] || 0) + 1;
 
       if (alive) roleSurvived[role] = (roleSurvived[role] || 0) + 1;
@@ -462,6 +476,7 @@ if (!isMainThread) {
       totalKidnaps, totalArsonMarks,
       totalCowboyShots, totalCowboyHits, totalCowboyMisses, totalCowboyBackfires,
       totalBlueVotedRed, totalBlueVotedBlue, totalRedVotedRed, totalRedVotedBlue,
+      totalGreenVotedRed, totalGreenVotedBlue, totalGreenVotedGreen,
       deathCauseTotals, aliveCurveSums, aliveCurveCounts,
     },
   });
@@ -482,6 +497,7 @@ const MERGE_SCALAR_KEYS = [
   "totalKidnaps", "totalArsonMarks",
   "totalCowboyShots", "totalCowboyHits", "totalCowboyMisses", "totalCowboyBackfires",
   "totalBlueVotedRed", "totalBlueVotedBlue", "totalRedVotedRed", "totalRedVotedBlue",
+  "totalGreenVotedRed", "totalGreenVotedBlue", "totalGreenVotedGreen",
 ];
 
 function mergeStats(a, b) {
@@ -541,6 +557,9 @@ function simulateGames(count, theme, difficulty, { L }) {
         acc.totalBlueVotedBlue += result.blueVotedBlue || 0;
         acc.totalRedVotedRed += result.redVotedRed || 0;
         acc.totalRedVotedBlue += result.redVotedBlue || 0;
+        acc.totalGreenVotedRed += result.greenVotedRed || 0;
+        acc.totalGreenVotedBlue += result.greenVotedBlue || 0;
+        acc.totalGreenVotedGreen += result.greenVotedGreen || 0;
 
         for (const [cause, cnt] of Object.entries(result.deathCauseCounts || {})) {
           acc.deathCauseTotals[cause] = (acc.deathCauseTotals[cause] || 0) + cnt;
@@ -565,8 +584,8 @@ function simulateGames(count, theme, difficulty, { L }) {
           const roleCountsAsWin =
             (winner === "RED" && faction === "RED") ||
             (winner === "BLUE" && faction === "BLUE") ||
-            (winner === "ZOMBIE" && role === Roles.ZOMBIE.id) ||
-            (winner === "GRUDGE" && role === Roles.GRUDGE_BEAST.id);
+            (winner === "ZOMBIE" && (role === Roles.ZOMBIE.id || pr.finalRole === Roles.ZOMBIE.id)) ||
+            (winner === "GRUDGE" && (role === Roles.GRUDGE_BEAST.id || pr.finalRole === Roles.GRUDGE_BEAST.id));
           if (roleCountsAsWin) acc.roleWins[role] = (acc.roleWins[role] || 0) + 1;
 
           if (alive) acc.roleSurvived[role] = (acc.roleSurvived[role] || 0) + 1;
@@ -624,6 +643,19 @@ function simulateGames(count, theme, difficulty, { L }) {
 function pct(n, d) {
   if (!d) return "  0.0%";
   return (((n / d) * 100).toFixed(1) + "%").padStart(6);
+}
+
+function wilsonMargin(successes, n) {
+  if (n === 0) return 0;
+  const z = 1.96;
+  const p = successes / n;
+  const denom = 1 + z * z / n;
+  const centre = (p + z * z / (2 * n)) / denom;
+  const spread = z * Math.sqrt((p * (1 - p) + z * z / (4 * n)) / n) / denom;
+  // Return half-width relative to p (not centre) so ± display stays intuitive
+  const lo = centre - spread;
+  const hi = centre + spread;
+  return Math.max(p - lo, hi - p);
 }
 
 function bar(ratio, width = 20) {
@@ -690,8 +722,8 @@ async function main() {
     const wins = stats.tally[side] || 0;
     if (wins === 0 && (side === "NONE" || side === "ZOMBIE" || side === "GRUDGE")) continue;
     const ratio = wins / total;
-    // 95% CI: p ± 1.96 * sqrt(p*(1-p)/n)
-    const margin = total > 0 ? 1.96 * Math.sqrt(ratio * (1 - ratio) / total) : 0;
+    // Wilson 95% CI — more accurate than Wald for extreme proportions or small n
+    const margin = total > 0 ? wilsonMargin(wins, total) : 0;
     const ciStr = `±${(margin * 100).toFixed(1)}%`;
     console.log(`  ${(L.factionName[side] || side).padEnd(8)} ${bar(ratio)} ${pct(wins, total)} (${wins})  ${ciStr}`);
   }
@@ -733,11 +765,11 @@ async function main() {
   // ── Role Stats Table ──
 
   console.log(`\n  ${L.roleStats}`);
-  console.log(`  ${"─".repeat(82)}`);
+  console.log(`  ${"─".repeat(92)}`);
   console.log(
-    `  ${L.hdrRole.padEnd(20)} ${L.hdrFaction.padEnd(7)} ${L.hdrWin.padStart(7)} ${L.hdrSurv.padStart(8)} ${L.hdrNight.padStart(9)} ${L.hdrVote.padStart(8)} ${L.firstNightKill.padStart(8)} ${L.hdrSeen.padStart(5)}`
+    `  ${L.hdrRole.padEnd(20)} ${L.hdrFaction.padEnd(7)} ${L.hdrWin.padStart(7)} ${L.hdrWinCi.padStart(9)} ${L.hdrSurv.padStart(8)} ${L.hdrNight.padStart(9)} ${L.hdrVote.padStart(8)} ${L.firstNightKill.padStart(8)} ${L.hdrSeen.padStart(5)}`
   );
-  console.log(`  ${"─".repeat(82)}`);
+  console.log(`  ${"─".repeat(92)}`);
 
   const roles = Object.keys(stats.roleSeen).sort((a, b) => {
     const fa = roleMeta(a)?.faction || "ZZZ";
@@ -754,8 +786,9 @@ async function main() {
     const voteDied = stats.roleDeathByVote[role] || 0;
     const firstNight = stats.roleFirstNightKill[role] || 0;
     const faction = roleMeta(role)?.faction || "?";
+    const winCi = seen > 0 ? `±${(wilsonMargin(wins, seen) * 100).toFixed(1)}%` : "     ";
     console.log(
-      `  ${L.roleName(role).padEnd(20)} ${L.factionLabel(faction).padEnd(7)} ${pct(wins, seen)} ${pct(survived, seen)} ${pct(nightDied, seen)} ${pct(voteDied, seen)} ${pct(firstNight, seen)} ${String(seen).padStart(5)}`
+      `  ${L.roleName(role).padEnd(20)} ${L.factionLabel(faction).padEnd(7)} ${pct(wins, seen)} ${winCi.padStart(9)} ${pct(survived, seen)} ${pct(nightDied, seen)} ${pct(voteDied, seen)} ${pct(firstNight, seen)} ${String(seen).padStart(5)}`
     );
   }
 
@@ -782,6 +815,10 @@ async function main() {
     }
     if (redTotal > 0) {
       console.log(`    ${L.redVoteAcc.padEnd(22)} ${pct(stats.totalRedVotedBlue, redTotal)} (${stats.totalRedVotedBlue}/${redTotal})`);
+    }
+    const greenTotal = (stats.totalGreenVotedRed || 0) + (stats.totalGreenVotedBlue || 0) + (stats.totalGreenVotedGreen || 0);
+    if (greenTotal > 0) {
+      console.log(`    ${L.greenVoteAcc.padEnd(22)} ${pct(stats.totalGreenVotedRed, greenTotal)} (${stats.totalGreenVotedRed}/${greenTotal})`);
     }
     if (stats.totalZombieConversions > 0) {
       console.log(`  ${L.zombieConverts.padEnd(24)} ${avgZombie} ${L.perGame}`);
