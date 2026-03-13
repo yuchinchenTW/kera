@@ -1,4 +1,4 @@
-import { getPlayer, alivePlayers } from "./state.js";
+import { getPlayer, alivePlayers, factionCounts } from "./state.js";
 import { Roles, Faction, Theme, roleListFromTheme, roleMeta } from "./roles.js";
 
 function clamp(val, min, max) {
@@ -1822,25 +1822,45 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.RIOT_POLICE.id: {
         if (state.usage.riotGrenades < (Roles.RIOT_POLICE.maxGrenades || 0)) {
           if (hard) {
-            // Hard+: save grenades for confirmed/high-confidence red targets
-            // Also consider smoking the revealed red to block their night action
+            // Hard+: multi-role scoring to block red night actions + grenade conservation
             const remaining = (Roles.RIOT_POLICE.maxGrenades || 0) - state.usage.riotGrenades;
+            const dayNum = state.dayNumber || 1;
+            const counts = factionCounts(state);
+            const bluePressure = counts.red >= counts.blue;
+
             let best = null;
             let bestScore = -Infinity;
+
             for (const t of alivePlayers(state)) {
               if (t.id === actor.id) continue;
               const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
               const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
-              let score = killerProb * 2 + redProb;
-              // Big bonus for police-revealed red
-              if (state.policeRevealedRed === t.id) score += 0.8;
-              if (score > bestScore) {
-                bestScore = score;
-                best = t;
-              }
+              const sniperProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.SNIPER.id] ?? 0;
+              const terroristProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.TERRORIST.id] ?? 0;
+              const arsonistProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.ARSONIST.id] ?? 0;
+
+              // Score by action-blocking value: killer > sniper > arsonist > terrorist
+              let score = killerProb * 2.0 + sniperProb * 1.8 + arsonistProb * 1.2 + terroristProb * 1.0;
+              score += redProb * 0.3;
+
+              // Police-confirmed red: very high priority
+              if (state.policeRevealedRed === t.id) score += 1.0;
+
+              // Late-game urgency: amplify scores when blues are losing
+              if (bluePressure && dayNum >= 3) score *= 1.2;
+
+              score += (state.rng() - 0.5) * 0.1;
+              if (score > bestScore) { bestScore = score; best = t; }
             }
-            // Only use if confidence is high enough, or few grenades left (use it or lose it)
-            const confThreshold = remaining <= 1 ? 0.3 : 0.5;
+
+            // Dynamic grenade conservation
+            // Day 1: limited info but still act if decent target; late game: use aggressively
+            let confThreshold;
+            if (dayNum <= 1) confThreshold = 0.6;
+            else if (remaining <= 1) confThreshold = 0.25;
+            else if (bluePressure) confThreshold = 0.3;
+            else confThreshold = 0.45;
+
             if (best && bestScore >= confThreshold) {
               actions.push({ actorId: actor.id, type: "RIOT_SMOKE", targetId: best.id });
             }
