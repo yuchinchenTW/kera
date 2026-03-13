@@ -299,8 +299,7 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
           if (entry.targetId !== executed.id) continue;
           const voter = engine.state.players.find((p) => p.id === entry.actorId);
           if (!voter) continue;
-          // Use current faction for voter too (zombie converts vote as green)
-          const vFaction = voter.faction || voter.startFaction;
+          const vFaction = voter.faction;
           if (vFaction === "BLUE") {
             if (executedFaction === "RED") blueVotedRed++;
             else blueVotedBlue++;
@@ -321,17 +320,22 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   const timedOut = safety <= 0 && !engine.state.victory;
   const dayNumber = engine.state.dayNumber || 1;
 
-  const playerResults = engine.state.players.map((p) => ({
-    role: p.startRole,
-    faction: p.faction,
-    finalRole: p.role,
-    finalFaction: p.faction,
-    alive: p.alive,
-    deathCause: p.deathCause || null,
-    nightKill: p.deathCause ? NIGHT_KILL_CAUSES.has(p.deathCause) : false,
-    voteKill: p.deathCause === DeathCause.VOTE_EXECUTION,
-    converted: p.role !== p.startRole,
-  }));
+  const playerResults = engine.state.players.map((p) => {
+    // Brat revival leaves deathCause=VOTE_EXECUTION on a living player — ignore it
+    const effectiveCause = p.alive ? null : (p.deathCause || null);
+    return {
+      role: p.startRole,
+      startFaction: p.startFaction,
+      faction: p.faction,
+      finalRole: p.role,
+      finalFaction: p.faction,
+      alive: p.alive,
+      deathCause: effectiveCause,
+      nightKill: effectiveCause ? NIGHT_KILL_CAUSES.has(effectiveCause) : false,
+      voteKill: effectiveCause === DeathCause.VOTE_EXECUTION,
+      converted: p.role !== p.startRole,
+    };
+  });
 
   // Count deaths by cause
   for (const pr of playerResults) {
