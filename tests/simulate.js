@@ -23,6 +23,9 @@ const LANG = {
     hdrDays: "AvgDays", hdrTime: "Time", hdrTimeout: "Timeout",
     progress: (i, n) => `Progress: ${i}/${n} (${((i / n) * 100).toFixed(0)}%)`,
     threads: (n) => `Using ${n} threads`,
+    actionStats: "ACTION STATS",
+    doctorSaves: "Doctor saves", agentBlocks: "Agent/Fiend blocks",
+    voteNoExec: "No-execution votes", perGame: "/game",
     factionName: { BLUE: "BLUE", RED: "RED", ZOMBIE: "ZOMBIE", GRUDGE: "GRUDGE", NONE: "NONE" },
     diffName: { easy: "easy", normal: "normal", hard: "hard", nightmare: "nightmare" },
     roleName: (id) => id,
@@ -65,6 +68,9 @@ Examples:
     hdrDays: "平均天數", hdrTime: "耗時", hdrTimeout: "超時",
     progress: (i, n) => `進度：${i}/${n}（${((i / n) * 100).toFixed(0)}%）`,
     threads: (n) => `使用 ${n} 個執行緒`,
+    actionStats: "行動統計",
+    doctorSaves: "醫生救援", agentBlocks: "特務/天煞擋下",
+    voteNoExec: "未處決投票", perGame: "/場",
     factionName: { BLUE: "藍方", RED: "紅方", ZOMBIE: "殭屍", GRUDGE: "怨靈", NONE: "無" },
     diffName: { easy: "簡單", normal: "普通", hard: "困難", nightmare: "噩夢" },
     roleName: (id) => {
@@ -145,13 +151,33 @@ const NIGHT_KILL_CAUSES = new Set([
 // ─── Single Game Runner ─────────────────────────────────────────────────────
 
 function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
-  const engine = new GameEngine(seed, theme, difficulty);
+  const engine = new GameEngine(seed, theme, difficulty, { allAi: true });
 
   let safety = 200;
+  let doctorSaves = 0;
+  let agentBlocks = 0;
+  let totalVoteRounds = 0;
+  let noExecutionRounds = 0;
+
   while (!engine.state.victory && safety-- > 0) {
+    const summaryBefore = engine.state.lastNightSummary?.length || 0;
     engine.resolveNight(null, { includeHuman: true });
+
+    // Count protections from lastNightSummary
+    for (const entry of (engine.state.lastNightSummary || []).slice(summaryBefore)) {
+      if (typeof entry === "string") {
+        if (entry.includes("saved") && entry.includes("from death")) doctorSaves++;
+        if (entry.includes("Agent shield") || entry.includes("Fiend absorbed")) agentBlocks++;
+      }
+    }
+
     if (engine.state.phase === Phase.END || engine.state.victory) break;
+
+    const aliveBefore = engine.state.players.filter((p) => p.alive).length;
     engine.resolveVote(null, "", { includeHuman: true });
+    const aliveAfter = engine.state.players.filter((p) => p.alive).length;
+    totalVoteRounds++;
+    if (aliveBefore === aliveAfter) noExecutionRounds++;
   }
 
   const victory = engine.state.victory || { winner: "NONE", reason: "Timeout" };
@@ -167,7 +193,7 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     voteKill: p.deathCause === DeathCause.VOTE_EXECUTION,
   }));
 
-  return { victory, dayNumber, playerResults, timedOut };
+  return { victory, dayNumber, playerResults, timedOut, doctorSaves, agentBlocks, totalVoteRounds, noExecutionRounds };
 }
 
 // ─── Worker Thread Logic ────────────────────────────────────────────────────
@@ -186,6 +212,10 @@ if (!isMainThread) {
   const reasonCounts = {};
   let timeouts = 0;
   let completed = 0;
+  let totalDoctorSaves = 0;
+  let totalAgentBlocks = 0;
+  let totalVoteRounds = 0;
+  let totalNoExecRounds = 0;
 
   for (let i = startIdx; i < endIdx; i++) {
     const seed = baseSeed + hashSeed(i);
@@ -203,6 +233,10 @@ if (!isMainThread) {
     const winner = victory.winner || "NONE";
     tally[winner] = (tally[winner] || 0) + 1;
     dayLengths.push(dayNumber);
+    totalDoctorSaves += result.doctorSaves || 0;
+    totalAgentBlocks += result.agentBlocks || 0;
+    totalVoteRounds += result.totalVoteRounds || 0;
+    totalNoExecRounds += result.noExecutionRounds || 0;
 
     const reason = victory.reason || "Unknown";
     reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
@@ -230,6 +264,7 @@ if (!isMainThread) {
       tally, roleSeen, roleWins, roleSurvived,
       roleDeathByVote, roleDeathByNight,
       dayLengths, reasonCounts, timeouts,
+      totalDoctorSaves, totalAgentBlocks, totalVoteRounds, totalNoExecRounds,
     },
   });
   process.exit(0);
@@ -248,6 +283,10 @@ function mergeStats(a, b) {
     dayLengths: [...a.dayLengths, ...b.dayLengths],
     reasonCounts: { ...a.reasonCounts },
     timeouts: a.timeouts + b.timeouts,
+    totalDoctorSaves: (a.totalDoctorSaves || 0) + (b.totalDoctorSaves || 0),
+    totalAgentBlocks: (a.totalAgentBlocks || 0) + (b.totalAgentBlocks || 0),
+    totalVoteRounds: (a.totalVoteRounds || 0) + (b.totalVoteRounds || 0),
+    totalNoExecRounds: (a.totalNoExecRounds || 0) + (b.totalNoExecRounds || 0),
   };
   for (const key of ["tally", "roleSeen", "roleWins", "roleSurvived", "roleDeathByVote", "roleDeathByNight", "reasonCounts"]) {
     for (const [k, v] of Object.entries(b[key])) {
@@ -262,6 +301,7 @@ function emptyStats() {
     tally: {}, roleSeen: {}, roleWins: {}, roleSurvived: {},
     roleDeathByVote: {}, roleDeathByNight: {},
     dayLengths: [], reasonCounts: {}, timeouts: 0,
+    totalDoctorSaves: 0, totalAgentBlocks: 0, totalVoteRounds: 0, totalNoExecRounds: 0,
   };
 }
 
@@ -272,52 +312,44 @@ function simulateGames(count, theme, difficulty, { L }) {
     if (numThreads <= 1) {
       // Fallback to single-threaded for very small counts
       const baseSeed = Date.now();
-      const tally = {};
-      const roleSeen = {};
-      const roleWins = {};
-      const roleSurvived = {};
-      const roleDeathByVote = {};
-      const roleDeathByNight = {};
-      const dayLengths = [];
-      const reasonCounts = {};
-      let timeouts = 0;
+      let acc = emptyStats();
 
       for (let i = 0; i < count; i++) {
         const seed = baseSeed + hashSeed(i);
         const result = runOne(seed, theme, difficulty);
         const { victory, dayNumber, playerResults, timedOut } = result;
 
-        if (timedOut) { timeouts++; continue; }
+        if (timedOut) { acc.timeouts++; continue; }
 
         const winner = victory.winner || "NONE";
-        tally[winner] = (tally[winner] || 0) + 1;
-        dayLengths.push(dayNumber);
+        acc.tally[winner] = (acc.tally[winner] || 0) + 1;
+        acc.dayLengths.push(dayNumber);
+        acc.totalDoctorSaves += result.doctorSaves || 0;
+        acc.totalAgentBlocks += result.agentBlocks || 0;
+        acc.totalVoteRounds += result.totalVoteRounds || 0;
+        acc.totalNoExecRounds += result.noExecutionRounds || 0;
 
         const reason = victory.reason || "Unknown";
-        reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+        acc.reasonCounts[reason] = (acc.reasonCounts[reason] || 0) + 1;
 
         for (const pr of playerResults) {
           const { role, faction, alive, nightKill, voteKill } = pr;
-          roleSeen[role] = (roleSeen[role] || 0) + 1;
+          acc.roleSeen[role] = (acc.roleSeen[role] || 0) + 1;
 
           const roleCountsAsWin =
             (winner === "RED" && faction === "RED") ||
             (winner === "BLUE" && faction === "BLUE") ||
             (winner === "ZOMBIE" && role === Roles.ZOMBIE.id) ||
             (winner === "GRUDGE" && role === Roles.GRUDGE_BEAST.id);
-          if (roleCountsAsWin) roleWins[role] = (roleWins[role] || 0) + 1;
+          if (roleCountsAsWin) acc.roleWins[role] = (acc.roleWins[role] || 0) + 1;
 
-          if (alive) roleSurvived[role] = (roleSurvived[role] || 0) + 1;
-          if (voteKill) roleDeathByVote[role] = (roleDeathByVote[role] || 0) + 1;
-          if (nightKill) roleDeathByNight[role] = (roleDeathByNight[role] || 0) + 1;
+          if (alive) acc.roleSurvived[role] = (acc.roleSurvived[role] || 0) + 1;
+          if (voteKill) acc.roleDeathByVote[role] = (acc.roleDeathByVote[role] || 0) + 1;
+          if (nightKill) acc.roleDeathByNight[role] = (acc.roleDeathByNight[role] || 0) + 1;
         }
       }
 
-      resolve({
-        tally, roleSeen, roleWins, roleSurvived,
-        roleDeathByVote, roleDeathByNight,
-        dayLengths, reasonCounts, timeouts,
-      });
+      resolve(acc);
       return;
     }
 
@@ -492,6 +524,20 @@ async function main() {
     console.log(
       `  ${L.roleName(role).padEnd(20)} ${L.factionLabel(faction).padEnd(7)} ${pct(wins, seen)} ${pct(survived, seen)} ${pct(nightDied, seen)} ${pct(voteDied, seen)} ${String(seen).padStart(5)}`
     );
+  }
+
+  // ── Action Stats ──
+
+  if (total > 0) {
+    const avgDocSaves = (stats.totalDoctorSaves / total).toFixed(2);
+    const avgAgentBlocks = (stats.totalAgentBlocks / total).toFixed(2);
+    const noExecPct = stats.totalVoteRounds > 0 ? pct(stats.totalNoExecRounds, stats.totalVoteRounds) : "  0.0%";
+
+    console.log(`\n  ${L.actionStats}`);
+    console.log(`  ${"─".repeat(50)}`);
+    console.log(`  ${L.doctorSaves.padEnd(24)} ${avgDocSaves} ${L.perGame}`);
+    console.log(`  ${L.agentBlocks.padEnd(24)} ${avgAgentBlocks} ${L.perGame}`);
+    console.log(`  ${L.voteNoExec.padEnd(24)} ${noExecPct} (${stats.totalNoExecRounds}/${stats.totalVoteRounds})`);
   }
 
   // ── Difficulty Comparison Mode ──

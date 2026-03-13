@@ -62,7 +62,7 @@ export function createInitialState(
 
   const humanIds = Array.isArray(opts.humanIds) ? opts.humanIds : [];
   const humanIdSet = new Set(humanIds);
-  if (humanIdSet.size === 0) {
+  if (humanIdSet.size === 0 && !opts.allAi) {
     const randomHuman = Math.floor(rng() * rolePool.length);
     humanIdSet.add(randomHuman);
   }
