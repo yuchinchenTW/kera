@@ -844,6 +844,83 @@ function pickZombieTarget(state, actor) {
   return best;
 }
 
+// ─── Hard+ Terrorist Smart Targeting ──────────────────────────────────────
+
+/**
+ * Hard+ terrorist target selection: pick the highest-value BLUE target.
+ * - Terrorist is RED, suicide bomb kills self + target (if target is blue).
+ * - Bombing a red = only self dies (net loss). Must avoid red targets.
+ * - Prioritize police > doctor > agent > active blue civilians.
+ */
+function pickTerroristSmartTarget(state, actor) {
+  const chatBehavior = analyzeChatBehavior(state);
+  const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount || {}));
+  const votePatterns = analyzeVotingPatterns(state);
+  let best = null;
+  let bestScore = -Infinity;
+
+  // Known reds to identify allies from voting patterns
+  const knownReds = new Set();
+  if (state.policeRevealedRed !== null) knownReds.add(state.policeRevealedRed);
+  for (const p of state.players) {
+    if (!p.alive && p.faction === Faction.RED) knownReds.add(p.id);
+  }
+
+  for (const t of alivePlayers(state)) {
+    if (t.id === actor.id) continue;
+    // Never bomb known red allies (only self dies)
+    if (t.role === Roles.KILLER.id) continue;
+
+    const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+    const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+    const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+    const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
+    const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
+
+    // Base: prefer blue targets (bombing red = only self dies)
+    let score = blueProb * 1.5;
+
+    // Heavy penalty for red targets — bombing them is suicide for nothing
+    score -= redProb * 2.0;
+
+    // High-value role bonuses — police are the biggest threat to red team
+    score += policeProb * 1.2;
+    score += doctorProb * 0.8;
+    score += agentProb * 0.6;
+
+    // Active speakers who are blue = high-influence targets worth bombing
+    const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+    if (blueProb > 0.5) score += speakRatio * 0.3;
+
+    // Police-confirmed red? NEVER bomb — guaranteed only self dies
+    if (state.policeConfirmed?.[t.id]) score -= 3.0;
+
+    // Voted together with known reds = possibly red ally, avoid
+    if (votePatterns) {
+      let redAllyCount = 0;
+      for (const redId of knownReds) {
+        redAllyCount += votePatterns.votedTogether[t.id]?.[redId] || 0;
+      }
+      score -= Math.min(redAllyCount * 0.1, 0.3);
+    }
+
+    // Saved by doctor last night = confirmed blue, high-value target
+    const lastSummary = state.lastNightSummary || [];
+    for (const entry of lastSummary) {
+      if (typeof entry === "string" && entry.includes(t.name) && entry.includes("saved")) {
+        score += 0.3; // confirmed blue = worth bombing
+      }
+    }
+
+    score += (state.rng() - 0.5) * 0.1;
+    if (score > bestScore) {
+      bestScore = score;
+      best = t;
+    }
+  }
+  return best;
+}
+
 // ─── Hard+ Killer Smart Targeting ──────────────────────────────────────────
 
 /**
@@ -1458,16 +1535,65 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.TERRORIST.id: {
-        // Hard+: terrorist triggers when self-threat is high (about to be voted out = suicide bomb)
-        let triggerChance = 0.65;
         if (hard) {
           const selfThreat = actor.aiMemory?.selfThreat ?? 0;
-          // Low threat = hold bomb (20%), high threat = use it (80%)
-          triggerChance = clamp(0.1 + selfThreat * 0.8, 0.1, 0.85);
-        }
-        if (state.rng() < triggerChance) {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
-          if (target) actions.push({ actorId: actor.id, type: "TERROR_BOMB", targetId: target.id });
+          const alive = alivePlayers(state);
+          const aliveCount = alive.length;
+
+          // Count red allies still alive (excluding self)
+          const redAlive = alive.filter((p) => p.id !== actor.id && p.faction === Faction.RED).length;
+          const blueAlive = aliveCount - 1 - redAlive; // rough estimate
+
+          // Trigger conditions:
+          // 1. policeRevealedRed points at me → must bomb NOW (will be voted out)
+          // 2. High self-threat → about to die, use bomb before it's wasted
+          // 3. Late game + killers losing → desperate bomb
+          // 4. Red has numbers advantage → hold bomb (don't waste a body)
+          let triggerChance;
+
+          if (state.policeRevealedRed === actor.id) {
+            // Exposed — 95% trigger (last chance before vote execution)
+            triggerChance = 0.95;
+          } else if (selfThreat > 0.6) {
+            // High threat — likely to be voted out
+            triggerChance = clamp(0.5 + selfThreat * 0.4, 0.5, 0.9);
+          } else if (redAlive <= 2 && blueAlive >= 4) {
+            // Red team losing — more aggressive bombing to even the odds
+            triggerChance = clamp(0.3 + selfThreat * 0.5, 0.3, 0.8);
+          } else if (redAlive > blueAlive) {
+            // Red has advantage — hold bomb, keep the body count
+            triggerChance = clamp(0.05 + selfThreat * 0.3, 0.05, 0.3);
+          } else {
+            // Neutral — moderate trigger based on threat
+            triggerChance = clamp(0.1 + selfThreat * 0.6, 0.1, 0.7);
+          }
+
+          if (state.rng() < triggerChance) {
+            const target = pickTerroristSmartTarget(state, actor);
+            if (target) {
+              // Final safety: don't bomb if target is very likely red (>70%)
+              const targetRedProb = factionProb(actor, target.id, Faction.RED) ?? 0;
+              if (targetRedProb < 0.7) {
+                actions.push({ actorId: actor.id, type: "TERROR_BOMB", targetId: target.id });
+              }
+            }
+          }
+        } else {
+          // Non-hard: original random behavior but target low-suspicion (blue) players
+          if (state.rng() < 0.65) {
+            // Pick least suspicious = most likely blue
+            let best = null;
+            let bestScore = Infinity;
+            for (const t of alivePlayers(state)) {
+              if (t.id === actor.id) continue;
+              const s = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
+              if (s < bestScore || (s === bestScore && state.rng() < 0.5)) {
+                bestScore = s;
+                best = t;
+              }
+            }
+            if (best) actions.push({ actorId: actor.id, type: "TERROR_BOMB", targetId: best.id });
+          }
         }
         break;
       }
