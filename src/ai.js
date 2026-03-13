@@ -1151,6 +1151,10 @@ function pickKillerSmartTarget(state, actor) {
     if (t.role === Roles.KILLER.id) continue;
     if (t.id === actor.id) continue;
 
+    // Avoid grudge beasts: night-killing them triggers berserk → catastrophic for red
+    const grudgeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.GRUDGE_BEAST?.id] ?? 0;
+    if (grudgeProb > 0.3) continue; // skip high-probability grudge targets entirely
+
     const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
     const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
     const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
@@ -1303,6 +1307,10 @@ function pickCowboySmartTarget(state, actor) {
     // Penalty: accused by known reds = likely blue
     if (accusedByRedIds.has(t.id)) score -= 0.15;
 
+    // Penalty: grudge beast — night-killing them triggers berserk
+    const cowboyGrudgeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.GRUDGE_BEAST?.id] ?? 0;
+    if (cowboyGrudgeProb > 0.2) score -= 1.0;
+
     // Bonus: opposed red execution = suspicious
     if (redExecOpposers[t.id]) {
       score += Math.min(redExecOpposers[t.id] * 0.12, 0.3);
@@ -1375,6 +1383,10 @@ function pickSniperSmartTarget(state, actor) {
         score -= 0.7;
       }
     }
+
+    // Penalty: grudge beast — night-killing them triggers berserk
+    const sniperGrudgeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.GRUDGE_BEAST?.id] ?? 0;
+    if (sniperGrudgeProb > 0.2) score -= 1.5; // heavily avoid
 
     if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
       bestScore = score;
@@ -2828,6 +2840,15 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const deadRedCount = hard ? state.players.filter((p) => !p.alive && p.faction === Faction.RED).length : 0;
   const remainingRedEstimate = totalExpectedRed - deadRedCount;
 
+  // Hard+: grudge beast awareness — both blue and red benefit from vote-executing grudge beasts
+  // Vote execution is SAFE (doesn't trigger berserk), night-killing is DANGEROUS
+  // If any grudge beast survives, they steal victory via survival override
+  const totalExpectedGreen = hard ? themeRoles.filter((r) => roleMeta(r).faction === Faction.GREEN).length : 0;
+  const hasGrudgeInTheme = totalExpectedGreen > 0;
+  const aliveGrudgeEstimate = hasGrudgeInTheme ? state.players.filter(
+    (p) => p.alive && p.role === Roles.GRUDGE_BEAST.id
+  ).length : 0;
+
   // Hard+: survival suspicion — vocal players who survive many nights while blues die
   const chatBehaviorVote = hard ? analyzeChatBehavior(state) : null;
   const maxSpokenVote = chatBehaviorVote ? Math.max(1, ...Object.values(chatBehaviorVote.speakCount || {})) : 1;
@@ -2928,6 +2949,20 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         // 75% sell out (was 30-70%) — balance between avoiding opposer tag and not always caving
         if (state.rng() < 0.75) {
           votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: exposedRed.id });
+          return;
+        }
+      }
+
+      // Hard+: red faction also wants to vote-execute grudge beasts (safe, prevents override)
+      if (hasGrudgeInTheme && aliveGrudgeEstimate > 0 && state.rng() < 0.6) {
+        let bestGrudge = null;
+        let bestGrudgeProb = 0;
+        for (const t of candidates) {
+          const gp = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.GRUDGE_BEAST?.id] ?? 0;
+          if (gp > bestGrudgeProb) { bestGrudgeProb = gp; bestGrudge = t; }
+        }
+        if (bestGrudge && bestGrudgeProb > 0.3) {
+          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: bestGrudge.id });
           return;
         }
       }
@@ -3043,6 +3078,15 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         // Hard+: defended dead reds in chat = suspicious (red allies cover each other)
         if (hard && redDefenderIds.has(t.id)) {
           s += 0.1;
+        }
+
+        // Hard+: grudge beast vote priority — vote-executing them is safe (no berserk)
+        // and prevents survival override. Both blue and red benefit.
+        if (hard && hasGrudgeInTheme && aliveGrudgeEstimate > 0) {
+          const grudgeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.GRUDGE_BEAST?.id] ?? 0;
+          // Strong boost for confirmed/high-prob grudge targets
+          if (grudgeProb > 0.4) s += 0.35;
+          else if (grudgeProb > 0.2) s += 0.15;
         }
 
         // Hard+: survival suspicion — scale by night deaths and survival length
