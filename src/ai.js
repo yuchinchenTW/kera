@@ -859,17 +859,30 @@ function pickTerroristSmartTarget(state, actor) {
   let best = null;
   let bestScore = -Infinity;
 
-  // Known reds to identify allies from voting patterns
+  // Terrorist does NOT know who other reds are (different role = no shared info).
+  // Use public info only: policeRevealedRed, dead player factions, AI suspicion.
   const knownReds = new Set();
   if (state.policeRevealedRed !== null) knownReds.add(state.policeRevealedRed);
   for (const p of state.players) {
     if (!p.alive && p.faction === Faction.RED) knownReds.add(p.id);
   }
 
+  // Estimate likely killer target tonight (avoid overlap — both killing same blue is wasteful)
+  // Use observable signals: high blue prob + active speaker = likely killer target
+  let likelyKillerTarget = null;
+  let likelyKillerScore = -Infinity;
   for (const t of alivePlayers(state)) {
     if (t.id === actor.id) continue;
-    // Never bomb known red allies (only self dies)
-    if (t.role === Roles.KILLER.id) continue;
+    const bp = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+    const rp = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+    if (rp > 0.6) continue; // likely red, killers won't target
+    const sr = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+    const ks = bp + sr * 0.3;
+    if (ks > likelyKillerScore) { likelyKillerScore = ks; likelyKillerTarget = t.id; }
+  }
+
+  for (const t of alivePlayers(state)) {
+    if (t.id === actor.id) continue;
 
     const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
     const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
@@ -880,7 +893,7 @@ function pickTerroristSmartTarget(state, actor) {
     // Base: prefer blue targets (bombing red = only self dies)
     let score = blueProb * 1.5;
 
-    // Heavy penalty for red targets — bombing them is suicide for nothing
+    // Heavy penalty for uncertain targets — bombing unknown is risky
     score -= redProb * 2.0;
 
     // High-value role bonuses — police are the biggest threat to red team
@@ -908,7 +921,22 @@ function pickTerroristSmartTarget(state, actor) {
     const lastSummary = state.lastNightSummary || [];
     for (const entry of lastSummary) {
       if (typeof entry === "string" && entry.includes(t.name) && entry.includes("saved")) {
-        score += 0.3; // confirmed blue = worth bombing
+        score += 0.4; // confirmed blue = very worth bombing
+      }
+    }
+
+    // Avoid overlap with killer's likely target — don't waste 2 red actions on 1 blue
+    if (t.id === likelyKillerTarget) {
+      score -= 0.35;
+    }
+
+    // Bonus: target who accused known reds in chat (actively hunting red team)
+    const chatMem = actor.aiMemory?.chatMemory || [];
+    for (const m of chatMem) {
+      if (m.speakerId === t.id) {
+        for (const redId of knownReds) {
+          if (m.accusedId === redId) { score += 0.15; break; }
+        }
       }
     }
 
@@ -1540,18 +1568,31 @@ export function buildAiNightActions(state, opts = {}) {
           const alive = alivePlayers(state);
           const aliveCount = alive.length;
 
-          // Count red allies still alive (excluding self)
-          const redAlive = alive.filter((p) => p.id !== actor.id && p.faction === Faction.RED).length;
-          const blueAlive = aliveCount - 1 - redAlive; // rough estimate
+          // Estimate red/blue counts from AI beliefs (no cheating — use roleProbs)
+          let estRedAlive = 0;
+          let estBlueAlive = 0;
+          for (const p of alive) {
+            if (p.id === actor.id) continue; // self is red, don't count
+            const rp = factionProb(actor, p.id, Faction.RED) ?? 0.5;
+            estRedAlive += rp;
+            estBlueAlive += (1 - rp);
+          }
+          const redAlive = Math.round(estRedAlive);
+          const blueAlive = Math.round(estBlueAlive);
 
           // Trigger conditions:
+          // 0. Day 1: almost never bomb (too little info, high friendly-fire risk)
           // 1. policeRevealedRed points at me → must bomb NOW (will be voted out)
           // 2. High self-threat → about to die, use bomb before it's wasted
           // 3. Late game + killers losing → desperate bomb
           // 4. Red has numbers advantage → hold bomb (don't waste a body)
           let triggerChance;
+          const dayNum = state.dayNumber || 1;
 
-          if (state.policeRevealedRed === actor.id) {
+          if (dayNum <= 1 && state.policeRevealedRed !== actor.id) {
+            // Day 1: beliefs are unreliable, hold bomb (5% emergency only)
+            triggerChance = 0.05;
+          } else if (state.policeRevealedRed === actor.id) {
             // Exposed — 95% trigger (last chance before vote execution)
             triggerChance = 0.95;
           } else if (selfThreat > 0.6) {
