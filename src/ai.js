@@ -1044,11 +1044,20 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.DOCTOR.id: {
         if (state.usage.doctorInjections < (Roles.DOCTOR.maxInjections || 0)) {
           let target = actor;
-          // Hard+: self-protect decision based on self-threat level
+          const dayNum = state.dayNumber || 1;
+          // Hard+: self-protect decision based on self-threat level + game phase
           const selfThreat = actor.aiMemory?.selfThreat ?? 0;
-          const selfProtectChance = hard
-            ? clamp(0.15 + selfThreat * 0.6, 0.15, 0.7) // high threat = more self-protect
-            : 0.3;
+          let selfProtectChance;
+          if (hard) {
+            // Day 1: killers don't know who doctor is, almost never self-protect
+            if (dayNum === 1) {
+              selfProtectChance = 0.05;
+            } else {
+              selfProtectChance = clamp(0.1 + selfThreat * 0.7, 0.1, 0.75);
+            }
+          } else {
+            selfProtectChance = 0.3;
+          }
           if (state.rng() > selfProtectChance) {
             // Protect someone else
             let best = null;
@@ -1056,6 +1065,14 @@ export function buildAiNightActions(state, opts = {}) {
             // Pre-compute chat behavior once (not per candidate)
             const chatBehavior = hard ? analyzeChatBehavior(state) : null;
             const maxSpoken = chatBehavior ? Math.max(1, ...Object.values(chatBehavior.speakCount || {})) : 1;
+
+            // Injection budget awareness: how cautious should we be?
+            const injectionsLeft = (Roles.DOCTOR.maxInjections || 6) - state.usage.doctorInjections;
+            const alive = alivePlayers(state);
+            // Estimate remaining nights: ~(aliveCount / 2) more nights of game
+            const estNightsLeft = Math.max(1, Math.ceil(alive.length / 3));
+            // If injections are scarce relative to remaining game, require higher confidence
+            const budgetTight = injectionsLeft <= estNightsLeft;
 
             // Detect killer target-switching pattern: if last kill was active speaker,
             // killer likely switches to quiet target next (and vice versa)
@@ -1068,12 +1085,12 @@ export function buildAiNightActions(state, opts = {}) {
               const lastDead = recentDeads[recentDeads.length - 1];
               if (lastDead && chatBehavior) {
                 const deadSpeak = (chatBehavior.speakCount[lastDead.id] || 0) / maxSpoken;
-                if (deadSpeak > 0.5) killerPreferQuiet = true;  // killed talker → may switch to quiet
-                if (deadSpeak < 0.3) killerPreferActive = true; // killed quiet → may switch to talker
+                if (deadSpeak > 0.5) killerPreferQuiet = true;
+                if (deadSpeak < 0.3) killerPreferActive = true;
               }
             }
 
-            // Identify who was saved last night (and who killed last night died)
+            // Identify who was saved last night
             const savedLastNight = new Set();
             if (hard) {
               for (const entry of (state.lastNightSummary || [])) {
@@ -1085,7 +1102,26 @@ export function buildAiNightActions(state, opts = {}) {
               }
             }
 
-            for (const t of shuffled(alivePlayers(state), state.rng)) {
+            // Multi-night attack trend: count blue deaths by speaking pattern
+            let nightDeathActive = 0;
+            let nightDeathQuiet = 0;
+            if (hard && chatBehavior) {
+              for (const p of state.players) {
+                if (!p.alive && p.deathCause && p.deathCause !== "VOTE_EXECUTION" && p.faction === Faction.BLUE) {
+                  const sr = (chatBehavior.speakCount[p.id] || 0) / maxSpoken;
+                  if (sr > 0.4) nightDeathActive++;
+                  else nightDeathQuiet++;
+                }
+              }
+            }
+
+            // Pre-compute vote info once
+            const voteHist = state.history?.votes || [];
+            const lastRound = voteHist.length > 0 ? voteHist[voteHist.length - 1] : null;
+            const lastTally = lastRound ? (lastRound.tally || {}) : {};
+            const maxVotes = Math.max(1, ...Object.values(lastTally));
+
+            for (const t of shuffled(alive, state.rng)) {
               if (t.id === actor.id) continue;
               const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
               const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
@@ -1098,7 +1134,7 @@ export function buildAiNightActions(state, opts = {}) {
               if (hard) {
                 // Mirror killer targeting: killers prefer blue + police + active speakers
                 const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
-                score += policeProb * 0.35; // police are high-priority killer targets
+                score += policeProb * 0.35;
 
                 const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
                 score += speakRatio * 0.2;
@@ -1107,24 +1143,45 @@ export function buildAiNightActions(state, opts = {}) {
                 if (killerPreferQuiet && speakRatio < 0.3) score += 0.15;
                 if (killerPreferActive && speakRatio > 0.5) score += 0.15;
 
+                // Multi-night trend: if killers consistently target active speakers, boost active
+                if (nightDeathActive > nightDeathQuiet + 1 && speakRatio > 0.5) score += 0.1;
+                if (nightDeathQuiet > nightDeathActive + 1 && speakRatio < 0.3) score += 0.1;
+
                 // Penalty: likely red — don't waste injection (and risk overdose)
                 score -= redProb * 0.4;
+
+                // Budget-tight penalty: if injections are running low, need higher blue confidence
+                if (budgetTight && blueProb < 0.5) score -= 0.2;
 
                 // Penalty: high empty injection count — overdose risk
                 const targetPlayer = getPlayer(state, t.id);
                 if (targetPlayer && targetPlayer.emptyInjections >= 1) {
-                  score -= 0.6; // one more empty = death
+                  score -= 0.6;
                 }
 
                 // Bonus: received many votes last round → killers see them as threat
-                const voteHist = state.history?.votes || [];
-                const lastRound = voteHist[voteHist.length - 1];
                 if (lastRound) {
-                  const tally = lastRound.tally || {};
-                  const tVotes = tally[t.id] || 0;
-                  const maxVotes = Math.max(1, ...Object.values(tally));
+                  const tVotes = lastTally[t.id] || 0;
                   if (tVotes > 0 && blueProb > 0.5) {
-                    score += (tVotes / maxVotes) * 0.15; // voted-against blue = killer target
+                    score += (tVotes / maxVotes) * 0.15;
+                  }
+                }
+
+                // Agent overlap avoidance: if an agent is likely alive and protecting,
+                // slightly penalize the most obvious protection target to spread coverage
+                if (Roles.AGENT) {
+                  const agentAlive = alive.some((p) => {
+                    const ap = actor.aiMemory?.roleProbs?.[p.id]?.[Roles.AGENT.id] ?? 0;
+                    return p.id !== actor.id && ap > 0.3;
+                  });
+                  if (agentAlive) {
+                    // Agent tends to protect highest blueProb; if this target is the
+                    // most obvious blue, slight penalty to diversify protection
+                    const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
+                    if (agentProb > 0.3) {
+                      // This person IS likely the agent — they protect themselves indirectly
+                      score -= 0.15;
+                    }
                   }
                 }
               }
@@ -1135,11 +1192,8 @@ export function buildAiNightActions(state, opts = {}) {
                 const lastProt = actor.aiMemory.lastProtected;
                 if (lastProt !== null && t.id === lastProt) {
                   if (savedLastNight.has(t.id)) {
-                    // Re-protect is smart — they were attacked
                     score += 0.3;
                   } else {
-                    // Don't protect same person two nights in a row (killer will switch)
-                    // Unless 10% random chance to be unpredictable
                     if (state.rng() >= 0.1) {
                       score -= 0.8;
                     }
@@ -1155,7 +1209,6 @@ export function buildAiNightActions(state, opts = {}) {
           }
           if (target) {
             actions.push({ actorId: actor.id, type: "DOCTOR_INJECT", targetId: target.id });
-            // Track last protected for anti-pattern
             if (hard) {
               ensureAdvancedMemory(actor);
               actor.aiMemory.lastProtected = target.id;
