@@ -173,13 +173,10 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   let roundNum = 0;
   while (!engine.state.victory && safety-- > 0) {
     roundNum++;
-    const summaryBefore = engine.state.lastNightSummary?.length || 0;
-    const aliveBeforeNight = engine.state.players.filter((p) => p.alive).length;
-
     engine.resolveNight(null, { includeHuman: true });
 
-    // Count protections from lastNightSummary
-    for (const entry of (engine.state.lastNightSummary || []).slice(summaryBefore)) {
+    // Count protections from lastNightSummary (reset to [] each night by startNight)
+    for (const entry of (engine.state.lastNightSummary || [])) {
       if (typeof entry === "string") {
         if (entry.includes("saved") && entry.includes("from death")) doctorSaves++;
         if (entry.includes("Agent shield") || entry.includes("Fiend absorbed")) agentBlocks++;
