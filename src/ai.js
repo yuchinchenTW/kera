@@ -2560,7 +2560,6 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.PURIFIER.id: {
         if (hard) {
           // Hard+: prioritize cleansing necromancers (wipe souls) and high-threat red
-          // Also consider cleansing arsonist-marked allies to protect them
           let best = null;
           let bestScore = -Infinity;
           for (const t of alivePlayers(state)) {
@@ -2568,7 +2567,10 @@ export function buildAiNightActions(state, opts = {}) {
             const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
             const necroProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.NECROMANCER.id] ?? 0;
             const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
+            const nightmareProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.NIGHTMARE_DEMON?.id] ?? 0;
             let score = killerProb * 1.5 + redProb + necroProb * 1.0;
+            // Nightmare demon: blocking their civilian kills is high value
+            score += nightmareProb * 0.8;
             // Bonus: revealed red — cleanse to block their night action
             if (state.policeRevealedRed === t.id) score += 0.6;
             if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
