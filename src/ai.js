@@ -1494,36 +1494,30 @@ export function buildAiNightActions(state, opts = {}) {
 
           // CRITICAL: If agent is likely to be killed tonight, protecting someone
           // will ALSO kill that person (AGENT_LINK). Consider not protecting.
-          // Only trigger at very high threat — agent protection is too valuable to skip lightly.
           const agentInDanger = selfThreat > 0.7;
 
-          // Killer target prediction: who did killers target recently?
+          // Pre-compute: known reds, saved targets
+          const knownReds = new Set();
+          if (state.policeRevealedRed !== null) knownReds.add(state.policeRevealedRed);
+          for (const dp of state.players) {
+            if (!dp.alive && dp.faction === Faction.RED) knownReds.add(dp.id);
+          }
+
           const lastSummary = state.lastNightSummary || [];
           const savedLastNight = new Set();
-          const killedLastNight = new Set();
           for (const entry of lastSummary) {
             if (typeof entry !== "string") continue;
             for (const p of state.players) {
-              if (entry.includes(p.name)) {
-                if (entry.includes("saved")) savedLastNight.add(p.id);
-              }
-            }
-          }
-          for (const p of state.players) {
-            if (!p.alive && p.deathCause && p.deathCause !== "VOTE_EXECUTION") {
-              const deathDay = p.deathDay || dayNum - 1;
-              if (deathDay >= dayNum - 1) killedLastNight.add(p.id);
+              if (entry.includes(p.name) && entry.includes("saved")) savedLastNight.add(p.id);
             }
           }
 
-          // Killer pattern: did they target active or quiet players?
-          let killersTargetActive = 0;
-          let killersTargetQuiet = 0;
-          for (const deadId of killedLastNight) {
-            const sr = (chatInfo.speakCount[deadId] || 0) / maxSpoken;
-            if (sr > 0.4) killersTargetActive++;
-            else killersTargetQuiet++;
-          }
+          // KEY INSIGHT: Mirror the KILLER's scoring logic to predict their target.
+          // Killer logic: blueProb + policeProb×0.5 + speakRatio×0.3
+          //   - penalty for doctorProb/agentProb (protected)
+          //   - STRONG penalty for saved last night (-0.8)
+          //   - skip saved+same target 80%
+          // Agent should protect whoever the KILLER would score highest.
 
           let best = null;
           let bestScore = -Infinity;
@@ -1535,39 +1529,32 @@ export function buildAiNightActions(state, opts = {}) {
             const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
             const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
 
-            // Base: only protect blue-leaning targets
-            let score = blueProb * 1.2 - redProb * 1.5;
+            // Skip: don't protect known/likely reds
+            if (state.policeConfirmed?.[t.id]) continue;
+            if (redProb > 0.7) continue;
 
-            // High-value role bonuses — police and doctor are critical
-            score += policeProb * 0.6;
-            score += doctorProb * 0.5; // protecting doctor = they keep saving others
-
-            // Mirror killer targeting: active speakers are likely targets
+            // Simulate killer's view of this target (how attractive to kill?)
+            // This is the agent's estimate of killer targeting probability
             const speakRatio = (chatInfo.speakCount[t.id] || 0) / maxSpoken;
-            // Match killer pattern — if killers target active, protect active
-            if (killersTargetActive >= killersTargetQuiet) {
-              score += speakRatio * 0.35;
-            } else {
-              // Killers targeting quiet players — protect quiet blues
-              if (speakRatio < 0.3 && blueProb > 0.5) score += 0.2;
+            let killerAttraction = blueProb + policeProb * 0.5 + speakRatio * 0.3;
+
+            // Killers strongly avoid saved targets — so agent should too
+            if (savedLastNight.has(t.id)) {
+              killerAttraction -= 0.7; // killer won't re-target saved players
             }
 
-            // Saved last night = killer likely retargets them
-            if (savedLastNight.has(t.id)) score += 0.4;
+            // Killers avoid doctor/agent-protected targets
+            killerAttraction -= doctorProb * 0.25;
 
-            // Vote pressure penalty: if heavily voted across rounds, they might
-            // be voted out during the day — slightly less worth night protection
-            if (votePatterns && votePatterns.beenVotedFor && votePatterns.rounds > 0) {
-              const avgVotes = (votePatterns.beenVotedFor[t.id] || 0) / votePatterns.rounds;
-              if (avgVotes >= 2) score -= 0.12;
-            }
+            // Protection value = killerAttraction × blueValue
+            // (only worth protecting if killer WILL target AND target is blue)
+            let score = killerAttraction * blueProb;
+
+            // Extra value for high-importance roles
+            score += policeProb * 0.4;
+            score += doctorProb * 0.35;
 
             // Red ally pattern: voted with known reds = risky to protect
-            const knownReds = new Set();
-            if (state.policeRevealedRed !== null) knownReds.add(state.policeRevealedRed);
-            for (const dp of state.players) {
-              if (!dp.alive && dp.faction === Faction.RED) knownReds.add(dp.id);
-            }
             if (votePatterns) {
               let redAllyCount = 0;
               for (const redId of knownReds) {
@@ -1576,13 +1563,19 @@ export function buildAiNightActions(state, opts = {}) {
               score -= Math.min(redAllyCount * 0.1, 0.25);
             }
 
-            // Agent in danger penalty: if agent might die, AGENT_LINK kills target too
-            // Protect low-value targets to minimize collateral damage
-            if (agentInDanger) {
-              score *= 0.3; // flatten all scores — prefer not to protect anyone valuable
+            // Chat accusation: targets accused by many are less likely to be
+            // night-killed (killers let votes handle them)
+            const chatMem = actor.aiMemory?.chatMemory || [];
+            let accusedCount = 0;
+            for (const m of chatMem) {
+              if (m.accusedId === t.id) accusedCount++;
             }
+            if (accusedCount >= 3) score -= 0.15;
 
-            score += (state.rng() - 0.5) * 0.1;
+            // Agent in danger: flatten scores to minimize AGENT_LINK damage
+            if (agentInDanger) score *= 0.3;
+
+            score += (state.rng() - 0.5) * 0.08;
             if (score > bestScore) {
               bestScore = score;
               best = t;
@@ -1590,10 +1583,7 @@ export function buildAiNightActions(state, opts = {}) {
           }
 
           // If agent is in extreme danger, small chance to skip (15%)
-          if (agentInDanger && state.rng() < 0.15) {
-            // Skip protection — don't risk AGENT_LINK killing a blue ally
-            break;
-          }
+          if (agentInDanger && state.rng() < 0.15) break;
 
           const target = best;
           if (target) actions.push({ actorId: actor.id, type: "AGENT_PROTECT", targetId: target.id });
