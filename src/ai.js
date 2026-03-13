@@ -1822,11 +1822,18 @@ export function buildAiNightActions(state, opts = {}) {
       case Roles.RIOT_POLICE.id: {
         if (state.usage.riotGrenades < (Roles.RIOT_POLICE.maxGrenades || 0)) {
           if (hard) {
-            // Hard+: multi-role scoring to block red night actions + grenade conservation
+            // Hard+: multi-role scoring + arson urgency + self-threat awareness
             const remaining = (Roles.RIOT_POLICE.maxGrenades || 0) - state.usage.riotGrenades;
             const dayNum = state.dayNumber || 1;
             const counts = factionCounts(state);
             const bluePressure = counts.red >= counts.blue;
+            const selfThreat = actor.aiMemory?.selfThreat ?? 0;
+
+            // Detect arson marks (public info — "Someone splashed fuel on X")
+            let arsonMarkCount = 0;
+            for (const p of state.players) {
+              if (p.alive && p.status.arsonMarked) arsonMarkCount++;
+            }
 
             let best = null;
             let bestScore = -Infinity;
@@ -1843,20 +1850,25 @@ export function buildAiNightActions(state, opts = {}) {
               let score = killerProb * 2.0 + sniperProb * 1.8 + arsonistProb * 1.2 + terroristProb * 1.0;
               score += redProb * 0.3;
 
+              // ARSON URGENCY: if marks exist, blocking arsonist ignition is critical
+              if (arsonMarkCount > 0) {
+                score += arsonistProb * arsonMarkCount * 0.5;
+              }
+
               // Police-confirmed red: very high priority
               if (state.policeRevealedRed === t.id) score += 1.0;
 
-              // Late-game urgency: amplify scores when blues are losing
+              // Late-game urgency
               if (bluePressure && dayNum >= 3) score *= 1.2;
 
               score += (state.rng() - 0.5) * 0.1;
               if (score > bestScore) { bestScore = score; best = t; }
             }
 
-            // Dynamic grenade conservation
-            // Day 1: limited info but still act if decent target; late game: use aggressively
+            // Dynamic grenade conservation + self-threat
             let confThreshold;
             if (dayNum <= 1) confThreshold = 0.6;
+            else if (selfThreat > 0.6) confThreshold = 0.2;
             else if (remaining <= 1) confThreshold = 0.25;
             else if (bluePressure) confThreshold = 0.3;
             else confThreshold = 0.45;
