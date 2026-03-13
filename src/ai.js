@@ -2248,6 +2248,31 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
   }
 
+  // Hard+: arson-marked players are likely blue (arsonist is red, targets suspected blues)
+  const voteArsonMarkedIds = new Set();
+  if (hard) {
+    for (const p of state.players) {
+      if (p.alive && p.status.arsonMarked) voteArsonMarkedIds.add(p.id);
+    }
+  }
+
+  // Hard+: players accused by confirmed/dead reds are likely blue (reds target threats)
+  const accusedByRedIds = new Set();
+  if (hard) {
+    for (const p of state.players) {
+      if (!p.alive || !p.aiMemory?.chatMemory) continue;
+      for (const m of p.aiMemory.chatMemory) {
+        if (m.accusedId === null) continue;
+        // Check if the accuser is a known red (dead red or police-confirmed)
+        const speaker = getPlayer(state, m.speakerId);
+        if (!speaker) continue;
+        const isKnownRed = (!speaker.alive && speaker.faction === Faction.RED) ||
+          (state.policeConfirmed?.[m.speakerId] === true);
+        if (isKnownRed) accusedByRedIds.add(m.accusedId);
+      }
+    }
+  }
+
   // Hard+: survival suspicion — vocal players who survive many nights while blues die
   const chatBehaviorVote = hard ? analyzeChatBehavior(state) : null;
   const maxSpokenVote = chatBehaviorVote ? Math.max(1, ...Object.values(chatBehaviorVote.speakCount || {})) : 1;
@@ -2380,9 +2405,16 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     } else {
       let best = null;
       let bestScore = -Infinity;
+
+      // Hard+: progressive jitter reduction — less random as info accumulates
+      const dayNum = state.dayNumber || 1;
+      const aliveCount = alivePlayers(state).length;
+      const jitterScale = hard ? clamp(1.0 - (dayNum - 1) * 0.1 - (18 - aliveCount) * 0.02, 0.4, 1.0) : 1.0;
+      const voteJitter = (val) => clamp(val + (state.rng() - 0.5) * 0.3 * jitterScale, 0, 1);
+
       for (const t of candidates) {
         const redProb = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
-        const base = jitter(redProb);
+        const base = hard ? voteJitter(redProb) : jitter(redProb);
         const chatBonus = actor.role !== Roles.POLICE.id ? chatWeight(t.id) * 0.05 : 0;
         let s = clamp(base + chatBonus, 0, 1);
 
@@ -2414,6 +2446,16 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         // Hard+: wrong voter penalty — players who voted to execute blues are suspicious
         if (hard && wrongVoterIds.has(t.id)) {
           s += 0.08;
+        }
+
+        // Hard+: arson-marked = likely blue (arsonist targets suspected blues)
+        if (hard && voteArsonMarkedIds.has(t.id)) {
+          s -= 0.15;
+        }
+
+        // Hard+: accused by known reds = likely blue (reds target threats)
+        if (hard && accusedByRedIds.has(t.id)) {
+          s -= 0.1;
         }
 
         // Hard+: survival suspicion — vocal players surviving while blues die at night
@@ -2469,7 +2511,17 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
     // For each voter, consider switching to consensus if they agree
     // Don't bandwagon onto confirmed-blue or saved targets
-    const consensusIsSafe = voteSavedIds.has(consensusTarget) || correctVoterIds.has(consensusTarget);
+    const consensusIsSafe = voteSavedIds.has(consensusTarget) || correctVoterIds.has(consensusTarget)
+      || voteArsonMarkedIds.has(consensusTarget) || accusedByRedIds.has(consensusTarget);
+
+    // Trust check: is the consensus backed by trusted blue voters?
+    let trustedVotersInConsensus = 0;
+    for (const v of votes) {
+      if (v.targetId !== consensusTarget) continue;
+      if (voteSavedIds.has(v.actorId) || correctVoterIds.has(v.actorId)) trustedVotersInConsensus++;
+    }
+    const consensusTrusted = trustedVotersInConsensus > 0;
+
     for (let i = 0; i < votes.length; i++) {
       const v = votes[i];
       if (v.targetId === consensusTarget) continue; // already voting consensus
@@ -2477,12 +2529,14 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       if (!actor || actor.isHuman) continue;
       if (actor.faction === Faction.RED) continue; // red AI has its own strategy
       if (consensusIsSafe) continue; // don't bandwagon onto known blues
-      if (state.rng() >= 0.45) continue; // 45% chance to bandwagon (up from 40%)
+
+      // Bandwagon rate: higher if consensus is backed by trusted voters
+      const bandwagonRate = consensusTrusted ? 0.55 : 0.4;
+      if (state.rng() >= bandwagonRate) continue;
 
       // Only switch if they have real suspicion on the consensus target
       ensureAdvancedMemory(actor);
       const consensusSusp = actor.aiMemory?.suspicion?.[consensusTarget] ?? 0.5;
-      const currentSusp = actor.aiMemory?.suspicion?.[v.targetId] ?? 0.5;
       // Switch if consensus target is genuinely suspicious (≥0.4) and their current target is isolated
       const currentVotes = tally[v.targetId] || 0;
       if (consensusSusp >= 0.4 && currentVotes <= 1 && consensusCount >= 2) {
