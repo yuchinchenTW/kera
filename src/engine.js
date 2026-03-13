@@ -694,6 +694,7 @@ export class GameEngine {
       const agentInterceptsSniper =
         target.status.protectedByAgent && k.cause === DeathCause.SNIPER_HEADSHOT;
       if (agentInterceptsSniper) {
+        this.state.lastNightSummary.push(`Agent shield saved ${target.name} from sniper.`);
         continue;
       }
       const fiendImmuneCauses = new Set([
@@ -707,12 +708,14 @@ export class GameEngine {
       ]);
       if (!k.unstoppable) {
         if (target.status.protectedByAgent && !agentImmuneCauses.has(k.cause)) {
+          this.state.lastNightSummary.push(`Agent shield saved ${target.name} from attack.`);
           continue;
         }
         if (target.status.protectedByFiend) {
           const sourceId = target.status.protectionSource;
           if (!fiendImmuneCauses.has(k.cause)) {
             fiendAbsorbed.add(sourceId);
+            this.state.lastNightSummary.push(`Fiend absorbed attack on ${target.name}.`);
             continue;
           }
         }
