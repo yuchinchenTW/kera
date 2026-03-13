@@ -627,18 +627,78 @@ function factionProb(actor, targetId, faction) {
 function pickPoliceSmartTarget(state, actor) {
   let best = null;
   let bestScore = -Infinity;
+  const hard = isHard(state);
   const diffScaleMap = { easy: 0.6, normal: 1, hard: 1.3, nightmare: 1.6 };
   const diffScale = diffScaleMap[state.difficulty || "normal"] ?? 1;
+
+  // Hard+: gather contextual info for smarter investigation
+  const chatBehavior = hard ? analyzeChatBehavior(state) : null;
+  const maxSpoken = chatBehavior ? Math.max(1, ...Object.values(chatBehavior.speakCount || {})) : 1;
+  const votePatterns = hard ? analyzeVotingPatterns(state) : null;
+
+  // Track confirmed reds (dead reds + currently revealed red)
+  const knownReds = new Set();
+  if (state.policeRevealedRed !== null) knownReds.add(state.policeRevealedRed);
+  for (const p of state.players) {
+    if (!p.alive && p.faction === Faction.RED) knownReds.add(p.id);
+  }
+
   for (const t of alivePlayers(state)) {
     if (t.id === actor.id || t.role === Roles.POLICE.id) continue;
+
+    // Skip already-revealed red — no need to investigate again
+    if (state.policeRevealedRed === t.id) continue;
+
+    // Skip already confirmed by police
+    if (state.policeConfirmed?.[t.id]) continue;
+
     const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
     const redProb = factionProb(actor, t.id, Faction.RED) ?? 0;
+    const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0;
+
     const likelyBluePower =
       (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0) > 0.6 ||
       (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0) > 0.6;
     if (likelyBluePower && state.rng() < 0.8) continue;
+
     let score = killerProb * 2 + redProb;
-    score = clamp(score + (state.rng() - 0.5) * 0.1 * diffScale, 0, 3);
+
+    if (hard) {
+      // Information value: investigating uncertain targets (40-70% red) is more
+      // valuable than near-certain ones (>85% red already known to everyone)
+      if (redProb > 0.4 && redProb < 0.7) score += 0.15;
+
+      // Bonus: voted together with known reds — suspicious alliance pattern
+      if (votePatterns) {
+        let redAllyCount = 0;
+        for (const redId of knownReds) {
+          redAllyCount += votePatterns.votedTogether[t.id]?.[redId] || 0;
+        }
+        score += Math.min(redAllyCount * 0.08, 0.2);
+      }
+
+      // Bonus: defended a known red in chat
+      const chatMem = actor.aiMemory?.chatMemory || [];
+      for (const m of chatMem) {
+        if (m.speakerId === t.id && knownReds.has(m.defendedId)) {
+          score += 0.12;
+          break;
+        }
+      }
+
+      // Bonus: silent players may hide red identity
+      if (chatBehavior) {
+        const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+        if (speakRatio < 0.15 && redProb > 0.35) score += 0.1;
+      }
+
+      // Sniper/kidnapper probability — also high-value red targets to expose
+      const sniperProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.SNIPER?.id] ?? 0;
+      const kidnapProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KIDNAPPER?.id] ?? 0;
+      score += sniperProb * 0.8 + kidnapProb * 0.5;
+    }
+
+    score = clamp(score + (state.rng() - 0.5) * 0.1 * diffScale, 0, 4);
     if (score > bestScore) {
       bestScore = score;
       best = t;
@@ -949,13 +1009,13 @@ export function buildAiNightActions(state, opts = {}) {
   // Pre-pick a shared police target to avoid split votes.
   const policeActors = alivePlayers(state).filter((p) => p.role === Roles.POLICE.id && (!p.isHuman || includeHuman));
   const humanPoliceTarget = pickHumanTarget("POLICE_INVESTIGATE");
-  let sharedPoliceTarget =
-    humanPoliceTarget ||
-    pickGroupTarget(
-      state,
-      policeActors,
-      (t) => t.role !== Roles.POLICE.id
-    );
+  // Hard+: use smart targeting for group consensus instead of raw suspicion
+  let sharedPoliceTarget = humanPoliceTarget;
+  if (!sharedPoliceTarget && policeActors.length > 0) {
+    sharedPoliceTarget = hard
+      ? pickPoliceSmartTarget(state, policeActors[0])
+      : pickGroupTarget(state, policeActors, (t) => t.role !== Roles.POLICE.id);
+  }
   if (!sharedPoliceTarget) {
     sharedPoliceTarget = randomChoice(
       alivePlayers(state).filter((t) => t.role !== Roles.POLICE.id),
