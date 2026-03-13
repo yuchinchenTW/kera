@@ -2273,6 +2273,48 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
   }
 
+  // Hard+: red execution opposers — who voted for someone else when a red was executed?
+  const redExecOpposerCount = {};
+  if (hard) {
+    const voteExecutedReds = state.players.filter((p) => !p.alive && p.deathCause === "VOTE_EXECUTION" && p.faction === Faction.RED);
+    for (const dead of voteExecutedReds) {
+      for (const round of (state.history?.votes || [])) {
+        if (!round.order || !round.tally) continue;
+        const theirVotes = round.tally[dead.id] || 0;
+        const maxVotes = Math.max(0, ...Object.values(round.tally));
+        if (theirVotes > 0 && theirVotes === maxVotes) {
+          // This round executed this red — who voted for someone ELSE?
+          for (const entry of round.order) {
+            if (entry.targetId !== dead.id) {
+              redExecOpposerCount[entry.actorId] = (redExecOpposerCount[entry.actorId] || 0) + 1;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Hard+: red defenders — who defended players later revealed as red?
+  const redDefenderIds = new Set();
+  if (hard) {
+    const deadReds = state.players.filter((p) => !p.alive && p.faction === Faction.RED);
+    for (const p of state.players) {
+      if (!p.aiMemory?.chatMemory) continue;
+      for (const m of p.aiMemory.chatMemory) {
+        if (m.defendedId === null) continue;
+        if (deadReds.some((dr) => dr.id === m.defendedId)) {
+          redDefenderIds.add(m.speakerId);
+        }
+      }
+    }
+  }
+
+  // Hard+: red count awareness — how many reds remain vs total expected?
+  const themeRoles = roleListFromTheme(state.theme);
+  const totalExpectedRed = hard ? themeRoles.filter((r) => roleMeta(r).faction === Faction.RED).length : 0;
+  const deadRedCount = hard ? state.players.filter((p) => !p.alive && p.faction === Faction.RED).length : 0;
+  const remainingRedEstimate = totalExpectedRed - deadRedCount;
+
   // Hard+: survival suspicion — vocal players who survive many nights while blues die
   const chatBehaviorVote = hard ? analyzeChatBehavior(state) : null;
   const maxSpokenVote = chatBehaviorVote ? Math.max(1, ...Object.values(chatBehaviorVote.speakCount || {})) : 1;
@@ -2458,12 +2500,30 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
           s -= 0.1;
         }
 
-        // Hard+: survival suspicion — vocal players surviving while blues die at night
+        // Hard+: opposed red execution = suspicious (voted for someone else when red was killed)
+        if (hard && redExecOpposerCount[t.id]) {
+          s += Math.min(redExecOpposerCount[t.id] * 0.1, 0.25);
+        }
+
+        // Hard+: defended dead reds in chat = suspicious (red allies cover each other)
+        if (hard && redDefenderIds.has(t.id)) {
+          s += 0.1;
+        }
+
+        // Hard+: survival suspicion — scale by night deaths and survival length
         if (hard && chatBehaviorVote && (state.dayNumber || 1) >= 3 && blueNightDeathsVote >= 2) {
           const speakRatio = (chatBehaviorVote.speakCount[t.id] || 0) / maxSpokenVote;
+          // Stronger signal when more blues have died at night
+          const deathMultiplier = Math.min(blueNightDeathsVote * 0.04, 0.16);
           if (speakRatio > 0.4) {
-            s += 0.08; // active + surviving = suspicious
+            s += deathMultiplier;
           }
+        }
+
+        // Hard+: red count awareness — conservative when few reds remain
+        if (hard && remainingRedEstimate <= 2 && remainingRedEstimate > 0) {
+          // Pull scores toward 0.5 to avoid friendly fire when few reds left
+          s = 0.5 + (s - 0.5) * 0.85;
         }
 
         // Hard+: late-game sharpening — less jitter, more decisive
