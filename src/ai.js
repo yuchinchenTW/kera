@@ -1413,6 +1413,21 @@ export function buildAiNightActions(state, opts = {}) {
               selfProtectChance = 0.05;
             } else {
               selfProtectChance = clamp(0.1 + selfThreat * 0.7, 0.1, 0.75);
+              // Doctor is irreplaceable — late game self-protect more
+              const injectionsLeftSelf = (Roles.DOCTOR.maxInjections || 6) - state.usage.doctorInjections;
+              if (injectionsLeftSelf >= 2 && getGamePhase(state) === "late") {
+                selfProtectChance = clamp(selfProtectChance + 0.15, 0.1, 0.8);
+              }
+              // If accused by reds or heavily voted, killers may target us
+              const selfAccusedByRed = (state.players || []).some((p) => {
+                if (!p.aiMemory?.chatMemory) return false;
+                return p.aiMemory.chatMemory.some((m) => {
+                  if (m.accusedId !== actor.id) return false;
+                  const sp = getPlayer(state, m.speakerId);
+                  return sp && ((!sp.alive && sp.faction === Faction.RED) || state.policeConfirmed?.[m.speakerId] === true);
+                });
+              });
+              if (selfAccusedByRed) selfProtectChance = clamp(selfProtectChance + 0.1, 0.1, 0.8);
             }
           } else {
             selfProtectChance = 0.3;
@@ -1480,6 +1495,66 @@ export function buildAiNightActions(state, opts = {}) {
             const lastTally = lastRound ? (lastRound.tally || {}) : {};
             const maxVotes = Math.max(1, ...Object.values(lastTally));
 
+            // Mirror killer signals: who correctly voted to execute reds (killer wants them dead)
+            const correctVoterIds = new Set();
+            if (hard) {
+              const voteExecReds = state.players.filter((p) => !p.alive && p.deathCause === "VOTE_EXECUTION" && p.faction === Faction.RED);
+              for (const dead of voteExecReds) {
+                for (const round of (state.history?.votes || [])) {
+                  if (!round.order || !round.tally) continue;
+                  const tv = round.tally[dead.id] || 0;
+                  const mv = Math.max(0, ...Object.values(round.tally));
+                  if (tv > 0 && tv === mv) {
+                    for (const entry of round.order) {
+                      if (entry.targetId === dead.id) correctVoterIds.add(entry.actorId);
+                    }
+                  }
+                }
+              }
+            }
+
+            // Mirror killer signals: who accused reds in chat (killer wants them dead)
+            const redAccuserCount = {};
+            if (hard) {
+              const knownDeadReds = new Set();
+              for (const p of state.players) {
+                if (!p.alive && p.faction === Faction.RED) knownDeadReds.add(p.id);
+              }
+              if (state.policeRevealedRed !== null) knownDeadReds.add(state.policeRevealedRed);
+              for (const p of state.players) {
+                if (!p.aiMemory?.chatMemory) continue;
+                for (const m of p.aiMemory.chatMemory) {
+                  if (m.accusedId !== null && knownDeadReds.has(m.accusedId)) {
+                    redAccuserCount[m.speakerId] = (redAccuserCount[m.speakerId] || 0) + 1;
+                  }
+                }
+              }
+            }
+
+            // Mirror killer signals: arson-marked = blue (killer avoids them)
+            const arsonMarkedIds = new Set();
+            if (hard) {
+              for (const p of state.players) {
+                if (p.alive && p.status.arsonMarked) arsonMarkedIds.add(p.id);
+              }
+            }
+
+            // Accused by known reds = likely blue (killer targets them)
+            const accusedByRedIds = new Set();
+            if (hard) {
+              for (const p of state.players) {
+                if (!p.aiMemory?.chatMemory) continue;
+                for (const m of p.aiMemory.chatMemory) {
+                  if (m.accusedId === null) continue;
+                  const speaker = getPlayer(state, m.speakerId);
+                  if (!speaker) continue;
+                  const isKnownRed = (!speaker.alive && speaker.faction === Faction.RED) ||
+                    (state.policeConfirmed?.[m.speakerId] === true);
+                  if (isKnownRed) accusedByRedIds.add(m.accusedId);
+                }
+              }
+            }
+
             for (const t of shuffled(alive, state.rng)) {
               if (t.id === actor.id) continue;
               const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
@@ -1506,16 +1581,30 @@ export function buildAiNightActions(state, opts = {}) {
                 if (nightDeathActive > nightDeathQuiet + 1 && speakRatio > 0.5) score += 0.1;
                 if (nightDeathQuiet > nightDeathActive + 1 && speakRatio < 0.3) score += 0.1;
 
+                // Mirror: correct voters are killer targets — protect them
+                if (correctVoterIds.has(t.id) && blueProb > 0.4) score += 0.2;
+
+                // Mirror: red accusers are killer targets — protect them
+                if (redAccuserCount[t.id] && blueProb > 0.4) {
+                  score += Math.min(redAccuserCount[t.id] * 0.1, 0.25);
+                }
+
+                // Mirror: arson-marked = confirmed blue, killer avoids but still valuable to protect
+                if (arsonMarkedIds.has(t.id)) score += 0.1;
+
+                // Mirror: accused by reds = likely blue, killer may target them
+                if (accusedByRedIds.has(t.id)) score += 0.15;
+
                 // Penalty: likely red — don't waste injection (and risk overdose)
                 score -= redProb * 0.4;
 
                 // Budget-tight penalty: if injections are running low, need higher blue confidence
                 if (budgetTight && blueProb < 0.5) score -= 0.2;
 
-                // Penalty: high empty injection count — overdose risk
+                // Penalty: overdose risk — emptyInjections=1 means next empty = death
                 const targetPlayer = getPlayer(state, t.id);
                 if (targetPlayer && targetPlayer.emptyInjections >= 1) {
-                  score -= 0.6;
+                  score -= 1.5; // nearly always avoid (emptyKillsAt=2, next empty kills them)
                 }
 
                 // Bonus: received many votes last round → killers see them as threat
@@ -1534,30 +1623,30 @@ export function buildAiNightActions(state, opts = {}) {
                     return p.id !== actor.id && ap > 0.3;
                   });
                   if (agentAlive) {
-                    // Agent tends to protect highest blueProb; if this target is the
-                    // most obvious blue, slight penalty to diversify protection
                     const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
                     if (agentProb > 0.3) {
-                      // This person IS likely the agent — they protect themselves indirectly
                       score -= 0.15;
                     }
                   }
                 }
               }
 
-              // ── Improvement 11: Doctor anti-pattern ──
+              // Doctor anti-pattern: don't repeat same target unless we saved them
               if (hard) {
                 ensureAdvancedMemory(actor);
                 const lastProt = actor.aiMemory.lastProtected;
                 if (lastProt !== null && t.id === lastProt) {
                   if (savedLastNight.has(t.id)) {
-                    score += 0.3;
+                    // Saved successfully! But killer has 80% chance to switch target
+                    // Only re-protect with moderate bonus (not guaranteed re-target)
+                    score += 0.15;
                   } else {
-                    if (state.rng() >= 0.1) {
-                      score -= 0.8;
-                    }
+                    // Wasn't attacked — killer likely targets someone else, switch protection
+                    score -= 0.8;
                   }
                 }
+                // Bonus: someone ELSE was saved last night — killer will switch away from them
+                // so protect the next likely target instead (already handled by base scoring)
               }
               if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
                 bestScore = score;
