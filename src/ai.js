@@ -652,11 +652,42 @@ function pickPoliceSmartTarget(state, actor) {
 
   // Hard+: survival analysis — count how many nights each player has survived
   const dayNum = state.dayNumber || 1;
-  // Night kill victims are almost always blue. Survivors who are active
-  // but never targeted become more suspicious over time.
   const blueNightDeaths = state.players.filter(
     (p) => !p.alive && p.deathCause && p.deathCause !== "VOTE_EXECUTION" && p.faction === Faction.BLUE
   ).length;
+
+  // Hard+: identify saved players (confirmed blue by action)
+  const savedIds = new Set();
+  if (hard) {
+    for (const entry of (state.lastNightSummary || [])) {
+      if (typeof entry === "string" && entry.includes("saved")) {
+        for (const p of state.players) {
+          if (p.alive && entry.includes(p.name)) savedIds.add(p.id);
+        }
+      }
+    }
+  }
+
+  // Hard+: count remaining reds for urgency scaling
+  const rolePriors = hard ? rolePriorCounts(state.theme || "GOOD_VS_EVIL") : null;
+  const totalRedSlots = rolePriors
+    ? Object.entries(rolePriors).reduce((sum, [r, c]) => sum + (roleMeta(r).faction === Faction.RED ? c : 0), 0)
+    : 6;
+  const deadReds = state.players.filter((p) => !p.alive && p.faction === Faction.RED).length;
+  const redsRemaining = Math.max(0, totalRedSlots - deadReds);
+  // Urgency multiplier: finding the last red is critical
+  const urgency = hard && redsRemaining <= 2 ? 1.3 : 1.0;
+
+  // Hard+: accusation reversal — targets accused by known reds may be blue
+  const accusedByRed = new Set();
+  if (hard) {
+    const chatMem = actor.aiMemory?.chatMemory || [];
+    for (const m of chatMem) {
+      if (knownReds.has(m.speakerId) && m.accusedId !== undefined) {
+        accusedByRed.add(m.accusedId);
+      }
+    }
+  }
 
   for (const t of alivePlayers(state)) {
     if (t.id === actor.id || t.role === Roles.POLICE.id) continue;
@@ -735,9 +766,20 @@ function pickPoliceSmartTarget(state, actor) {
         }
         if (maxAllyScore >= 2) score += 0.15; // strong ally pattern
       }
+
+      // Saved target avoidance: doctor-saved players are confirmed blue
+      if (savedIds.has(t.id)) score -= 0.3;
+
+      // Accusation reversal: targets accused by known reds are likely blue
+      if (accusedByRed.has(t.id)) score -= 0.1;
+
+      // Urgency: when few reds remain, amplify scores to prioritize high-value targets
+      score *= urgency;
     }
 
-    score = clamp(score + (state.rng() - 0.5) * 0.1 * diffScale, 0, 4);
+    // Day 1: more jitter since we have less info
+    const jitter = dayNum <= 1 ? 0.18 : 0.1;
+    score = clamp(score + (state.rng() - 0.5) * jitter * diffScale, 0, 4);
     if (score > bestScore) {
       bestScore = score;
       best = t;
