@@ -773,6 +773,53 @@ function pickKillerSmartTarget(state, actor) {
   return best;
 }
 
+function pickSniperSmartTarget(state, actor) {
+  const chatBehavior = analyzeChatBehavior(state);
+  const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount || {}));
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const t of shuffled(alivePlayers(state), state.rng)) {
+    // Never shoot fellow red teammates
+    const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+    if (t.id === actor.id) continue;
+
+    // Base: prefer blue targets (opposite of suspicion — sniper wants to kill blue)
+    const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+    let score = blueProb;
+
+    // Bonus: police are the biggest threat to red team
+    const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
+    score += policeProb * 0.6;
+
+    // Bonus: active speakers influence votes against red — prioritize silencing them
+    const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+    score += speakRatio * 0.25;
+
+    // Penalty: likely protected by doctor/agent — don't waste precious bullets
+    const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
+    const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
+    score -= (doctorProb * 0.4 + agentProb * 0.3) * 0.5;
+
+    // Penalty: high red probability — don't shoot potential allies
+    score -= redProb * 0.4;
+
+    // Penalty: target was saved last night — likely still protected
+    const lastSummary = state.lastNightSummary || [];
+    for (const entry of lastSummary) {
+      if (typeof entry === "string" && entry.includes(t.name) && entry.includes("saved")) {
+        score -= 0.7;
+      }
+    }
+
+    if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+      bestScore = score;
+      best = t;
+    }
+  }
+  return best;
+}
+
 // ─── Night Actions ─────────────────────────────────────────────────────────
 
 export function buildAiNightActions(state, opts = {}) {
@@ -995,7 +1042,9 @@ export function buildAiNightActions(state, opts = {}) {
             if (sniperPhase === "late") activateChance = clamp(activateChance + 0.15, 0.2, 0.85);
           }
           if (state.rng() < activateChance) {
-            const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+            const target = hard
+              ? pickSniperSmartTarget(state, actor)
+              : pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
             if (target) actions.push({ actorId: actor.id, type: "SNIPER_SHOT", targetId: target.id });
           }
         }
