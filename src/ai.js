@@ -4107,6 +4107,12 @@ const NIGHT_FACTION_CHAT = {
       (s, t) => `${s}: I'll handle ${t} tonight.||${s}：今晚我來處理 ${t}。`,
       (s, t) => `${s}: Let's take out ${t} before they expose us.||${s}：趁 ${t} 揭發我們之前先下手。`,
     ],
+    // First night only — no references to past behavior
+    planKillFirstNight: [
+      (s, t) => `${s}: Let's start with ${t}, take them out first.||${s}：先從 ${t} 下手吧。`,
+      (s, t) => `${s}: I'll go for ${t} tonight, see how it goes.||${s}：今晚先殺 ${t}，看看情況。`,
+      (s, t) => `${s}: ${t} might be police, let's hit them first.||${s}：${t} 可能是警察，先殺他。`,
+    ],
     avoidWarn: [
       (s, t) => `${s}: Don't touch ${t}, doctor might be guarding them.||${s}：別動 ${t}，醫生可能在守他。`,
       (s, t) => `${s}: ${t} survived last time, someone is protecting them.||${s}：${t} 上次沒死，有人在保他。`,
@@ -4133,6 +4139,12 @@ const NIGHT_FACTION_CHAT = {
       (s, t) => `${s}: Let me verify ${t}, their voting is off.||${s}：讓我驗一下 ${t}，他的投票很奇怪。`,
       (s, t) => `${s}: Focus on ${t} tonight, could be a killer.||${s}：今晚查 ${t}，可能是殺手。`,
     ],
+    // First night only — no references to past behavior
+    planInvestigateFirstNight: [
+      (s, t) => `${s}: Let's check ${t} first, I have a hunch.||${s}：先查 ${t} 吧，我有預感。`,
+      (s, t) => `${s}: I'll investigate ${t} tonight to start.||${s}：今晚先查 ${t}。`,
+      (s, t) => `${s}: ${t} could be anyone, let me verify them.||${s}：${t} 什麼身分都有可能，讓我查查。`,
+    ],
     shareResultRed: [
       (s, t) => `${s}: Last check confirmed ${t} is RED — be careful.||${s}：上次查驗確認 ${t} 是紅方，小心。`,
       (s, t) => `${s}: ${t} is confirmed red, we need to deal with them.||${s}：${t} 確認是紅方，必須處理。`,
@@ -4144,6 +4156,10 @@ const NIGHT_FACTION_CHAT = {
     protectAdvice: [
       (s, t) => `${s}: We should keep an eye on ${t}, they might be targeted.||${s}：注意 ${t}，他可能被殺手盯上了。`,
       (s, t) => `${s}: Hope the doctor protects ${t} tonight.||${s}：希望醫生今晚保 ${t}。`,
+    ],
+    protectAdviceFirstNight: [
+      (s, t) => `${s}: Keep ${t} safe, they could be important.||${s}：保護好 ${t}，他可能很重要。`,
+      (s, t) => `${s}: Let's hope ${t} survives the first night.||${s}：希望 ${t} 能撐過第一晚。`,
     ],
     protectAdviceGeneral: [
       (s) => `${s}: Stay safe tonight everyone, killers will be aggressive.||${s}：今晚大家小心，殺手會很積極。`,
@@ -4220,11 +4236,15 @@ export function generateNightFactionChat(state) {
       }
       const target = bestTarget || randomChoice(nonKillers, state.rng);
 
+      const isFirstNight = (state.dayNumber || 1) === 1;
       if (savedRecently && target && roll < 0.3) {
         const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.avoidWarn);
         line = tmpl(speaker.name, target.name);
       } else if (roll < 0.5 && target) {
-        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.planKill);
+        const killTemplates = isFirstNight
+          ? NIGHT_FACTION_CHAT.killer.planKillFirstNight
+          : NIGHT_FACTION_CHAT.killer.planKill;
+        const tmpl = pickTemplate(state.rng, killTemplates);
         line = tmpl(speaker.name, target.name);
       } else if (roll < 0.75 && target) {
         const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.tomorrowPlan);
@@ -4248,7 +4268,10 @@ export function generateNightFactionChat(state) {
         const r2 = state.rng();
         let reply = null;
         if (r2 < 0.4 && t2) {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.planKill);
+          const killT = isFirstNight
+            ? NIGHT_FACTION_CHAT.killer.planKillFirstNight
+            : NIGHT_FACTION_CHAT.killer.planKill;
+          const tmpl = pickTemplate(state.rng, killT);
           reply = tmpl(responder.name, t2.name);
         } else if (r2 < 0.7 && t2) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.tomorrowPlan);
@@ -4286,6 +4309,8 @@ export function generateNightFactionChat(state) {
         line = tmpl(speaker.name, revealedRed.name);
       }
 
+      const isFirstNight = (state.dayNumber || 1) === 1;
+
       if (!line) {
         // Pick most suspicious to investigate
         let suspect = null;
@@ -4297,13 +4322,19 @@ export function generateNightFactionChat(state) {
         const target = suspect || randomChoice(nonPolice, state.rng);
 
         if (roll < 0.4 && target) {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.planInvestigate);
+          const investTemplates = isFirstNight
+            ? NIGHT_FACTION_CHAT.police.planInvestigateFirstNight
+            : NIGHT_FACTION_CHAT.police.planInvestigate;
+          const tmpl = pickTemplate(state.rng, investTemplates);
           line = tmpl(speaker.name, target.name);
         } else if (roll < 0.65 && target) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.tomorrowPlan);
           line = tmpl(speaker.name, target.name);
         } else if (roll < 0.85 && target) {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdvice);
+          const protTemplates = isFirstNight
+            ? NIGHT_FACTION_CHAT.police.protectAdviceFirstNight
+            : NIGHT_FACTION_CHAT.police.protectAdvice;
+          const tmpl = pickTemplate(state.rng, protTemplates);
           line = tmpl(speaker.name, target.name);
         } else {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdviceGeneral);
@@ -4325,10 +4356,16 @@ export function generateNightFactionChat(state) {
         let reply = null;
         const r2 = state.rng();
         if (r2 < 0.5 && target) {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.planInvestigate);
+          const investT = isFirstNight
+            ? NIGHT_FACTION_CHAT.police.planInvestigateFirstNight
+            : NIGHT_FACTION_CHAT.police.planInvestigate;
+          const tmpl = pickTemplate(state.rng, investT);
           reply = tmpl(responder.name, target.name);
         } else if (target) {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdvice);
+          const protT = isFirstNight
+            ? NIGHT_FACTION_CHAT.police.protectAdviceFirstNight
+            : NIGHT_FACTION_CHAT.police.protectAdvice;
+          const tmpl = pickTemplate(state.rng, protT);
           reply = tmpl(responder.name, target.name);
         } else {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdviceGeneral);
