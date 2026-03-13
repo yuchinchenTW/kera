@@ -652,6 +652,8 @@ export class GameEngine {
         );
         if (apparentFaction === Faction.RED && target.alive) {
           this.state.policeRevealedRed = target.id;
+          this.state.policeConfirmed = this.state.policeConfirmed || {};
+          this.state.policeConfirmed[target.id] = true;
         }
         // Kidnapper ransom kill: if police investigate a kidnapper, hostage dies (one execution per kidnapper).
         const hostageId = kidnapMap[target.id];
@@ -1109,9 +1111,17 @@ export class GameEngine {
     if (!trimmed) return false;
     player.lastWords = trimmed;
     // Bilingual last words use "EN||ZH" format — wrap entire thing for client translateLine
-    addPublicLog(this.state, trimmed.includes("||")
+    const logEntry = trimmed.includes("||")
       ? `Last words: "${trimmed.split("||")[0]}"||遺言：「${trimmed.split("||")[1]}」`
-      : `Last words: "${trimmed}"`);
+      : `Last words: "${trimmed}"`;
+    addPublicLog(this.state, logEntry);
+    // Also add to dayChat so AI chat memory can parse last words for accusations/defenses
+    if (!this.state.dayChat) this.state.dayChat = [];
+    // Format as speaker line so AI keyword detection can identify who is mentioned
+    const chatLine = trimmed.includes("||")
+      ? `${player.name}: ${trimmed.split("||")[0]}||${player.name}：${trimmed.split("||")[1]}`
+      : `${player.name}: ${trimmed}`;
+    this.state.dayChat.push(chatLine);
     return true;
   }
 }

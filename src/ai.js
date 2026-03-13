@@ -331,7 +331,7 @@ function ensureBeliefs(state) {
                 if (lowerEn.includes("suspicious") || lowerEn.includes("killer") || lowerEn.includes("vote") || lowerEn.includes("doesn't add up") || lowerEn.includes("acting weird") || lowerEn.includes("don't trust")) {
                   entry.accusedId = other.id;
                 }
-                if (lowerEn.includes("on our side") || lowerEn.includes("seems fine") || lowerEn.includes("leave") || lowerEn.includes("helpful") || lowerEn.includes("clean") || lowerEn.includes("innocent") || lowerEn.includes("confirmed blue") || lowerEn.includes("protect") || lowerEn.includes("don't vote")) {
+                if (lowerEn.includes("on our side") || lowerEn.includes("seems fine") || lowerEn.includes("leave") || lowerEn.includes("helpful") || lowerEn.includes("clean") || lowerEn.includes("innocent") || lowerEn.includes("confirmed blue") || lowerEn.includes("protect") || lowerEn.includes("don't vote") || lowerEn.includes("wrong about") || lowerEn.includes("ganging up") || lowerEn.includes("no proof")) {
                   entry.defendedId = other.id;
                 }
               }
@@ -3288,8 +3288,8 @@ const CHAT_TEMPLATES = {
   // Improvement 4: Emotion-specific chat
   emotionChat: {
     angry: [
-      (s) => `${s}: Why did you all vote for me?! I'm NOT the killer!||${s}：為什麼都投我？！我不是殺手！`,
-      (s) => `${s}: You're wasting time on me while the real killer is still out there!||${s}：你們浪費時間在我身上，真正的殺手還在外面！`,
+      (s, t) => `${s}: Why did you all vote for me?! I'm NOT the killer!||${s}：為什麼都投我？！我不是殺手！`,
+      (s, t) => `${s}: You're wasting time on me while the real killer is still out there!||${s}：你們浪費時間在我身上，真正的殺手還在外面！`,
       (s, t) => `${s}: ${t}, you voted for me — explain yourself!||${s}：${t}，你投了我，給個解釋！`,
     ],
     defensive: [
@@ -3301,8 +3301,8 @@ const CHAT_TEMPLATES = {
       (s) => `${s}: Someone protected me... I'll repay the favor by finding the killer.||${s}：有人保護了我⋯我會找出殺手來報答的。`,
     ],
     anxious: [
-      (s) => `${s}: I have a bad feeling about tonight...||${s}：我對今晚有不好的預感⋯`,
-      (s) => `${s}: I think they're coming for me next.||${s}：我覺得他們下一個就是要殺我。`,
+      (s, t) => `${s}: I have a bad feeling about tonight...||${s}：我對今晚有不好的預感⋯`,
+      (s, t) => `${s}: I think they're coming for me next.||${s}：我覺得他們下一個就是要殺我。`,
       (s, t) => `${s}: If I die tonight, look into ${t}.||${s}：如果我今晚死了，去查 ${t}。`,
     ],
   },
@@ -3310,11 +3310,11 @@ const CHAT_TEMPLATES = {
   replyChat: {
     agree: [
       (s, t, target) => `${s}: I agree with ${t}, ${target} is suspicious.||${s}：我同意 ${t} 的看法，${target} 很可疑。`,
-      (s, t) => `${s}: ${t} has a point, we should listen.||${s}：${t} 說得有道理，大家應該聽。`,
+      (s, t, target) => `${s}: ${t} has a point about ${target}, we should listen.||${s}：${t} 說的 ${target} 有道理，大家應該聽。`,
     ],
     disagree: [
       (s, t, target) => `${s}: ${t}, I disagree — ${target} seems fine to me.||${s}：${t}，我不同意，${target} 看起來沒問題。`,
-      (s, t) => `${s}: ${t}, that doesn't make sense, think again.||${s}：${t}，那說不通，再想想。`,
+      (s, t, target) => `${s}: ${t}, I don't think ${target} is the problem, think again.||${s}：${t}，我不覺得 ${target} 有問題，再想想。`,
     ],
     question: [
       (s, t) => `${s}: ${t}, why do you think that?||${s}：${t}，你為什麼這麼想？`,
@@ -3336,6 +3336,8 @@ const CHAT_TEMPLATES = {
     (s, t) => `${s}: ${t} has to go — look at who they've been defending.||${s}：${t} 必須出去，看看他一直在幫誰說話。`,
     (s, t) => `${s}: My vote goes to ${t}, I've been watching them.||${s}：我投 ${t}，我一直在觀察他。`,
     (s, t) => `${s}: I'm voting ${t} based on last night's results.||${s}：根據昨晚的結果，我投 ${t}。`,
+  ],
+  voteAbstain: [
     (s) => `${s}: I'm not confident in anyone... abstaining for now.||${s}：我對誰都沒把握⋯先棄票。`,
   ],
   // Improvement 13: Fake police claim
@@ -3347,7 +3349,7 @@ const CHAT_TEMPLATES = {
   trustBuild: [
     (s, t) => `${s}: I've been thinking about it — ${t} voted against the killer last round.||${s}：我想了一下，${t} 上回合投了殺手的票。`,
     (s, t) => `${s}: ${t} can't be the killer, their behavior is too consistent.||${s}：${t} 不可能是殺手，他行為太一致了。`,
-    (s) => `${s}: I just want to help the team find the truth.||${s}：我只是想幫大家找出真相。`,
+    (s, t) => `${s}: I just want to help the team find the truth.||${s}：我只是想幫大家找出真相。`,
     (s, t) => `${s}: Let me share my analysis — ${t} has been helpful, probably blue.||${s}：讓我分享我的分析，${t} 一直在幫忙，應該是藍方。`,
   ],
   // Advanced: Role claiming system
@@ -3362,10 +3364,10 @@ const CHAT_TEMPLATES = {
     ],
     challenge: [
       (s, t, role, roleZh) => `${s}: ${t} can't be the ${role} — I'm the ${role}!||${s}：${t} 不可能是${roleZh}，我才是${roleZh}！`,
-      (s, t) => `${s}: I don't believe ${t}'s claim, it's suspicious.||${s}：我不相信 ${t} 的宣告，很可疑。`,
+      (s, t, role, roleZh) => `${s}: I don't believe ${t}'s claim, it's suspicious.||${s}：我不相信 ${t} 的宣告，很可疑。`,
     ],
     support: [
-      (s, t) => `${s}: I believe ${t}'s claim, their behavior matches.||${s}：我相信 ${t} 的宣告，行為吻合。`,
+      (s, t, role, roleZh) => `${s}: I believe ${t}'s claim, their behavior matches.||${s}：我相信 ${t} 的宣告，行為吻合。`,
       (s, t, role, roleZh) => `${s}: ${t} is probably telling the truth about being ${role}.||${s}：${t} 說自己是${roleZh}應該是真的。`,
     ],
   },
