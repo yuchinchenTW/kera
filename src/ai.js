@@ -1919,6 +1919,26 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   // Hard+: Killers pre-coordinate to scatter votes (avoid all voting the same target)
   const killerVoteTargets = new Set();
 
+  // Hard+: identify saved players (confirmed blue by doctor action)
+  const voteSavedIds = new Set();
+  if (hard) {
+    for (const entry of (state.lastNightSummary || [])) {
+      if (typeof entry === "string" && entry.includes("saved")) {
+        for (const p of state.players) {
+          if (p.alive && entry.includes(p.name)) voteSavedIds.add(p.id);
+        }
+      }
+    }
+  }
+
+  // Hard+: collect police-confirmed blues (investigated and found blue)
+  const confirmedBlueIds = new Set();
+  if (hard && state.policeConfirmed) {
+    for (const [id, result] of Object.entries(state.policeConfirmed)) {
+      if (result === "BLUE" || result === true) confirmedBlueIds.add(Number(id));
+    }
+  }
+
   aiVoters.forEach((actor, idx) => {
     // force at least one vote by making the last AI always vote
     const abstainChance = idx === aiVoters.length - 1 ? 0 : 0.05;
@@ -2037,7 +2057,9 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
 
     let target = null;
-    if (roll < chaosVoteChance) {
+    // Hard+: blue civilians vote more deliberately (10% random vs 20% for others)
+    const effectiveChaos = (hard && actor.faction === Faction.BLUE) ? chaosVoteChance * 0.5 : chaosVoteChance;
+    if (roll < effectiveChaos) {
       target = randomChoice(candidates, state.rng);
     } else {
       let best = null;
@@ -2063,6 +2085,17 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
             s -= 0.05 * withMe;
           }
         }
+
+        // Hard+: saved-target penalty — doctor-saved players are confirmed blue
+        if (hard && voteSavedIds.has(t.id)) {
+          s -= 0.25;
+        }
+
+        // Hard+: police-confirmed blue avoidance
+        if (hard && confirmedBlueIds.has(t.id)) {
+          s -= 0.3;
+        }
+
         // Advanced: Personality affects vote confidence
         if (hard) {
           ensureAdvancedMemory(actor);
@@ -2101,21 +2134,24 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       if (cnt > consensusCount) { consensusCount = cnt; consensusTarget = Number(tid); }
     }
     // For each voter, consider switching to consensus if they agree
+    // Don't bandwagon onto confirmed-blue or saved targets
+    const consensusIsSafe = voteSavedIds.has(consensusTarget) || confirmedBlueIds.has(consensusTarget);
     for (let i = 0; i < votes.length; i++) {
       const v = votes[i];
       if (v.targetId === consensusTarget) continue; // already voting consensus
       const actor = getPlayer(state, v.actorId);
       if (!actor || actor.isHuman) continue;
       if (actor.faction === Faction.RED) continue; // red AI has its own strategy
-      if (state.rng() >= 0.4) continue; // 40% chance to bandwagon
+      if (consensusIsSafe) continue; // don't bandwagon onto known blues
+      if (state.rng() >= 0.45) continue; // 45% chance to bandwagon (up from 40%)
 
-      // Only switch if they somewhat agree with the consensus
+      // Only switch if they have real suspicion on the consensus target
       ensureAdvancedMemory(actor);
       const consensusSusp = actor.aiMemory?.suspicion?.[consensusTarget] ?? 0.5;
       const currentSusp = actor.aiMemory?.suspicion?.[v.targetId] ?? 0.5;
-      // Switch if consensus target is at least somewhat suspicious and their current target has fewer votes
+      // Switch if consensus target is genuinely suspicious (≥0.4) and their current target is isolated
       const currentVotes = tally[v.targetId] || 0;
-      if (consensusSusp > 0.35 && currentVotes <= 1 && consensusCount >= 2) {
+      if (consensusSusp >= 0.4 && currentVotes <= 1 && consensusCount >= 2) {
         tally[v.targetId] = (tally[v.targetId] || 0) - 1;
         v.targetId = consensusTarget;
         tally[consensusTarget] = (tally[consensusTarget] || 0) + 1;
