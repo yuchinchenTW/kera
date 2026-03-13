@@ -1931,13 +1931,46 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
   }
 
-  // Hard+: collect police-confirmed blues (investigated and found blue)
-  const confirmedBlueIds = new Set();
+  // Hard+: collect police-confirmed reds (policeConfirmed stores only reds)
+  const confirmedRedIds = new Set();
   if (hard && state.policeConfirmed) {
     for (const [id, result] of Object.entries(state.policeConfirmed)) {
-      if (result === "BLUE" || result === true) confirmedBlueIds.add(Number(id));
+      if (result === true) confirmedRedIds.add(Number(id));
     }
   }
+
+  // Hard+: identify players who correctly voted to kill reds (good judgement = likely blue)
+  const correctVoterIds = new Set();
+  // Hard+: identify players who voted to kill blues (bad judgement or red misdirection)
+  const wrongVoterIds = new Set();
+  if (hard) {
+    // Find vote-executed players and who voted for them
+    const voteExecuted = state.players.filter((p) => !p.alive && p.deathCause === "VOTE_EXECUTION");
+    for (const dead of voteExecuted) {
+      // Find rounds where this player got the most votes (likely the execution round)
+      for (const round of (state.history?.votes || [])) {
+        if (!round.order || !round.tally) continue;
+        // Check if this player had the most votes in this round
+        const theirVotes = round.tally[dead.id] || 0;
+        const maxVotes = Math.max(0, ...Object.values(round.tally));
+        if (theirVotes > 0 && theirVotes === maxVotes) {
+          for (const entry of round.order) {
+            if (entry.targetId === dead.id) {
+              if (dead.faction === Faction.RED) correctVoterIds.add(entry.actorId);
+              else if (dead.faction === Faction.BLUE) wrongVoterIds.add(entry.actorId);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Hard+: survival suspicion — vocal players who survive many nights while blues die
+  const chatBehaviorVote = hard ? analyzeChatBehavior(state) : null;
+  const maxSpokenVote = chatBehaviorVote ? Math.max(1, ...Object.values(chatBehaviorVote.speakCount || {})) : 1;
+  const blueNightDeathsVote = hard ? state.players.filter(
+    (p) => !p.alive && p.deathCause && p.deathCause !== "VOTE_EXECUTION" && p.faction === Faction.BLUE
+  ).length : 0;
 
   aiVoters.forEach((actor, idx) => {
     // force at least one vote by making the last AI always vote
@@ -2091,9 +2124,27 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
           s -= 0.25;
         }
 
-        // Hard+: police-confirmed blue avoidance
-        if (hard && confirmedBlueIds.has(t.id)) {
-          s -= 0.3;
+        // Hard+: correct voter reward — players who voted to execute reds have good judgement
+        if (hard && correctVoterIds.has(t.id)) {
+          s -= 0.12; // less suspicious (likely blue)
+        }
+        // Hard+: wrong voter penalty — players who voted to execute blues are suspicious
+        if (hard && wrongVoterIds.has(t.id)) {
+          s += 0.08;
+        }
+
+        // Hard+: survival suspicion — vocal players surviving while blues die at night
+        if (hard && chatBehaviorVote && (state.dayNumber || 1) >= 3 && blueNightDeathsVote >= 2) {
+          const speakRatio = (chatBehaviorVote.speakCount[t.id] || 0) / maxSpokenVote;
+          if (speakRatio > 0.4) {
+            s += 0.08; // active + surviving = suspicious
+          }
+        }
+
+        // Hard+: late-game sharpening — less jitter, more decisive
+        if (hard && alivePlayers(state).length <= 6) {
+          // Amplify the score difference from 0.5 baseline
+          s = 0.5 + (s - 0.5) * 1.3;
         }
 
         // Advanced: Personality affects vote confidence
@@ -2135,7 +2186,7 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
     // For each voter, consider switching to consensus if they agree
     // Don't bandwagon onto confirmed-blue or saved targets
-    const consensusIsSafe = voteSavedIds.has(consensusTarget) || confirmedBlueIds.has(consensusTarget);
+    const consensusIsSafe = voteSavedIds.has(consensusTarget) || correctVoterIds.has(consensusTarget);
     for (let i = 0; i < votes.length; i++) {
       const v = votes[i];
       if (v.targetId === consensusTarget) continue; // already voting consensus
