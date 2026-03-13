@@ -773,6 +773,46 @@ function pickKillerSmartTarget(state, actor) {
   return best;
 }
 
+function pickCowboySmartTarget(state, actor) {
+  const chatBehavior = analyzeChatBehavior(state);
+  const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount || {}));
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const t of shuffled(alivePlayers(state), state.rng)) {
+    if (t.id === actor.id) continue;
+
+    // Base: prefer high-suspicion (red) targets
+    const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+    let score = redProb;
+
+    // Bonus: killer is the highest-value target for blue team
+    const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
+    score += killerProb * 0.5;
+
+    // Bonus: sniper is also high-value (kills blue every night)
+    const sniperProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.SNIPER?.id] ?? 0;
+    score += sniperProb * 0.3;
+
+    // Penalty: high blue probability — avoid friendly fire (backfire kills random too)
+    const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+    score -= blueProb * 0.3;
+
+    // Bonus: quiet players may be hiding red identity
+    const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+    if (speakRatio < 0.2 && redProb > 0.4) score += 0.1;
+
+    // Bonus: police revealed this player as red — confirmed target
+    if (state.policeRevealedRed === t.id) score += 0.4;
+
+    if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+      bestScore = score;
+      best = t;
+    }
+  }
+  return best;
+}
+
 function pickSniperSmartTarget(state, actor) {
   const chatBehavior = analyzeChatBehavior(state);
   const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount || {}));
@@ -1143,19 +1183,23 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.COWBOY.id: {
-        // Hard+: only shoot when confidence is high enough (avoid wasting on uncertainty)
+        // Hard+: smart targeting + confidence threshold + late-game caution
         if (hard) {
-          const bestTarget = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          const bestTarget = pickCowboySmartTarget(state, actor);
           if (bestTarget) {
             const confidence = actor.aiMemory?.suspicion?.[bestTarget.id] ?? 0.5;
             // Day 1: need 70% confidence, Day 3+: 50% is enough
             let threshold = clamp(0.75 - (state.dayNumber || 1) * 0.08, 0.4, 0.75);
-            // Advanced: Late game = lower threshold
+            // Late game = lower threshold (more info available)
             if (getGamePhase(state) === "late") threshold = clamp(threshold - 0.1, 0.3, 0.75);
+            // Late game with few players: raise threshold (backfire is devastating)
+            const aliveCount = alivePlayers(state).length;
+            if (aliveCount <= 6) threshold = clamp(threshold + 0.1, 0.3, 0.85);
+            // Police confirmed red: override threshold
+            if (state.policeRevealedRed === bestTarget.id) threshold = 0.2;
             if (confidence >= threshold) {
               actions.push({ actorId: actor.id, type: "COWBOY_GAMBLE", targetId: bestTarget.id });
             }
-            // else: skip — hold the shot for a better opportunity
           }
         } else {
           const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
