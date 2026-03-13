@@ -960,8 +960,65 @@ function pickTerroristSmartTarget(state, actor) {
 function pickKillerSmartTarget(state, actor) {
   const chatBehavior = analyzeChatBehavior(state);
   const maxSpoken = Math.max(1, ...Object.values(chatBehavior.speakCount || {}));
+  const votePatterns = analyzeVotingPatterns(state);
   let best = null;
   let bestScore = -Infinity;
+
+  // Pre-compute: who correctly voted to execute reds (dangerous to red team)
+  const correctVoters = new Set();
+  const voteExecutedReds = state.players.filter((p) => !p.alive && p.deathCause === "VOTE_EXECUTION" && p.faction === Faction.RED);
+  for (const dead of voteExecutedReds) {
+    for (const round of (state.history?.votes || [])) {
+      if (!round.order || !round.tally) continue;
+      const theirVotes = round.tally[dead.id] || 0;
+      const maxVotes = Math.max(0, ...Object.values(round.tally));
+      if (theirVotes > 0 && theirVotes === maxVotes) {
+        for (const entry of round.order) {
+          if (entry.targetId === dead.id) correctVoters.add(entry.actorId);
+        }
+      }
+    }
+  }
+
+  // Pre-compute: who accused reds in chat (threat to red team)
+  const redAccuserCount = {};
+  const knownDeadReds = new Set();
+  for (const p of state.players) {
+    if (!p.alive && p.faction === Faction.RED) knownDeadReds.add(p.id);
+  }
+  if (state.policeRevealedRed !== null) knownDeadReds.add(state.policeRevealedRed);
+  for (const p of state.players) {
+    if (!p.aiMemory?.chatMemory) continue;
+    for (const m of p.aiMemory.chatMemory) {
+      if (m.accusedId !== null && knownDeadReds.has(m.accusedId)) {
+        redAccuserCount[m.speakerId] = (redAccuserCount[m.speakerId] || 0) + 1;
+      }
+    }
+  }
+
+  // Pre-compute: arson-marked targets (will die on ignition — don't waste kill)
+  const arsonMarkedIds = new Set();
+  for (const p of state.players) {
+    if (p.alive && p.status.arsonMarked) arsonMarkedIds.add(p.id);
+  }
+
+  // Pre-compute: saved last night
+  const savedLastNight = new Set();
+  for (const entry of (state.lastNightSummary || [])) {
+    if (typeof entry === "string" && entry.includes("saved")) {
+      for (const p of state.players) {
+        if (p.alive && entry.includes(p.name)) savedLastNight.add(p.id);
+      }
+    }
+  }
+
+  // Pre-compute: heavily voted targets (might be voted out — lower priority for night kill)
+  const heavilyVoted = new Set();
+  if (votePatterns && votePatterns.rounds > 0) {
+    for (const [tid, count] of Object.entries(votePatterns.beenVotedFor)) {
+      if (count / votePatterns.rounds >= 2.5) heavilyVoted.add(Number(tid));
+    }
+  }
 
   for (const t of shuffled(alivePlayers(state), state.rng)) {
     if (t.role === Roles.KILLER.id) continue;
@@ -982,32 +1039,37 @@ function pickKillerSmartTarget(state, actor) {
     const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
     score += speakRatio * 0.3;
 
+    // Bonus: correct voters are dangerous — they identify reds successfully
+    if (correctVoters.has(t.id)) score += 0.25;
+
+    // Bonus: red accusers are threats — they call out reds in chat
+    if (redAccuserCount[t.id]) score += Math.min(redAccuserCount[t.id] * 0.12, 0.3);
+
+    // Penalty: arson-marked targets will die on ignition — wasted kill
+    if (arsonMarkedIds.has(t.id) && arsonMarkedIds.size >= 2) score -= 0.4;
+
+    // Penalty: heavily voted targets may be voted out — save the kill
+    if (heavilyVoted.has(t.id)) score -= 0.2;
+
     // Penalty: likely protected by doctor/agent — avoid wasting a kill
     const protectionLikelihood = doctorProb * 0.4 + agentProb * 0.3;
     score -= protectionLikelihood * 0.6;
 
-    // Penalty: same person was killed last night and survived → likely protected
-    // Improvement 12: much stronger penalty — 80% skip saved targets
-    const lastSummary = state.lastNightSummary || [];
-    let wasSavedLastNight = false;
-    for (const entry of lastSummary) {
-      if (typeof entry === "string" && entry.includes(t.name) && entry.includes("saved")) {
-        wasSavedLastNight = true;
-        score -= 0.8; // stronger penalty (was 0.4)
-      }
+    // Penalty: saved last night — likely still protected
+    if (savedLastNight.has(t.id)) {
+      score -= 0.8;
     }
-    // Improvement 12: If same target as last night and was saved, near-skip
-    if (state.killerLastTarget !== undefined && t.id === state.killerLastTarget && wasSavedLastNight) {
-      if (state.rng() < 0.8) continue; // 80% chance to skip entirely
+    // Skip saved+same target 80%
+    if (state.killerLastTarget !== undefined && t.id === state.killerLastTarget && savedLastNight.has(t.id)) {
+      if (state.rng() < 0.8) continue;
     }
-    // Improvement 12: If last target died, switch target TYPE (if killed active speaker, target quiet one)
+    // Target type rotation after successful kill
     if (state.killerLastTarget !== undefined && t.id !== state.killerLastTarget) {
       const lastTargetPlayer = getPlayer(state, state.killerLastTarget);
       if (lastTargetPlayer && !lastTargetPlayer.alive) {
-        // Last target died — switch to different activity level
         const lastSpeakRatio = (chatBehavior.speakCount[state.killerLastTarget] || 0) / maxSpoken;
-        if (lastSpeakRatio > 0.5 && speakRatio < 0.3) score += 0.15; // killed talker, now target quiet
-        if (lastSpeakRatio < 0.3 && speakRatio > 0.5) score += 0.15; // killed quiet, now target talker
+        if (lastSpeakRatio > 0.5 && speakRatio < 0.3) score += 0.15;
+        if (lastSpeakRatio < 0.3 && speakRatio > 0.5) score += 0.15;
       }
     }
 
@@ -2410,31 +2472,53 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       const exposedRed =
         redTargetId !== null ? getPlayer(state, redTargetId) : null;
 
-      // Only sell out exposed teammates (police-confirmed), not hidden allies
+      // Sell out exposed teammates — blue penalizes "red execution opposers"
       if (exposedRed?.alive && exposedRed.id !== actor.id) {
-        // Check if teammate is likely to die anyway (many votes against them)
-        const lastTally = state.history?.votes?.[state.history.votes.length - 1]?.tally || {};
-        const exposedVotes = lastTally[exposedRed.id] || 0;
-        const aliveCount = alivePlayers(state).length;
-        const likelyToDie = exposedVotes >= aliveCount * 0.3;
-        // Sell out when they're likely dead anyway (ride the wave), or occasionally to build trust
-        const sellChance = likelyToDie ? 0.7 : 0.3;
-        if (state.rng() < sellChance) {
+        // 75% sell out (was 30-70%) — balance between avoiding opposer tag and not always caving
+        if (state.rng() < 0.75) {
           votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: exposedRed.id });
           return;
         }
       }
 
-      // Hard+ killer vote scatter: avoid all killers voting same non-exposed target
+      // Hard+ killer vote scatter: strategically target dangerous blues instead of random
       if (actor.role === Roles.KILLER.id && killerVoteTargets.size > 0) {
         const scatterCandidates = candidates.filter((t) => !killerVoteTargets.has(t.id));
         if (scatterCandidates.length > 0 && state.rng() < 0.6) {
-          const target = randomChoice(scatterCandidates, state.rng);
-          if (target) {
-            killerVoteTargets.add(target.id);
-            votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: target.id });
+          // Prefer targeting confirmed/effective blues: saved players, correct voters
+          let scatterTarget = null;
+          let scatterBest = -Infinity;
+          for (const t of scatterCandidates) {
+            let ts = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
+            // Invert: killers want to vote AGAINST blues (low suspicion = blue = target)
+            ts = 1.0 - ts;
+            if (voteSavedIds.has(t.id)) ts += 0.3;
+            if (correctVoterIds.has(t.id)) ts += 0.2;
+            ts += (state.rng() - 0.5) * 0.2;
+            if (ts > scatterBest) { scatterBest = ts; scatterTarget = t; }
+          }
+          if (scatterTarget) {
+            killerVoteTargets.add(scatterTarget.id);
+            votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: scatterTarget.id });
             return;
           }
+        }
+      }
+
+      // Non-killer reds: also strategically target effective blues
+      if (actor.role !== Roles.KILLER.id && state.rng() < 0.5) {
+        let redVoteBest = null;
+        let redVoteBestScore = -Infinity;
+        for (const t of candidates) {
+          let ts = 1.0 - (actor.aiMemory?.suspicion?.[t.id] ?? 0.5); // target blues
+          if (voteSavedIds.has(t.id)) ts += 0.25;
+          if (correctVoterIds.has(t.id)) ts += 0.15;
+          ts += (state.rng() - 0.5) * 0.25;
+          if (ts > redVoteBestScore) { redVoteBestScore = ts; redVoteBest = t; }
+        }
+        if (redVoteBest) {
+          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redVoteBest.id });
+          return;
         }
       }
     }
