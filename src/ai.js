@@ -4024,7 +4024,10 @@ const FACTION_CHAT = {
       (s) => `${s}: We need to be careful, they're getting close.||${s}：要小心了，他們越來越接近真相。`,
       (s) => `${s}: Good, that went well last night.||${s}：不錯，昨晚很順利。`,
       (s) => `${s}: Things are getting tight, stay calm.||${s}：局勢越來越緊，大家冷靜。`,
+    ],
+    reactTargeted: [
       (s, t) => `${s}: ${t} is protected, don't waste a kill on them.||${s}：${t} 有人保護，別浪費機會。`,
+      (s, t) => `${s}: Keep an eye on ${t}, they might be onto us.||${s}：注意 ${t}，他可能發現我們了。`,
     ],
     // Avoid doctor
     avoidProtected: [
@@ -4033,11 +4036,18 @@ const FACTION_CHAT = {
     ],
   },
   police: {
-    // Share investigation results
-    shareIntel: [
+    // Share investigation results — split by actual result
+    shareIntelRed: [
       (s, t) => `${s}: I checked ${t}, they're RED.||${s}：我查了 ${t}，是紅方。`,
+      (s, t) => `${s}: Investigation result: ${t} is red, confirmed.||${s}：查驗結果：${t} 是紅方，確認了。`,
+    ],
+    shareIntelBlue: [
       (s, t) => `${s}: ${t} is confirmed blue, they're clean.||${s}：${t} 確認是藍方，沒問題。`,
+      (s, t) => `${s}: I checked ${t}, they're on our side.||${s}：我查了 ${t}，是我們這邊的。`,
+    ],
+    shareIntelSuspect: [
       (s, t) => `${s}: Investigation result: ${t} is suspicious.||${s}：查驗結果：${t} 有嫌疑。`,
+      (s, t) => `${s}: I have a bad feeling about ${t}, worth investigating.||${s}：我對 ${t} 有不好的預感，值得查。`,
     ],
     // Discuss who to investigate
     investigatePlan: [
@@ -4049,12 +4059,15 @@ const FACTION_CHAT = {
     voteCoordinate: [
       (s, t) => `${s}: We all vote ${t} today, agreed?||${s}：今天大家都投 ${t}，同意嗎？`,
       (s, t) => `${s}: Focus fire on ${t}, don't split votes.||${s}：集火投 ${t}，別分散。`,
-      (s) => `${s}: Let's not reveal too much in public chat.||${s}：公開發言別透露太多。`,
+      (s, t) => `${s}: Let's not reveal too much in public chat about ${t}.||${s}：關於 ${t} 的事公開別透露太多。`,
     ],
-    // Analysis
+    // Analysis — targeted (2-arg)
     analysis: [
       (s, t) => `${s}: ${t} defended a known red last round.||${s}：${t} 上回合幫已知紅方說話。`,
       (s, t) => `${s}: ${t} keeps voting with the killers.||${s}：${t} 一直跟殺手投一樣的人。`,
+    ],
+    // Analysis — general (1-arg)
+    analysisGeneral: [
       (s) => `${s}: We're losing people, need to be more aggressive.||${s}：我們一直在死人，要積極一點。`,
       (s) => `${s}: Who should we protect tonight?||${s}：今晚要保護誰？`,
     ],
@@ -4066,11 +4079,15 @@ const FACTION_CHAT = {
       (s, t) => `${s}: Don't judge ${t}, might be civilian — dangerous for us.||${s}：別審判 ${t}，可能是平民，會害到我們。`,
       (s, t) => `${s}: ${t} is worth judging, could reveal useful info.||${s}：${t} 值得審判，可能有有用的情報。`,
     ],
-    // Berserk coordination
+    // Berserk coordination — targeted (2-arg)
     berserkPlan: [
       (s, t) => `${s}: We're berserk now. Target ${t}.||${s}：我們狂暴了，鎖定 ${t}。`,
       (s, t) => `${s}: Let's hunt down ${t} tonight.||${s}：今晚獵殺 ${t}。`,
+    ],
+    // Berserk coordination — general (1-arg)
+    berserkPlanGeneral: [
       (s) => `${s}: Focus on one faction, don't split.||${s}：專注打一個陣營，別分散。`,
+      (s) => `${s}: We're berserk, let's not waste this chance.||${s}：狂暴了，別浪費這次機會。`,
     ],
     // Survival strategy
     survival: [
@@ -4097,9 +4114,11 @@ const NIGHT_FACTION_CHAT = {
     ],
     tomorrowPlan: [
       (s, t) => `${s}: After the kill, we frame ${t} tomorrow in chat.||${s}：殺完之後，明天帶風向指控 ${t}。`,
+      (s, t) => `${s}: Tomorrow let's push suspicion toward ${t}.||${s}：明天把嫌疑引向 ${t}。`,
+    ],
+    tomorrowPlanGeneral: [
       (s) => `${s}: Stay calm tomorrow, vote separately.||${s}：明天保持冷靜，分散投票。`,
       (s) => `${s}: If one of us gets suspected, the others play dumb.||${s}：如果有人被懷疑，其他人裝傻。`,
-      (s, t) => `${s}: Tomorrow let's push suspicion toward ${t}.||${s}：明天把嫌疑引向 ${t}。`,
     ],
     urgency: [
       (s) => `${s}: We're running out of time, need big kills now.||${s}：時間不多了，必須殺關鍵的人。`,
@@ -4114,20 +4133,29 @@ const NIGHT_FACTION_CHAT = {
       (s, t) => `${s}: Let me verify ${t}, their voting is off.||${s}：讓我驗一下 ${t}，他的投票很奇怪。`,
       (s, t) => `${s}: Focus on ${t} tonight, could be a killer.||${s}：今晚查 ${t}，可能是殺手。`,
     ],
-    shareResult: [
+    shareResultRed: [
       (s, t) => `${s}: Last check confirmed ${t} is RED — be careful.||${s}：上次查驗確認 ${t} 是紅方，小心。`,
+      (s, t) => `${s}: ${t} is confirmed red, we need to deal with them.||${s}：${t} 確認是紅方，必須處理。`,
+    ],
+    shareResultBlue: [
       (s, t) => `${s}: Good news, ${t} is blue. One less to worry about.||${s}：好消息，${t} 是藍方，少一個要擔心的。`,
       (s, t) => `${s}: ${t} is clean, I verified them already.||${s}：${t} 是好人，我已經查過了。`,
     ],
     protectAdvice: [
       (s, t) => `${s}: We should keep an eye on ${t}, they might be targeted.||${s}：注意 ${t}，他可能被殺手盯上了。`,
       (s, t) => `${s}: Hope the doctor protects ${t} tonight.||${s}：希望醫生今晚保 ${t}。`,
+    ],
+    protectAdviceGeneral: [
       (s) => `${s}: Stay safe tonight everyone, killers will be aggressive.||${s}：今晚大家小心，殺手會很積極。`,
+      (s) => `${s}: We need to be careful, the killers are getting desperate.||${s}：要小心，殺手越來越急了。`,
     ],
     tomorrowPlan: [
       (s, t) => `${s}: If ${t} is red, we reveal them tomorrow and vote.||${s}：如果 ${t} 是紅方，明天就公開投他。`,
-      (s) => `${s}: Let's coordinate tomorrow — don't split votes.||${s}：明天要協調好，別分散投票。`,
       (s, t) => `${s}: Tomorrow we push for voting out ${t}, everyone agree?||${s}：明天大家一起投 ${t}，同意嗎？`,
+    ],
+    tomorrowPlanGeneral: [
+      (s) => `${s}: Let's coordinate tomorrow — don't split votes.||${s}：明天要協調好，別分散投票。`,
+      (s) => `${s}: Stay focused tomorrow, we're making progress.||${s}：明天繼續專注，我們有進展了。`,
     ],
   },
   grudge: {
@@ -4137,14 +4165,20 @@ const NIGHT_FACTION_CHAT = {
       (s, t) => `${s}: If we judge ${t} and they're red, we gain a lot.||${s}：如果審 ${t} 是紅方，我們賺到了。`,
     ],
     caution: [
-      (s) => `${s}: Be careful tonight, a wrong judgment kills one of us.||${s}：今晚小心，審判錯了我們要死人。`,
       (s, t) => `${s}: Not sure about ${t}, maybe skip judging tonight.||${s}：不確定 ${t}，今晚或許別審判。`,
+      (s, t) => `${s}: ${t} might be innocent, let's wait.||${s}：${t} 可能是無辜的，再等等。`,
+    ],
+    cautionGeneral: [
+      (s) => `${s}: Be careful tonight, a wrong judgment kills one of us.||${s}：今晚小心，審判錯了我們要死人。`,
       (s) => `${s}: Let's observe one more round before judging.||${s}：再觀察一回合再審判吧。`,
     ],
     berserkHunt: [
       (s, t) => `${s}: We're berserk! Go for ${t} tonight!||${s}：狂暴了！今晚衝 ${t}！`,
       (s, t) => `${s}: Hunt ${t} down, no mercy.||${s}：追殺 ${t}，不留情。`,
+    ],
+    berserkHuntGeneral: [
       (s) => `${s}: Berserk mode — eliminate as many as we can!||${s}：狂暴模式，盡量多殺！`,
+      (s) => `${s}: We're berserk — no holding back now!||${s}：狂暴了，不用再保留了！`,
     ],
   },
 };
@@ -4216,9 +4250,12 @@ export function generateNightFactionChat(state) {
         if (r2 < 0.4 && t2) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.planKill);
           reply = tmpl(responder.name, t2.name);
-        } else if (r2 < 0.7) {
+        } else if (r2 < 0.7 && t2) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.tomorrowPlan);
-          reply = t2 ? tmpl(responder.name, t2.name) : tmpl(responder.name);
+          reply = tmpl(responder.name, t2.name);
+        } else if (r2 < 0.7) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.tomorrowPlanGeneral);
+          reply = tmpl(responder.name);
         } else {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.urgency);
           reply = tmpl(responder.name);
@@ -4245,7 +4282,7 @@ export function generateNightFactionChat(state) {
       // Share last investigation result if available
       const revealedRed = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
       if (revealedRed?.alive && state.rng() < 0.4) {
-        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.shareResult);
+        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.shareResultRed);
         line = tmpl(speaker.name, revealedRed.name);
       }
 
@@ -4269,7 +4306,7 @@ export function generateNightFactionChat(state) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdvice);
           line = tmpl(speaker.name, target.name);
         } else {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdvice);
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdviceGeneral);
           line = tmpl(speaker.name);
         }
       }
@@ -4290,9 +4327,12 @@ export function generateNightFactionChat(state) {
         if (r2 < 0.5 && target) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.planInvestigate);
           reply = tmpl(responder.name, target.name);
-        } else {
+        } else if (target) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdvice);
-          reply = target ? tmpl(responder.name, target.name) : tmpl(responder.name);
+          reply = tmpl(responder.name, target.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdviceGeneral);
+          reply = tmpl(responder.name);
         }
         if (reply) {
           state.policeChat.push(reply);
@@ -4319,16 +4359,19 @@ export function generateNightFactionChat(state) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.berserkHunt);
           line = tmpl(speaker.name, target.name);
         } else {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.berserkHunt);
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.berserkHuntGeneral);
           line = tmpl(speaker.name);
         }
       } else {
         if (target && roll < 0.4) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.planJudge);
           line = tmpl(speaker.name, target.name);
-        } else if (roll < 0.7) {
+        } else if (roll < 0.7 && target) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.caution);
-          line = target ? tmpl(speaker.name, target.name) : tmpl(speaker.name);
+          line = tmpl(speaker.name, target.name);
+        } else if (roll < 0.7) {
+          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.cautionGeneral);
+          line = tmpl(speaker.name);
         } else if (target) {
           const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.grudge.planJudge);
           line = tmpl(speaker.name, target.name);
@@ -4403,9 +4446,12 @@ export function generateFactionChat(state) {
         } else if (roll < 0.75 && target) {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.voteStrategy);
           line = tmpl(speaker.name, target.name);
+        } else if (target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.reactTargeted);
+          line = tmpl(speaker.name, target.name);
         } else {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.react);
-          line = target ? tmpl(speaker.name, target.name) : tmpl(speaker.name);
+          line = tmpl(speaker.name);
         }
       }
 
@@ -4425,9 +4471,12 @@ export function generateFactionChat(state) {
         if (roll2 < 0.4 && target) {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.targetPlan);
           reply = tmpl(responder.name, target.name);
+        } else if (roll2 < 0.7 && target) {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.reactTargeted);
+          reply = tmpl(responder.name, target.name);
         } else if (roll2 < 0.7) {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.react);
-          reply = target ? tmpl(responder.name, target.name) : tmpl(responder.name);
+          reply = tmpl(responder.name);
         } else if (target) {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.threat);
           reply = tmpl(responder.name, target.name);
@@ -4469,7 +4518,17 @@ export function generateFactionChat(state) {
         const target = suspect || randomChoice(nonPolice, state.rng);
 
         if (roll < 0.3 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.shareIntel);
+          // Pick correct shareIntel template based on actual investigation result
+          const confirmed = state.policeConfirmed || {};
+          let intelTemplates;
+          if (confirmed[target.id]) {
+            intelTemplates = FACTION_CHAT.police.shareIntelRed;
+          } else if (target.faction === Faction.BLUE) {
+            intelTemplates = FACTION_CHAT.police.shareIntelSuspect;
+          } else {
+            intelTemplates = FACTION_CHAT.police.shareIntelSuspect;
+          }
+          const tmpl = pickTemplate(state.rng, intelTemplates);
           line = tmpl(speaker.name, target.name);
         } else if (roll < 0.55 && target) {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.investigatePlan);
@@ -4477,9 +4536,12 @@ export function generateFactionChat(state) {
         } else if (roll < 0.75 && target) {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.voteCoordinate);
           line = tmpl(speaker.name, target.name);
-        } else {
+        } else if (target) {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysis);
-          line = target ? tmpl(speaker.name, target.name) : tmpl(speaker.name);
+          line = tmpl(speaker.name, target.name);
+        } else {
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysisGeneral);
+          line = tmpl(speaker.name);
         }
       }
 
@@ -4503,7 +4565,7 @@ export function generateFactionChat(state) {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysis);
           reply = tmpl(responder.name, target.name);
         } else {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysis);
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysisGeneral);
           reply = tmpl(responder.name);
         }
         if (reply) {
@@ -4532,7 +4594,7 @@ export function generateFactionChat(state) {
           const tmpl = pickTemplate(state.rng, FACTION_CHAT.grudge.berserkPlan);
           line = tmpl(speaker.name, target.name);
         } else {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.grudge.berserkPlan);
+          const tmpl = pickTemplate(state.rng, FACTION_CHAT.grudge.berserkPlanGeneral);
           line = tmpl(speaker.name);
         }
       } else {
