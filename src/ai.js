@@ -1147,6 +1147,34 @@ function pickKillerSmartTarget(state, actor) {
     }
   }
 
+  // Pre-compute: players defended by police in chat (likely doctor-protected)
+  const killerBlueDefended = new Set();
+  for (const p of state.players) {
+    if (!p.aiMemory?.chatMemory) continue;
+    for (const m of p.aiMemory.chatMemory) {
+      if (m.defendedId === null) continue;
+      const speaker = getPlayer(state, m.speakerId);
+      if (speaker && speaker.role === Roles.POLICE.id) {
+        killerBlueDefended.add(m.defendedId);
+      }
+    }
+  }
+
+  // Pre-compute: doctor protection prediction — who would doctor protect tonight?
+  // Doctor tends to protect: saved targets (repeat), correct voters, high-threat blues, accused-by-red
+  const doctorProtectScore = {};
+  for (const t of alivePlayers(state)) {
+    if (t.role === Roles.KILLER.id) continue;
+    let dp = 0;
+    if (savedLastNight.has(t.id)) dp += 0.5; // doctor often repeats protection
+    if (correctVoters.has(t.id)) dp += 0.2;
+    if (redAccuserCount[t.id]) dp += 0.15;
+    if (killerBlueDefended.has(t.id)) dp += 0.3; // police confirmed = doctor priority
+    const sp = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+    if (sp > 0.5) dp += 0.1; // active speakers get protected
+    doctorProtectScore[t.id] = dp;
+  }
+
   for (const t of shuffled(alivePlayers(state), state.rng)) {
     if (t.role === Roles.KILLER.id) continue;
     if (t.id === actor.id) continue;
@@ -1163,32 +1191,41 @@ function pickKillerSmartTarget(state, actor) {
     // Base: prefer blue targets
     let score = blueProb;
 
-    // Bonus: police are high-value targets
-    score += policeProb * 0.5;
+    // Bonus: police are high-value targets — removing police cripples blue intel
+    score += policeProb * 0.8;
+
+    // Bonus: doctor is the #1 threat — every night save wastes a kill
+    score += doctorProb * 0.6;
 
     // Bonus: active speakers are threats (they influence votes)
     const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
     score += speakRatio * 0.3;
 
     // Bonus: correct voters are dangerous — they identify reds successfully
-    if (correctVoters.has(t.id)) score += 0.25;
+    if (correctVoters.has(t.id)) score += 0.4;
 
     // Bonus: red accusers are threats — they call out reds in chat
-    if (redAccuserCount[t.id]) score += Math.min(redAccuserCount[t.id] * 0.12, 0.3);
+    if (redAccuserCount[t.id]) score += Math.min(redAccuserCount[t.id] * 0.15, 0.4);
 
     // Penalty: arson-marked targets will die on ignition — wasted kill
     if (arsonMarkedIds.has(t.id) && arsonMarkedIds.size >= 2) score -= 0.4;
 
     // Penalty: heavily voted targets may be voted out — save the kill
-    if (heavilyVoted.has(t.id)) score -= 0.2;
+    if (heavilyVoted.has(t.id)) score -= 0.3;
 
-    // Penalty: likely protected by doctor/agent — avoid wasting a kill
-    const protectionLikelihood = doctorProb * 0.4 + agentProb * 0.3;
-    score -= protectionLikelihood * 0.6;
+    // Penalty: doctor protection prediction — avoid targets doctor is likely guarding
+    const dpScore = doctorProtectScore[t.id] || 0;
+    score -= dpScore * 0.6;
 
-    // Penalty: saved last night — likely still protected
+    // Penalty: police-confirmed blue — doctor almost certainly protecting them
+    if (killerBlueDefended.has(t.id)) score -= 0.5;
+
+    // Penalty: likely protected by agent
+    score -= agentProb * 0.3;
+
+    // Penalty: saved last night — likely still protected (but weaker than before if dp already penalizes)
     if (savedLastNight.has(t.id)) {
-      score -= 0.8;
+      score -= 0.4;
     }
     // Skip saved+same target 80%
     if (state.killerLastTarget !== undefined && t.id === state.killerLastTarget && savedLastNight.has(t.id)) {
@@ -2957,9 +2994,10 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         redTargetId !== null ? getPlayer(state, redTargetId) : null;
 
       // Sell out exposed teammates — blue penalizes "red execution opposers"
+      // 60% sell out early game, 85% late game (blending matters more late)
       if (exposedRed?.alive && exposedRed.id !== actor.id) {
-        // 75% sell out (was 30-70%) — balance between avoiding opposer tag and not always caving
-        if (state.rng() < 0.75) {
+        const sellOutRate = (state.dayNumber || 1) >= 4 ? 0.85 : 0.60;
+        if (state.rng() < sellOutRate) {
           votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: exposedRed.id });
           return;
         }
@@ -3000,6 +3038,26 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
             votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: scatterTarget.id });
             return;
           }
+        }
+      }
+
+      // Hard+: killer vote mimicry — sometimes vote like blue to blend in
+      // Pick the highest-suspicion target (same as blue would) to avoid detection
+      if (actor.role === Roles.KILLER.id && state.rng() < 0.35) {
+        let mimicBest = null;
+        let mimicBestScore = -Infinity;
+        for (const t of candidates) {
+          const susp = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
+          let ms = susp; // vote like blue: high suspicion = vote target
+          if (correctVoterIds.has(t.id)) ms -= 0.1; // blue wouldn't vote correct voters
+          if (voteSavedIds.has(t.id)) ms -= 0.15; // blue wouldn't vote saved players
+          ms += (state.rng() - 0.5) * 0.15;
+          if (ms > mimicBestScore) { mimicBestScore = ms; mimicBest = t; }
+        }
+        if (mimicBest) {
+          if (killerVoteTargets) killerVoteTargets.add(mimicBest.id);
+          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: mimicBest.id });
+          return;
         }
       }
 
@@ -3183,7 +3241,21 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       if (v.targetId === consensusTarget) continue; // already voting consensus
       const actor = getPlayer(state, v.actorId);
       if (!actor || actor.isHuman) continue;
-      if (actor.faction === Faction.RED) continue; // red AI has its own strategy
+      // Red AI joins consensus to blend in — but only if target isn't a fellow red
+      if (actor.faction === Faction.RED) {
+        const conTarget = getPlayer(state, consensusTarget);
+        // Only bandwagon if target isn't a red teammate AND consensus is strong
+        if (!conTarget || conTarget.faction === Faction.RED || consensusCount < 3) continue;
+        // Lower rate than blue (25%) — blend occasionally, not always
+        if (state.rng() >= 0.25) continue;
+        const currentVotesR = tally[v.targetId] || 0;
+        if (currentVotesR <= 1 && consensusCount >= 3) {
+          tally[v.targetId] = (tally[v.targetId] || 0) - 1;
+          v.targetId = consensusTarget;
+          tally[consensusTarget] = (tally[consensusTarget] || 0) + 1;
+        }
+        continue;
+      }
       if (consensusIsSafe) continue; // don't bandwagon onto known blues
 
       // Bandwagon rate: higher if consensus is backed by trusted voters
