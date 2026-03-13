@@ -28,6 +28,9 @@ const LANG = {
     voteNoExec: "No-execution votes", perGame: "/game",
     voteAccuracy: "Vote accuracy (red killed)", zombieConverts: "Zombie conversions",
     kidnaps: "Kidnaps", arsonMarks: "Arson marks",
+    cowboyStats: "Cowboy actions",
+    cowboyHit: "Hit", cowboyMiss: "Miss", cowboyBackfire: "Backfire",
+    blueActions: "BLUE TEAM ACTIONS",
     redActions: "RED TEAM ACTIONS",
     aliveCurve: "ALIVE CURVE (avg per day)",
     firstNightKill: "1stNight",
@@ -87,6 +90,9 @@ Examples:
     voteNoExec: "未處決投票", perGame: "/場",
     voteAccuracy: "投票準確率（殺到紅方）", zombieConverts: "殭屍轉化",
     kidnaps: "綁架次數", arsonMarks: "縱火標記",
+    cowboyStats: "牛仔行動",
+    cowboyHit: "命中", cowboyMiss: "空轉", cowboyBackfire: "暴走",
+    blueActions: "藍方行動統計",
     redActions: "紅方行動統計",
     deathCauseName: (c) => {
       const map = {
@@ -198,6 +204,10 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   let zombieConversions = 0;
   let kidnaps = 0;
   let arsonMarks = 0;
+  let cowboyShots = 0;
+  let cowboyHits = 0;
+  let cowboyMisses = 0;
+  let cowboyBackfires = 0;
   const deathCauseCounts = {}; // deathCause -> count
   const aliveCurve = [];  // alive count at start of each day
   const firstNightKills = []; // roles killed on night 1
@@ -214,6 +224,9 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
         if (entry.includes("Agent shield") || entry.includes("Fiend absorbed")) agentBlocks++;
         if (entry.includes("kidnapped")) kidnaps++;
         if (entry.includes("splashed fuel")) arsonMarks++;
+        if (entry.includes("risky shot")) { cowboyShots++; cowboyHits++; }
+        if (entry.includes("chamber clicked")) { cowboyShots++; cowboyMisses++; }
+        if (entry.includes("wild bullet")) { cowboyShots++; cowboyBackfires++; }
       }
     }
 
@@ -285,8 +298,8 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     victory, dayNumber, playerResults, timedOut,
     doctorSaves, agentBlocks, totalVoteRounds, noExecutionRounds,
     correctVoteKills, totalVoteKills, zombieConversions,
-    kidnaps, arsonMarks, deathCauseCounts,
-    aliveCurve, firstNightKills,
+    kidnaps, arsonMarks, cowboyShots, cowboyHits, cowboyMisses, cowboyBackfires,
+    deathCauseCounts, aliveCurve, firstNightKills,
   };
 }
 
@@ -316,6 +329,10 @@ if (!isMainThread) {
   let totalZombieConversions = 0;
   let totalKidnaps = 0;
   let totalArsonMarks = 0;
+  let totalCowboyShots = 0;
+  let totalCowboyHits = 0;
+  let totalCowboyMisses = 0;
+  let totalCowboyBackfires = 0;
   const deathCauseTotals = {};
   const aliveCurveSums = {};  // day -> total alive across games
   const aliveCurveCounts = {}; // day -> number of games that reached this day
@@ -344,6 +361,10 @@ if (!isMainThread) {
     totalZombieConversions += result.zombieConversions || 0;
     totalKidnaps += result.kidnaps || 0;
     totalArsonMarks += result.arsonMarks || 0;
+    totalCowboyShots += result.cowboyShots || 0;
+    totalCowboyHits += result.cowboyHits || 0;
+    totalCowboyMisses += result.cowboyMisses || 0;
+    totalCowboyBackfires += result.cowboyBackfires || 0;
 
     // Death cause aggregation
     for (const [cause, cnt] of Object.entries(result.deathCauseCounts || {})) {
@@ -390,8 +411,9 @@ if (!isMainThread) {
       dayLengths, reasonCounts, timeouts,
       totalDoctorSaves, totalAgentBlocks, totalVoteRounds, totalNoExecRounds,
       totalCorrectVoteKills, totalVoteKills, totalZombieConversions,
-      totalKidnaps, totalArsonMarks, deathCauseTotals,
-      aliveCurveSums, aliveCurveCounts,
+      totalKidnaps, totalArsonMarks,
+      totalCowboyShots, totalCowboyHits, totalCowboyMisses, totalCowboyBackfires,
+      deathCauseTotals, aliveCurveSums, aliveCurveCounts,
     },
   });
   process.exit(0);
@@ -409,6 +431,7 @@ const MERGE_SCALAR_KEYS = [
   "totalVoteRounds", "totalNoExecRounds",
   "totalCorrectVoteKills", "totalVoteKills", "totalZombieConversions",
   "totalKidnaps", "totalArsonMarks",
+  "totalCowboyShots", "totalCowboyHits", "totalCowboyMisses", "totalCowboyBackfires",
 ];
 
 function mergeStats(a, b) {
@@ -460,6 +483,10 @@ function simulateGames(count, theme, difficulty, { L }) {
         acc.totalZombieConversions += result.zombieConversions || 0;
         acc.totalKidnaps += result.kidnaps || 0;
         acc.totalArsonMarks += result.arsonMarks || 0;
+        acc.totalCowboyShots += result.cowboyShots || 0;
+        acc.totalCowboyHits += result.cowboyHits || 0;
+        acc.totalCowboyMisses += result.cowboyMisses || 0;
+        acc.totalCowboyBackfires += result.cowboyBackfires || 0;
 
         for (const [cause, cnt] of Object.entries(result.deathCauseCounts || {})) {
           acc.deathCauseTotals[cause] = (acc.deathCauseTotals[cause] || 0) + cnt;
@@ -696,6 +723,21 @@ async function main() {
     if (stats.totalArsonMarks > 0) {
       console.log(`  ${L.arsonMarks.padEnd(24)} ${(stats.totalArsonMarks / total).toFixed(2)} ${L.perGame}`);
     }
+  }
+
+  // ── Blue Team Actions ──
+
+  if (stats.totalCowboyShots > 0 && total > 0) {
+    const avgShots = (stats.totalCowboyShots / total).toFixed(2);
+    console.log(`\n  ${L.blueActions}`);
+    console.log(`  ${"─".repeat(50)}`);
+    console.log(`  ${L.cowboyStats.padEnd(24)} ${avgShots} ${L.perGame} (${stats.totalCowboyShots})`);
+    const hitPct = pct(stats.totalCowboyHits, stats.totalCowboyShots);
+    const missPct = pct(stats.totalCowboyMisses, stats.totalCowboyShots);
+    const bfPct = pct(stats.totalCowboyBackfires, stats.totalCowboyShots);
+    console.log(`    ${L.cowboyHit.padEnd(22)} ${hitPct} (${stats.totalCowboyHits})`);
+    console.log(`    ${L.cowboyMiss.padEnd(22)} ${missPct} (${stats.totalCowboyMisses})`);
+    console.log(`    ${L.cowboyBackfire.padEnd(22)} ${bfPct} (${stats.totalCowboyBackfires})`);
   }
 
   // ── Red Team Actions ──
