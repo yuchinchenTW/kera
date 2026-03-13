@@ -1105,6 +1105,42 @@ function pickCowboySmartTarget(state, actor) {
     if (!p.alive && p.faction === Faction.RED) confirmedReds.add(p.id);
   }
 
+  // Red execution opposers — didn't vote for red when red was executed
+  const redExecOpposers = {};
+  const voteExecutedReds = state.players.filter((p) => !p.alive && p.deathCause === "VOTE_EXECUTION" && p.faction === Faction.RED);
+  for (const dead of voteExecutedReds) {
+    for (const round of (state.history?.votes || [])) {
+      if (!round.order || !round.tally) continue;
+      const theirVotes = round.tally[dead.id] || 0;
+      const maxVotes = Math.max(0, ...Object.values(round.tally));
+      if (theirVotes > 0 && theirVotes === maxVotes) {
+        for (const entry of round.order) {
+          if (entry.targetId !== dead.id) {
+            redExecOpposers[entry.actorId] = (redExecOpposers[entry.actorId] || 0) + 1;
+          }
+        }
+      }
+    }
+  }
+
+  // Blue evidence: arson-marked, accused by reds
+  const arsonMarkedIds = new Set();
+  for (const p of state.players) {
+    if (p.alive && p.status.arsonMarked) arsonMarkedIds.add(p.id);
+  }
+  const accusedByRedIds = new Set();
+  for (const p of state.players) {
+    if (!p.aiMemory?.chatMemory) continue;
+    for (const m of p.aiMemory.chatMemory) {
+      if (m.accusedId === null) continue;
+      const speaker = getPlayer(state, m.speakerId);
+      if (!speaker) continue;
+      const isKnownRed = (!speaker.alive && speaker.faction === Faction.RED) ||
+        (state.policeConfirmed?.[m.speakerId] === true);
+      if (isKnownRed) accusedByRedIds.add(m.accusedId);
+    }
+  }
+
   for (const t of shuffled(alivePlayers(state), state.rng)) {
     if (t.id === actor.id) continue;
 
@@ -1112,27 +1148,38 @@ function pickCowboySmartTarget(state, actor) {
     const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
     let score = redProb;
 
-    // Bonus: killer is the highest-value target for blue team
+    // Bonus: killer is the WIN CONDITION — killing a killer is the most valuable action
     const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
-    score += killerProb * 0.5;
+    score += killerProb * 0.8;
 
-    // Bonus: sniper is also high-value (kills blue every night)
+    // Bonus: sniper kills blue every night
     const sniperProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.SNIPER?.id] ?? 0;
-    score += sniperProb * 0.3;
+    score += sniperProb * 0.4;
 
-    // Penalty: high blue probability — avoid friendly fire (backfire kills random too)
+    // Bonus: other dangerous red roles
+    const kidnapperProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KIDNAPPER?.id] ?? 0;
+    score += kidnapperProb * 0.3;
+
+    // Penalty: high blue probability — avoid friendly fire
     const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
     score -= blueProb * 0.3;
 
-    // Bonus: quiet players may be hiding red identity
-    const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
-    if (speakRatio < 0.2 && redProb > 0.4) score += 0.1;
-
     // Bonus: police revealed this player as red — confirmed target
-    if (state.policeRevealedRed === t.id) score += 0.4;
+    if (state.policeRevealedRed === t.id) score += 0.6;
 
-    // Penalty: saved by doctor last night — very likely blue, don't waste bullet
+    // Penalty: saved by doctor = confirmed blue
     if (savedLastNight.has(t.id)) score -= 0.5;
+
+    // Penalty: arson-marked = likely blue (arsonist targets blues)
+    if (arsonMarkedIds.has(t.id)) score -= 0.2;
+
+    // Penalty: accused by known reds = likely blue
+    if (accusedByRedIds.has(t.id)) score -= 0.15;
+
+    // Bonus: opposed red execution = suspicious
+    if (redExecOpposers[t.id]) {
+      score += Math.min(redExecOpposers[t.id] * 0.12, 0.3);
+    }
 
     // Bonus: voted together with confirmed reds — suspicious ally pattern
     let redAllyScore = 0;
@@ -1140,16 +1187,20 @@ function pickCowboySmartTarget(state, actor) {
       const together = votePatterns.votedTogether[t.id]?.[redId] || 0;
       if (together > 0) redAllyScore += 0.08 * together;
     }
-    score += Math.min(redAllyScore, 0.25); // cap to avoid over-weighting
+    score += Math.min(redAllyScore, 0.25);
 
     // Bonus: defended a confirmed red in chat — suspicious
     const chatMem = actor.aiMemory?.chatMemory || [];
     for (const m of chatMem) {
       if (m.speakerId === t.id && confirmedReds.has(m.defendedId)) {
-        score += 0.12;
-        break; // only count once
+        score += 0.15;
+        break;
       }
     }
+
+    // Bonus: quiet + red-leaning = hiding
+    const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+    if (speakRatio < 0.2 && redProb > 0.4) score += 0.1;
 
     if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
       bestScore = score;
@@ -1785,15 +1836,32 @@ export function buildAiNightActions(state, opts = {}) {
         break;
       }
       case Roles.COWBOY.id: {
-        // Hard+: smart targeting + confidence threshold + backfire EV
+        // Hard+: smart targeting + EV-based shoot decision + self-threat awareness
         if (hard) {
           const bestTarget = pickCowboySmartTarget(state, actor);
           if (bestTarget) {
             const confidence = actor.aiMemory?.suspicion?.[bestTarget.id] ?? 0.5;
-            // Day 1: need 70% confidence, Day 3+: 50% is enough
-            let threshold = clamp(0.75 - (state.dayNumber || 1) * 0.08, 0.4, 0.75);
-            // Late game = lower threshold (more info available)
-            if (getGamePhase(state) === "late") threshold = clamp(threshold - 0.1, 0.3, 0.75);
+            const dayNum = state.dayNumber || 1;
+
+            // Base threshold: starts 0.65 day 1, drops 0.07/day, floor 0.35
+            let threshold = clamp(0.65 - (dayNum - 1) * 0.07, 0.35, 0.65);
+
+            // Late game: more info available, lower threshold
+            if (getGamePhase(state) === "late") threshold = clamp(threshold - 0.1, 0.3, 0.65);
+
+            // Self-threat awareness: if cowboy is in danger, shoot more aggressively
+            const selfSusp = actor.aiMemory?.suspicion?.[actor.id] ?? 0;
+            const selfIsRevealed = state.policeRevealedRed === actor.id;
+            // Count how many players have voted for us recently
+            let votesAgainstMe = 0;
+            for (const round of (state.history?.votes || [])) {
+              for (const entry of (round.order || [])) {
+                if (entry.targetId === actor.id) votesAgainstMe++;
+              }
+            }
+            const underPressure = selfSusp > 0.5 || votesAgainstMe >= 2;
+            // About to die → lower threshold significantly (use it or lose it)
+            if (underPressure) threshold = clamp(threshold - 0.15, 0.25, 0.65);
 
             // Backfire risk assessment: when blue outnumbers red among alive,
             // backfire's random kill is more likely to hit a blue ally
@@ -1804,12 +1872,20 @@ export function buildAiNightActions(state, opts = {}) {
             const othersCount = Math.max(1, aliveCount - 2); // exclude self and target
             const blueRatio = blueAlive / othersCount;
             // More blue bystanders = backfire hurts blue more = raise threshold
-            if (blueRatio > 0.6) threshold = clamp(threshold + 0.08, 0.3, 0.85);
-            if (aliveCount <= 5) threshold = clamp(threshold + 0.12, 0.3, 0.85);
+            if (blueRatio > 0.6 && !underPressure) threshold = clamp(threshold + 0.06, 0.3, 0.75);
+            if (aliveCount <= 5 && !underPressure) threshold = clamp(threshold + 0.1, 0.3, 0.75);
 
             // Police confirmed red: override threshold — shoot with near certainty
-            if (state.policeRevealedRed === bestTarget.id) threshold = 0.2;
-            if (confidence >= threshold) {
+            if (state.policeRevealedRed === bestTarget.id) threshold = 0.15;
+
+            // EV check: P(hit red) × value - P(backfire) × cost
+            // 2/6 kill, 3/6 nothing, 1/6 wild (target + bystander + self die)
+            // Only skip if EV is clearly negative (confidence is very low)
+            const hitChance = 2 / 6;
+            const backfireChance = 1 / 6;
+            const ev = confidence * hitChance - (1 - confidence) * backfireChance * blueRatio;
+            // If EV is positive and confidence meets threshold, shoot
+            if (confidence >= threshold || (ev > 0.05 && confidence >= 0.3)) {
               actions.push({ actorId: actor.id, type: "COWBOY_GAMBLE", targetId: bestTarget.id });
             }
           }
