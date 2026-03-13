@@ -564,6 +564,57 @@ function ensureBeliefs(state) {
       }
     }
 
+    // ── Police investigation results → hard belief update ──
+    // Police who have investigated know the faction for certain — override suspicion
+    if (hard && p.role === Roles.POLICE.id && p.aiMemory.investigationResults) {
+      for (const r of p.aiMemory.investigationResults) {
+        const tid = r.targetId;
+        if (!p.aiMemory.roleProbs[tid]) continue;
+        const allRolesLocal = Object.keys(p.aiMemory.roleProbs[tid]);
+        if (r.result === "red") {
+          // Hard-set: crush blue probs, boost red probs
+          for (const role of allRolesLocal) {
+            const meta = roleMeta(role);
+            if (meta.faction === Faction.RED) {
+              p.aiMemory.roleProbs[tid][role] = Math.max(p.aiMemory.roleProbs[tid][role], 0.15);
+            } else {
+              p.aiMemory.roleProbs[tid][role] *= 0.05;
+            }
+          }
+        } else if (r.result === "blue") {
+          // Hard-set: crush red probs, boost blue probs
+          for (const role of allRolesLocal) {
+            const meta = roleMeta(role);
+            if (meta.faction === Faction.BLUE) {
+              p.aiMemory.roleProbs[tid][role] = Math.max(p.aiMemory.roleProbs[tid][role], 0.15);
+            } else {
+              p.aiMemory.roleProbs[tid][role] *= 0.05;
+            }
+          }
+        } else if (r.result === "green") {
+          // Green faction (zombie, grudge beast)
+          for (const role of allRolesLocal) {
+            const meta = roleMeta(role);
+            if (meta.faction === Faction.GREEN) {
+              p.aiMemory.roleProbs[tid][role] = Math.max(p.aiMemory.roleProbs[tid][role], 0.15);
+            } else {
+              p.aiMemory.roleProbs[tid][role] *= 0.05;
+            }
+          }
+        }
+        // Re-normalize
+        const sumLocal = Object.values(p.aiMemory.roleProbs[tid]).reduce((a, b) => a + b, 0) || 1;
+        for (const role of allRolesLocal) {
+          p.aiMemory.roleProbs[tid][role] /= sumLocal;
+        }
+        // Update suspicion to match
+        const redProbLocal = Object.entries(p.aiMemory.roleProbs[tid]).reduce(
+          (acc, [role, prob]) => acc + (roleMeta(role).faction === Faction.RED ? prob : 0), 0
+        );
+        p.aiMemory.suspicion[tid] = clamp(redProbLocal, 0.01, 0.99);
+      }
+    }
+
     // ── Advanced: Read other players' role claims ──
     if (hard && state.roleClaims) {
       for (const [claimerId, claimedRole] of Object.entries(state.roleClaims)) {
@@ -668,6 +719,14 @@ function pickPoliceSmartTarget(state, actor) {
     }
   }
 
+  // Hard+: arson-marked = confirmed blue (arsonist targets blues)
+  const arsonMarkedIds = new Set();
+  if (hard) {
+    for (const p of state.players) {
+      if (p.alive && p.status.arsonMarked) arsonMarkedIds.add(p.id);
+    }
+  }
+
   // Hard+: count remaining reds for urgency scaling
   const rolePriors = hard ? rolePriorCounts(state.theme || "GOOD_VS_EVIL") : null;
   const totalRedSlots = rolePriors
@@ -688,6 +747,35 @@ function pickPoliceSmartTarget(state, actor) {
       }
     }
   }
+
+  // Hard+: red execution opposers — didn't vote for red when red was executed
+  const redExecOpposers = {};
+  if (hard) {
+    const voteExecReds = state.players.filter((p) => !p.alive && p.deathCause === "VOTE_EXECUTION" && p.faction === Faction.RED);
+    for (const dead of voteExecReds) {
+      for (const round of (state.history?.votes || [])) {
+        if (!round.order || !round.tally) continue;
+        const tv = round.tally[dead.id] || 0;
+        const mv = Math.max(0, ...Object.values(round.tally));
+        if (tv > 0 && tv === mv) {
+          for (const entry of round.order) {
+            if (entry.targetId !== dead.id) {
+              redExecOpposers[entry.actorId] = (redExecOpposers[entry.actorId] || 0) + 1;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Hard+: vote pressure — who received the most votes last round
+  const lastRound = (state.history?.votes || []).length > 0
+    ? (state.history.votes[state.history.votes.length - 1]) : null;
+  const lastTally = lastRound ? (lastRound.tally || {}) : {};
+  const maxLastVotes = Math.max(1, ...Object.values(lastTally));
+
+  // Phase-based strategy
+  const gamePhase = hard ? getGamePhase(state) : "mid";
 
   for (const t of alivePlayers(state)) {
     if (t.id === actor.id || t.role === Roles.POLICE.id) continue;
@@ -713,9 +801,17 @@ function pickPoliceSmartTarget(state, actor) {
     let score = killerProb * 2 + redProb;
 
     if (hard) {
-      // Information value: investigating uncertain targets (40-70% red) is more
-      // valuable than near-certain ones (>85% red already known to everyone)
-      if (redProb > 0.4 && redProb < 0.7) score += 0.15;
+      // Phase-based information value:
+      // Early game: uncertain targets (0.3-0.6) have highest info value
+      // Late game: high-suspicion targets (>0.6) — confirm and execute immediately
+      if (gamePhase === "early") {
+        if (redProb > 0.3 && redProb < 0.6) score += 0.2;
+      } else if (gamePhase === "late") {
+        if (redProb > 0.6) score += 0.2;
+      } else {
+        // Mid: original info value range
+        if (redProb > 0.4 && redProb < 0.7) score += 0.15;
+      }
 
       // Bonus: voted together with known reds — suspicious alliance pattern
       if (votePatterns) {
@@ -767,11 +863,42 @@ function pickPoliceSmartTarget(state, actor) {
         if (maxAllyScore >= 2) score += 0.15; // strong ally pattern
       }
 
+      // Bonus: red execution opposers — didn't vote for executed reds = suspicious
+      if (redExecOpposers[t.id]) {
+        score += Math.min(redExecOpposers[t.id] * 0.1, 0.25);
+      }
+
+      // Bonus: vote pressure — someone almost voted out deserves investigation
+      // If red: confirms the execution. If blue: police can clear them.
+      if (lastRound) {
+        const tVotes = lastTally[t.id] || 0;
+        if (tVotes > 0) {
+          const voteRatio = tVotes / maxLastVotes;
+          // High vote pressure + uncertain = prioritize investigation
+          if (voteRatio > 0.5 && redProb > 0.3 && redProb < 0.8) {
+            score += voteRatio * 0.2;
+          }
+        }
+      }
+
       // Saved target avoidance: doctor-saved players are confirmed blue
       if (savedIds.has(t.id)) score -= 0.3;
 
+      // Arson-marked avoidance: arsonist targets blues, so arson-marked = confirmed blue
+      if (arsonMarkedIds.has(t.id)) score -= 0.25;
+
       // Accusation reversal: targets accused by known reds are likely blue
-      if (accusedByRed.has(t.id)) score -= 0.1;
+      if (accusedByRed.has(t.id)) score -= 0.15;
+
+      // Kidnap risk: if someone was kidnapped this/last night, investigating the kidnapper
+      // triggers hostage execution. Deprioritize high-kidnapper-probability targets.
+      const hasActiveHostage = (state.lastNightSummary || []).some(
+        (e) => typeof e === "string" && e.includes("kidnapped")
+      );
+      if (hasActiveHostage) {
+        const kidnapProb2 = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KIDNAPPER?.id] ?? 0;
+        if (kidnapProb2 > 0.2) score -= kidnapProb2 * 0.5;
+      }
 
       // Urgency: when few reds remain, amplify scores to prioritize high-value targets
       score *= urgency;
@@ -3244,6 +3371,7 @@ export function generateChatLines(state, maxLines = 6) {
         if (typeof log !== "string") continue;
         const redMatch = log.match(/Investigation result: (.+) is RED/);
         const blueMatch = log.match(/Investigation result: (.+) is BLUE/);
+        const greenMatch = log.match(/Investigation result: (.+) is GREEN/);
         if (redMatch) {
           const targetName = redMatch[1];
           const targetPlayer = state.players.find((pl) => pl && pl.name === targetName);
@@ -3258,6 +3386,13 @@ export function generateChatLines(state, maxLines = 6) {
             speaker.aiMemory.investigationResults.push({ targetId: targetPlayer.id, result: "blue", day: dayNum });
           }
         }
+        if (greenMatch) {
+          const targetName = greenMatch[1];
+          const targetPlayer = state.players.find((pl) => pl && pl.name === targetName);
+          if (targetPlayer && !speaker.aiMemory.investigationResults.some((r) => r.targetId === targetPlayer.id)) {
+            speaker.aiMemory.investigationResults.push({ targetId: targetPlayer.id, result: "green", day: dayNum });
+          }
+        }
       }
 
       const results = speaker.aiMemory.investigationResults;
@@ -3266,7 +3401,18 @@ export function generateChatLines(state, maxLines = 6) {
 
       // Day 1: NEVER reveal
       if (dayNum >= 2) {
-        // About to die: dump all info
+        // Find best alive red to reveal (not just first found — prioritize alive targets)
+        const aliveRedResult = redResults.find((r) => {
+          const tp = getPlayer(state, r.targetId);
+          return tp?.alive;
+        });
+        // Find best alive blue to share
+        const aliveBlueResult = blueResults.find((r) => {
+          const tp = getPlayer(state, r.targetId);
+          return tp?.alive;
+        });
+
+        // About to die: dump all info (prioritize this over normal reveals)
         if (selfThreat > 0.6 && results.length > 0) {
           const infoParts = results.map((r) => {
             const tp = getPlayer(state, r.targetId);
@@ -3278,28 +3424,32 @@ export function generateChatLines(state, maxLines = 6) {
             continue;
           }
         }
-        // Day 2: reveal only if confirmed red AND selfThreat > 0.3
-        if (dayNum === 2 && redResults.length > 0 && selfThreat > 0.3) {
-          const redTarget = getPlayer(state, redResults[0].targetId);
-          if (redTarget?.alive) {
-            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeTimedReveal);
-            lines.push(tmpl(speaker.name, redTarget.name));
-            continue;
+        // Day 2+: reveal red — early reveal is critical for vote accuracy
+        // Day 2: 90% reveal (was selfThreat>0.3 gated — too conservative)
+        // Day 3+: 85% reveal
+        if (aliveRedResult) {
+          const revealChance = dayNum === 2 ? 0.9 : 0.85;
+          if (state.rng() < revealChance) {
+            const redTarget = getPlayer(state, aliveRedResult.targetId);
+            if (redTarget) {
+              const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeTimedReveal);
+              lines.push(tmpl(speaker.name, redTarget.name));
+              continue;
+            }
           }
         }
-        // Day 3+: reveal if confirmed red exists
-        if (dayNum >= 3 && redResults.length > 0 && state.rng() < 0.8) {
-          const redTarget = getPlayer(state, redResults[0].targetId);
-          if (redTarget?.alive) {
-            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeTimedReveal);
-            lines.push(tmpl(speaker.name, redTarget.name));
-            continue;
-          }
-        }
-        // Also share blue confirmations in mid/late game
-        if (gamePhase !== "early" && blueResults.length > 0 && state.rng() < 0.3) {
-          const blueTarget = getPlayer(state, blueResults[0].targetId);
-          if (blueTarget?.alive) {
+        // Share blue confirmations — help prevent friendly fire
+        // Higher rate: 50% mid/late game, 30% early game
+        if (aliveBlueResult) {
+          const blueShareChance = gamePhase === "early" ? 0.3 : 0.5;
+          // Boost further if the blue player is under vote pressure
+          const blueTarget = getPlayer(state, aliveBlueResult.targetId);
+          const lastVoteHistChat = (state.history?.votes || []).length > 0
+            ? state.history.votes[state.history.votes.length - 1] : null;
+          const blueVotes = lastVoteHistChat?.tally?.[aliveBlueResult.targetId] || 0;
+          const underPressure = blueVotes >= 2;
+          const finalChance = underPressure ? Math.min(blueShareChance + 0.3, 0.9) : blueShareChance;
+          if (blueTarget && state.rng() < finalChance) {
             const tmpl = CHAT_TEMPLATES.policeTimedReveal[1]; // "confirmed blue, protect them"
             lines.push(tmpl(speaker.name, blueTarget.name));
             continue;
