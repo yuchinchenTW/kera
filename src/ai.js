@@ -331,7 +331,7 @@ function ensureBeliefs(state) {
                 if (lowerEn.includes("suspicious") || lowerEn.includes("killer") || lowerEn.includes("vote") || lowerEn.includes("doesn't add up") || lowerEn.includes("acting weird") || lowerEn.includes("don't trust")) {
                   entry.accusedId = other.id;
                 }
-                if (lowerEn.includes("on our side") || lowerEn.includes("seems fine") || lowerEn.includes("leave") || lowerEn.includes("helpful") || lowerEn.includes("clean") || lowerEn.includes("innocent") || lowerEn.includes("confirmed blue")) {
+                if (lowerEn.includes("on our side") || lowerEn.includes("seems fine") || lowerEn.includes("leave") || lowerEn.includes("helpful") || lowerEn.includes("clean") || lowerEn.includes("innocent") || lowerEn.includes("confirmed blue") || lowerEn.includes("protect") || lowerEn.includes("don't vote")) {
                   entry.defendedId = other.id;
                 }
               }
@@ -2821,6 +2821,8 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
 
   // Hard+: red defenders — who defended players later revealed as red?
   const redDefenderIds = new Set();
+  // Hard+: blue-defended players — who was defended by police or confirmed-blue speakers?
+  const blueDefendedIds = new Set();
   if (hard) {
     const deadReds = state.players.filter((p) => !p.alive && p.faction === Faction.RED);
     for (const p of state.players) {
@@ -2829,6 +2831,16 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         if (m.defendedId === null) continue;
         if (deadReds.some((dr) => dr.id === m.defendedId)) {
           redDefenderIds.add(m.speakerId);
+        }
+        // Track players defended by police or known-blue speakers
+        const speaker = getPlayer(state, m.speakerId);
+        if (speaker) {
+          const isPolice = speaker.role === Roles.POLICE.id;
+          const isKnownBlue = speaker.alive && speaker.faction === Faction.BLUE &&
+            (voteSavedIds.has(speaker.id) || correctVoterIds.has(speaker.id));
+          if (isPolice || isKnownBlue) {
+            blueDefendedIds.add(m.defendedId);
+          }
         }
       }
     }
@@ -3078,6 +3090,11 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         // Hard+: defended dead reds in chat = suspicious (red allies cover each other)
         if (hard && redDefenderIds.has(t.id)) {
           s += 0.1;
+        }
+
+        // Hard+: defended by police/known-blue = likely blue (strong protection signal)
+        if (hard && blueDefendedIds.has(t.id)) {
+          s -= 0.3;
         }
 
         // Hard+: grudge beast vote priority — vote-executing them is safe (no berserk)
@@ -3360,10 +3377,18 @@ const CHAT_TEMPLATES = {
     (s, accuser) => `${s}: ${accuser}, stop pointing fingers without evidence!||${s}：${accuser}，沒證據別亂指！`,
     (s, accuser) => `${s}: ${accuser}, you're deflecting — maybe YOU should be investigated.||${s}：${accuser}，你在轉移焦點吧？也許該查的是你。`,
   ],
-  // Advanced: Police timed reveal
-  policeTimedReveal: [
+  // Advanced: Police timed reveal — RED result
+  policeRevealRed: [
     (s, t) => `${s}: I've been waiting for the right time — ${t} is RED.||${s}：我等到了正確時機，${t} 是紅方。`,
+    (s, t) => `${s}: ${t} is confirmed red, we need to vote them out now.||${s}：${t} 確認是紅方，必須馬上投掉。`,
+  ],
+  // Advanced: Police timed reveal — BLUE result
+  policeRevealBlue: [
     (s, t) => `${s}: I'll reveal now: ${t} is confirmed blue, protect them.||${s}：我現在公開：${t} 確認是藍方，保護他。`,
+    (s, t) => `${s}: I checked ${t}, they're clean — don't vote them.||${s}：我查了 ${t}，他是好人，別投他。`,
+  ],
+  // Advanced: Police urgent self-reveal
+  policeUrgentReveal: [
     (s) => `${s}: I'm the police. I'm revealing now because I might not survive tonight.||${s}：我是警察。我現在公開因為我可能活不過今晚。`,
   ],
   policeDeathDump: [
@@ -3635,7 +3660,7 @@ export function generateChatLines(state, maxLines = 6) {
           if (state.rng() < revealChance) {
             const redTarget = getPlayer(state, aliveRedResult.targetId);
             if (redTarget) {
-              const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeTimedReveal);
+              const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeRevealRed);
               lines.push(tmpl(speaker.name, redTarget.name));
               continue;
             }
@@ -3653,7 +3678,7 @@ export function generateChatLines(state, maxLines = 6) {
           const underPressure = blueVotes >= 2;
           const finalChance = underPressure ? Math.min(blueShareChance + 0.3, 0.9) : blueShareChance;
           if (blueTarget && state.rng() < finalChance) {
-            const tmpl = CHAT_TEMPLATES.policeTimedReveal[1]; // "confirmed blue, protect them"
+            const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeRevealBlue);
             lines.push(tmpl(speaker.name, blueTarget.name));
             continue;
           }
