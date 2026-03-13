@@ -643,6 +643,21 @@ function pickPoliceSmartTarget(state, actor) {
     if (!p.alive && p.faction === Faction.RED) knownReds.add(p.id);
   }
 
+  // Hard+: use investigation history to skip already-investigated targets
+  const investigatedIds = new Set();
+  if (hard) {
+    const results = actor.aiMemory?.investigationResults || [];
+    for (const r of results) investigatedIds.add(r.targetId);
+  }
+
+  // Hard+: survival analysis — count how many nights each player has survived
+  const dayNum = state.dayNumber || 1;
+  // Night kill victims are almost always blue. Survivors who are active
+  // but never targeted become more suspicious over time.
+  const blueNightDeaths = state.players.filter(
+    (p) => !p.alive && p.deathCause && p.deathCause !== "VOTE_EXECUTION" && p.faction === Faction.BLUE
+  ).length;
+
   for (const t of alivePlayers(state)) {
     if (t.id === actor.id || t.role === Roles.POLICE.id) continue;
 
@@ -651,6 +666,9 @@ function pickPoliceSmartTarget(state, actor) {
 
     // Skip already confirmed by police
     if (state.policeConfirmed?.[t.id]) continue;
+
+    // Skip already investigated (we know their result)
+    if (hard && investigatedIds.has(t.id)) continue;
 
     const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
     const redProb = factionProb(actor, t.id, Faction.RED) ?? 0;
@@ -696,6 +714,27 @@ function pickPoliceSmartTarget(state, actor) {
       const sniperProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.SNIPER?.id] ?? 0;
       const kidnapProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KIDNAPPER?.id] ?? 0;
       score += sniperProb * 0.8 + kidnapProb * 0.5;
+
+      // Survival analysis: active players who survive many nights are suspicious.
+      // Killers don't kill their own team, so red players survive longer on average.
+      if (dayNum >= 3 && chatBehavior) {
+        const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
+        // Active speakers who haven't been night-killed despite being visible
+        if (speakRatio > 0.4 && blueNightDeaths >= 2) {
+          score += 0.12; // survived while blue allies died = suspicious
+        }
+      }
+
+      // Post-reveal red ally priority: if we just found a red, investigate
+      // people who were closest allies of that red (voted together most)
+      if (knownReds.size > 0 && votePatterns) {
+        let maxAllyScore = 0;
+        for (const redId of knownReds) {
+          const together = votePatterns.votedTogether[t.id]?.[redId] || 0;
+          maxAllyScore = Math.max(maxAllyScore, together);
+        }
+        if (maxAllyScore >= 2) score += 0.15; // strong ally pattern
+      }
     }
 
     score = clamp(score + (state.rng() - 0.5) * 0.1 * diffScale, 0, 4);
