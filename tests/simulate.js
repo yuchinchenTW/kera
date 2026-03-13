@@ -27,8 +27,19 @@ const LANG = {
     doctorSaves: "Doctor saves", agentBlocks: "Agent/Fiend blocks",
     voteNoExec: "No-execution votes", perGame: "/game",
     voteAccuracy: "Vote accuracy (red killed)", zombieConverts: "Zombie conversions",
+    kidnaps: "Kidnaps", arsonMarks: "Arson marks",
+    redActions: "RED TEAM ACTIONS",
     aliveCurve: "ALIVE CURVE (avg per day)",
     firstNightKill: "1stNight",
+    deathCauseName: (c) => {
+      const map = {
+        KILLER_MURDER: "Killer murder", SNIPER_HEADSHOT: "Sniper headshot",
+        TERROR_BOMB: "Terror bomb", KIDNAP_EXECUTION: "Kidnap execution",
+        ARSON_BURN: "Arson burn", VINE_SWAP: "Vine swap",
+        NIGHTMARE_STRIKE: "Nightmare strike", NECROMANCER_CURSE: "Necromancer curse",
+      };
+      return map[c] || c;
+    },
     factionName: { BLUE: "BLUE", RED: "RED", ZOMBIE: "ZOMBIE", GRUDGE: "GRUDGE", NONE: "NONE" },
     diffName: { easy: "easy", normal: "normal", hard: "hard", nightmare: "nightmare" },
     roleName: (id) => id,
@@ -75,6 +86,17 @@ Examples:
     doctorSaves: "醫生救援", agentBlocks: "特務/天煞擋下",
     voteNoExec: "未處決投票", perGame: "/場",
     voteAccuracy: "投票準確率（殺到紅方）", zombieConverts: "殭屍轉化",
+    kidnaps: "綁架次數", arsonMarks: "縱火標記",
+    redActions: "紅方行動統計",
+    deathCauseName: (c) => {
+      const map = {
+        KILLER_MURDER: "殺手擊殺", SNIPER_HEADSHOT: "狙擊手爆頭",
+        TERROR_BOMB: "恐怖炸彈", KIDNAP_EXECUTION: "綁匪處決",
+        ARSON_BURN: "縱火焚燒", VINE_SWAP: "藤魔替換",
+        NIGHTMARE_STRIKE: "夢魔襲擊", NECROMANCER_CURSE: "死靈詛咒",
+      };
+      return map[c] || c;
+    },
     aliveCurve: "存活曲線（每日平均）",
     firstNightKill: "首夜",
     factionName: { BLUE: "藍方", RED: "紅方", ZOMBIE: "殭屍", GRUDGE: "怨靈", NONE: "無" },
@@ -154,6 +176,13 @@ const NIGHT_KILL_CAUSES = new Set([
   DeathCause.AGENT_LINK, DeathCause.EMPTY_INJECTION,
 ]);
 
+// Red-team kill causes for action stats
+const RED_KILL_CAUSES = new Set([
+  DeathCause.KILLER_MURDER, DeathCause.SNIPER_HEADSHOT, DeathCause.TERROR_BOMB,
+  DeathCause.KIDNAP_EXECUTION, DeathCause.ARSON_BURN, DeathCause.VINE_SWAP,
+  DeathCause.NIGHTMARE_STRIKE, DeathCause.NECROMANCER_CURSE,
+]);
+
 // ─── Single Game Runner ─────────────────────────────────────────────────────
 
 function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
@@ -167,6 +196,9 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   let correctVoteKills = 0;
   let totalVoteKills = 0;
   let zombieConversions = 0;
+  let kidnaps = 0;
+  let arsonMarks = 0;
+  const deathCauseCounts = {}; // deathCause -> count
   const aliveCurve = [];  // alive count at start of each day
   const firstNightKills = []; // roles killed on night 1
 
@@ -175,11 +207,13 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     roundNum++;
     engine.resolveNight(null, { includeHuman: true });
 
-    // Count protections from lastNightSummary (reset to [] each night by startNight)
+    // Count events from lastNightSummary (reset to [] each night by startNight)
     for (const entry of (engine.state.lastNightSummary || [])) {
       if (typeof entry === "string") {
         if (entry.includes("saved") && entry.includes("from death")) doctorSaves++;
         if (entry.includes("Agent shield") || entry.includes("Fiend absorbed")) agentBlocks++;
+        if (entry.includes("kidnapped")) kidnaps++;
+        if (entry.includes("splashed fuel")) arsonMarks++;
       }
     }
 
@@ -240,10 +274,18 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     converted: p.role !== p.startRole,
   }));
 
+  // Count deaths by cause
+  for (const pr of playerResults) {
+    if (pr.deathCause) {
+      deathCauseCounts[pr.deathCause] = (deathCauseCounts[pr.deathCause] || 0) + 1;
+    }
+  }
+
   return {
     victory, dayNumber, playerResults, timedOut,
     doctorSaves, agentBlocks, totalVoteRounds, noExecutionRounds,
     correctVoteKills, totalVoteKills, zombieConversions,
+    kidnaps, arsonMarks, deathCauseCounts,
     aliveCurve, firstNightKills,
   };
 }
@@ -272,6 +314,9 @@ if (!isMainThread) {
   let totalCorrectVoteKills = 0;
   let totalVoteKills = 0;
   let totalZombieConversions = 0;
+  let totalKidnaps = 0;
+  let totalArsonMarks = 0;
+  const deathCauseTotals = {};
   const aliveCurveSums = {};  // day -> total alive across games
   const aliveCurveCounts = {}; // day -> number of games that reached this day
 
@@ -297,6 +342,13 @@ if (!isMainThread) {
     totalCorrectVoteKills += result.correctVoteKills || 0;
     totalVoteKills += result.totalVoteKills || 0;
     totalZombieConversions += result.zombieConversions || 0;
+    totalKidnaps += result.kidnaps || 0;
+    totalArsonMarks += result.arsonMarks || 0;
+
+    // Death cause aggregation
+    for (const [cause, cnt] of Object.entries(result.deathCauseCounts || {})) {
+      deathCauseTotals[cause] = (deathCauseTotals[cause] || 0) + cnt;
+    }
 
     // Alive curve aggregation
     for (let d = 0; d < (result.aliveCurve || []).length; d++) {
@@ -338,6 +390,7 @@ if (!isMainThread) {
       dayLengths, reasonCounts, timeouts,
       totalDoctorSaves, totalAgentBlocks, totalVoteRounds, totalNoExecRounds,
       totalCorrectVoteKills, totalVoteKills, totalZombieConversions,
+      totalKidnaps, totalArsonMarks, deathCauseTotals,
       aliveCurveSums, aliveCurveCounts,
     },
   });
@@ -349,12 +402,13 @@ if (!isMainThread) {
 const MERGE_SUM_KEYS = [
   "tally", "roleSeen", "roleWins", "roleSurvived",
   "roleDeathByVote", "roleDeathByNight", "roleFirstNightKill",
-  "reasonCounts", "aliveCurveSums", "aliveCurveCounts",
+  "reasonCounts", "aliveCurveSums", "aliveCurveCounts", "deathCauseTotals",
 ];
 const MERGE_SCALAR_KEYS = [
   "timeouts", "totalDoctorSaves", "totalAgentBlocks",
   "totalVoteRounds", "totalNoExecRounds",
   "totalCorrectVoteKills", "totalVoteKills", "totalZombieConversions",
+  "totalKidnaps", "totalArsonMarks",
 ];
 
 function mergeStats(a, b) {
@@ -404,6 +458,12 @@ function simulateGames(count, theme, difficulty, { L }) {
         acc.totalCorrectVoteKills += result.correctVoteKills || 0;
         acc.totalVoteKills += result.totalVoteKills || 0;
         acc.totalZombieConversions += result.zombieConversions || 0;
+        acc.totalKidnaps += result.kidnaps || 0;
+        acc.totalArsonMarks += result.arsonMarks || 0;
+
+        for (const [cause, cnt] of Object.entries(result.deathCauseCounts || {})) {
+          acc.deathCauseTotals[cause] = (acc.deathCauseTotals[cause] || 0) + cnt;
+        }
 
         for (let d = 0; d < (result.aliveCurve || []).length; d++) {
           const day = d + 1;
@@ -630,6 +690,31 @@ async function main() {
     if (stats.totalZombieConversions > 0) {
       console.log(`  ${L.zombieConverts.padEnd(24)} ${avgZombie} ${L.perGame}`);
     }
+    if (stats.totalKidnaps > 0) {
+      console.log(`  ${L.kidnaps.padEnd(24)} ${(stats.totalKidnaps / total).toFixed(2)} ${L.perGame}`);
+    }
+    if (stats.totalArsonMarks > 0) {
+      console.log(`  ${L.arsonMarks.padEnd(24)} ${(stats.totalArsonMarks / total).toFixed(2)} ${L.perGame}`);
+    }
+  }
+
+  // ── Red Team Actions ──
+
+  const redCauses = Object.entries(stats.deathCauseTotals || {})
+    .filter(([cause]) => RED_KILL_CAUSES.has(cause))
+    .sort((a, b) => b[1] - a[1]);
+  if (redCauses.length > 0 && total > 0) {
+    const totalRedKills = redCauses.reduce((sum, [, cnt]) => sum + cnt, 0);
+    console.log(`\n  ${L.redActions}`);
+    console.log(`  ${"─".repeat(50)}`);
+    for (const [cause, cnt] of redCauses) {
+      const avgPerGame = (cnt / total).toFixed(2);
+      const shareRatio = cnt / totalRedKills;
+      console.log(`  ${L.deathCauseName(cause).padEnd(20)} ${bar(shareRatio, 15)} ${pct(cnt, totalRedKills)} ${avgPerGame} ${L.perGame} (${cnt})`);
+    }
+    console.log(`  ${"─".repeat(50)}`);
+    const totalLabel = zhMode ? "合計" : "Total";
+    console.log(`  ${totalLabel.padEnd(20)} ${" ".repeat(15)} ${" ".repeat(6)} ${(totalRedKills / total).toFixed(2)} ${L.perGame} (${totalRedKills})`);
   }
 
   // ── Alive Curve ──
