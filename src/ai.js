@@ -2341,29 +2341,170 @@ export function buildAiNightActions(state, opts = {}) {
         const maxChains = Math.max(0, actor.maxChains ?? Roles.EXORCIST.maxChain);
         if (maxChains <= 0) break;
         if (hard) {
-          // Hard+: be careful with chains — only strike high-confidence red targets
-          // Mistakes reduce maxChains, so avoid uncertain targets
           const mistakes = actor.exorcistMistakes || 0;
-          const cautionLevel = mistakes * 0.15; // more mistakes = more cautious
+          const dayNum = state.dayNumber || 1;
+          const exPhase = getGamePhase(state);
+
+          // Pre-compute behavioral signals
+          const exChatBehavior = analyzeChatBehavior(state);
+          const exMaxSpoken = Math.max(1, ...Object.values(exChatBehavior.speakCount || {}));
+          const exVotePatterns = analyzeVotingPatterns(state);
+
+          // Confirmed reds (dead + revealed)
+          const exKnownReds = new Set();
+          if (state.policeRevealedRed !== null) exKnownReds.add(state.policeRevealedRed);
+          for (const p of state.players) {
+            if (!p.alive && p.faction === Faction.RED) exKnownReds.add(p.id);
+          }
+
+          // Saved last night = confirmed blue
+          const exSavedIds = new Set();
+          for (const entry of (state.lastNightSummary || [])) {
+            if (typeof entry === "string" && entry.includes("saved")) {
+              for (const p of state.players) {
+                if (p.alive && entry.includes(p.name)) exSavedIds.add(p.id);
+              }
+            }
+          }
+
+          // Arson-marked = confirmed blue
+          const exArsonIds = new Set();
+          for (const p of state.players) {
+            if (p.alive && p.status.arsonMarked) exArsonIds.add(p.id);
+          }
+
+          // Accused by known reds = likely blue
+          const exAccusedByRed = new Set();
+          for (const p of state.players) {
+            if (!p.aiMemory?.chatMemory) continue;
+            for (const m of p.aiMemory.chatMemory) {
+              if (m.accusedId === null) continue;
+              const sp = getPlayer(state, m.speakerId);
+              if (!sp) continue;
+              if ((!sp.alive && sp.faction === Faction.RED) || state.policeConfirmed?.[m.speakerId] === true) {
+                exAccusedByRed.add(m.accusedId);
+              }
+            }
+          }
+
+          // Red execution opposers
+          const exRedOpposers = {};
+          const exVoteExecReds = state.players.filter((p) => !p.alive && p.deathCause === "VOTE_EXECUTION" && p.faction === Faction.RED);
+          for (const dead of exVoteExecReds) {
+            for (const round of (state.history?.votes || [])) {
+              if (!round.order || !round.tally) continue;
+              const tv = round.tally[dead.id] || 0;
+              const mv = Math.max(0, ...Object.values(round.tally));
+              if (tv > 0 && tv === mv) {
+                for (const entry of round.order) {
+                  if (entry.targetId !== dead.id) {
+                    exRedOpposers[entry.actorId] = (exRedOpposers[entry.actorId] || 0) + 1;
+                  }
+                }
+              }
+            }
+          }
+
+          // Score all candidates
           const candidates = shuffled(alivePlayers(state), state.rng)
             .filter((t) => t.id !== actor.id)
-            .map((t) => ({
-              player: t,
-              redProb: factionProb(actor, t.id, Faction.RED) ?? 0.5,
-              killerProb: actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0,
-            }))
-            .sort((a, b) => (b.killerProb * 2 + b.redProb) - (a.killerProb * 2 + a.redProb));
-          const minConfidence = 0.4 + cautionLevel; // 0.4 base, up to 0.85 with 3 mistakes
+            .map((t) => {
+              const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+              const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
+              const sniperProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.SNIPER?.id] ?? 0;
+              const necroProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.NECROMANCER?.id] ?? 0;
+              const nightmareProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.NIGHTMARE_DEMON?.id] ?? 0;
+
+              // Base: red probability
+              let score = redProb;
+
+              // Bonus: dangerous red roles (exorcist wants to eliminate threats)
+              score += killerProb * 1.5;
+              score += sniperProb * 0.8;
+              score += necroProb * 0.6;
+              score += nightmareProb * 0.5;
+
+              // Bonus: police revealed this target as red — guaranteed hit
+              if (state.policeRevealedRed === t.id) score += 2.0;
+
+              // Bonus: voted with known reds
+              if (exVotePatterns) {
+                let redAllyScore = 0;
+                for (const redId of exKnownReds) {
+                  redAllyScore += exVotePatterns.votedTogether[t.id]?.[redId] || 0;
+                }
+                score += Math.min(redAllyScore * 0.08, 0.2);
+              }
+
+              // Bonus: defended known reds
+              const chatMem = actor.aiMemory?.chatMemory || [];
+              for (const m of chatMem) {
+                if (m.speakerId === t.id && exKnownReds.has(m.defendedId)) {
+                  score += 0.12;
+                  break;
+                }
+              }
+
+              // Bonus: red execution opposers
+              if (exRedOpposers[t.id]) {
+                score += Math.min(exRedOpposers[t.id] * 0.1, 0.25);
+              }
+
+              // Bonus: quiet + red-leaning
+              const speakRatio = (exChatBehavior.speakCount[t.id] || 0) / exMaxSpoken;
+              if (speakRatio < 0.2 && redProb > 0.4) score += 0.1;
+
+              // Penalty: confirmed blue signals — hitting blue is catastrophic
+              if (exSavedIds.has(t.id)) score -= 1.5;
+              if (exArsonIds.has(t.id)) score -= 1.0;
+              if (exAccusedByRed.has(t.id)) score -= 0.5;
+
+              return { player: t, redProb, score };
+            })
+            .sort((a, b) => b.score - a.score);
+
+          // Graduated confidence thresholds: each subsequent pick requires MORE confidence
+          // because a miss stops the chain AND permanently costs a chain slot
+          // Base: 0.4 / 0.5 / 0.6 for 1st / 2nd / 3rd pick
+          // + mistake penalty: each past mistake adds 0.08
+          // Killing a red is a FREE KILL (no vote cost), so moderate confidence is acceptable
+          const mistakePenalty = mistakes * 0.08;
+          const thresholds = [
+            clamp(0.4 + mistakePenalty, 0.4, 0.8),
+            clamp(0.5 + mistakePenalty, 0.5, 0.85),
+            clamp(0.6 + mistakePenalty, 0.6, 0.9),
+          ];
+          // Late game: lower thresholds (more info + more urgency)
+          if (exPhase === "late") {
+            for (let i = 0; i < thresholds.length; i++) {
+              thresholds[i] = clamp(thresholds[i] - 0.1, 0.3, 0.85);
+            }
+          }
+
+          // Day 1: max 2 picks (limited info but still worth trying top targets)
+          const maxPicksThisNight = dayNum <= 1 ? Math.min(2, maxChains) : maxChains;
+
           const picks = [];
           for (const c of candidates) {
-            if (picks.length >= maxChains) break;
-            if (c.redProb >= minConfidence) {
+            if (picks.length >= maxPicksThisNight) break;
+            const threshold = thresholds[picks.length] ?? 0.9;
+            // Police revealed red: always strike (override threshold)
+            if (state.policeRevealedRed === c.player.id) {
+              picks.push(c.player);
+              continue;
+            }
+            if (c.redProb >= threshold) {
               picks.push(c.player);
             }
           }
-          // If no confident targets, still strike the top 1 (use it or lose it)
-          if (picks.length === 0 && candidates.length > 0 && candidates[0].redProb > 0.3) {
-            picks.push(candidates[0].player);
+          // Fallback: always strike at least 1 target if possible
+          // Exorcist with unused chains is wasted potential — even moderate confidence
+          // is worth attempting since killing a red is a free elimination
+          if (picks.length === 0 && candidates.length > 0) {
+            const top = candidates[0];
+            if (top.redProb > 0.28 || top.score > 0.8 || state.policeRevealedRed === top.player.id) {
+              picks.push(top.player);
+            }
           }
           for (const t of picks) {
             actions.push({ actorId: actor.id, type: "EXORCIST_STRIKE", targetId: t.id });
