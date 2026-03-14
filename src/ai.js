@@ -2974,13 +2974,14 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         if (deadReds.some((dr) => dr.id === m.defendedId)) {
           redDefenderIds.add(m.speakerId);
         }
-        // Track players defended by police or known-blue speakers
+        // Track players defended by publicly-known police or confirmed-blue speakers
         const speaker = getPlayer(state, m.speakerId);
         if (speaker) {
-          const isPolice = speaker.role === Roles.POLICE.id;
-          const isKnownBlue = speaker.alive && speaker.faction === Faction.BLUE &&
+          // Only treat as police if they publicly claimed the role (no hidden role access)
+          const claimedPolice = state.roleClaims?.[speaker.id] === Roles.POLICE.id;
+          const isKnownBlue = speaker.alive &&
             (voteSavedIds.has(speaker.id) || correctVoterIds.has(speaker.id));
-          if (isPolice || isKnownBlue) {
+          if (claimedPolice || isKnownBlue) {
             blueDefendedIds.add(m.defendedId);
           }
         }
@@ -2999,9 +3000,12 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   // If any grudge beast survives, they steal victory via survival override
   const totalExpectedGreen = hard ? themeRoles.filter((r) => roleMeta(r).faction === Faction.GREEN).length : 0;
   const hasGrudgeInTheme = totalExpectedGreen > 0;
-  const aliveGrudgeEstimate = hasGrudgeInTheme ? state.players.filter(
-    (p) => p.alive && p.role === Roles.GRUDGE_BEAST.id
+  // Estimate alive grudge beasts from beliefs, not real roles (avoid info leak)
+  // Dead players' roles are public, so subtract confirmed dead grudge beasts from expected count
+  const deadGrudgeCount = hasGrudgeInTheme ? state.players.filter(
+    (p) => !p.alive && p.role === Roles.GRUDGE_BEAST.id
   ).length : 0;
+  const aliveGrudgeEstimate = Math.max(0, totalExpectedGreen - deadGrudgeCount);
 
   // Hard+: survival suspicion — vocal players who survive many nights while blues die
   const chatBehaviorVote = hard ? analyzeChatBehavior(state) : null;
