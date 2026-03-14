@@ -38,6 +38,7 @@ const DURATIONS = {
   day: 20000,
   vote: 20000,
 };
+const AFK_VOTE_THRESHOLD = 2; // missed votes before AI takeover
 
 function log(...args) {
   console.log("[server]", ...args);
@@ -143,6 +144,10 @@ function startGame(theme = Theme.GOOD_VS_EVIL.id) {
   room.nightActions.clear();
   room.voteActions.clear();
   room.lastWords.clear();
+  // Reset AFK counters for all connections
+  for (const [, meta] of room.connections.entries()) {
+    if (meta) meta.missedVotes = 0;
+  }
   broadcast({ type: "started", theme, humans: humanIds.length });
   broadcastViews();
   scheduleNightTimer();
@@ -231,6 +236,7 @@ function scheduleDayToVote() {
 function scheduleVoteTimer() {
   startTimer("VOTE", DURATIONS.vote, () => {
     try {
+      checkAfkPlayers(); // must run before voteActions.clear()
       const humanVotes = Object.fromEntries(room.voteActions.entries());
       const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
       room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
@@ -435,6 +441,71 @@ function handleHostVacancy() {
   resetRoomState(true);
   room.host = null;
   scheduleLobbyBroadcast();
+}
+
+/**
+ * Check for AFK players after each vote phase.
+ * If a human player missed AFK_VOTE_THRESHOLD consecutive votes, AI takes over.
+ * If the kicked player was host, promote another human or reset.
+ */
+function checkAfkPlayers() {
+  if (!room.started || !room.engine) return;
+
+  // Find all human players who are alive and didn't vote this round
+  for (const [ws, meta] of room.connections.entries()) {
+    if (!meta || meta.spectator || meta.playerId === undefined) continue;
+    const player = room.engine.state.players?.[meta.playerId];
+    if (!player?.alive || !player.isHuman) continue;
+
+    if (room.voteActions.has(meta.playerId)) {
+      // Player voted — reset their AFK counter
+      meta.missedVotes = 0;
+    } else {
+      // Player didn't vote — increment AFK counter
+      meta.missedVotes = (meta.missedVotes || 0) + 1;
+      log(`Player ${player.name} missed vote (${meta.missedVotes}/${AFK_VOTE_THRESHOLD})`);
+
+      if (meta.missedVotes >= AFK_VOTE_THRESHOLD) {
+        // AFK threshold reached — AI takes over
+        player.isHuman = false;
+        if (!player.name.endsWith(" (AI)")) {
+          player.name = `${player.name} (AI)`;
+        }
+        log(`AFK: ${player.name} kicked after ${AFK_VOTE_THRESHOLD} missed votes, AI taking over`);
+        send(ws, { type: "error", message: `You have been replaced by AI after ${AFK_VOTE_THRESHOLD} missed votes.` });
+
+        // If this was the host, promote another human
+        if (room.host === ws) {
+          room.host = null;
+          // Find another connected human player
+          const nextHuman = Array.from(room.connections.entries()).find(
+            ([otherWs, otherMeta]) => otherWs !== ws && otherMeta?.playerId !== undefined &&
+              room.engine?.state?.players?.[otherMeta.playerId]?.isHuman
+          );
+          if (nextHuman) {
+            room.host = nextHuman[0];
+            send(room.host, { type: "host", value: true });
+            log(`Host promoted to ${nextHuman[1].name}`);
+          } else {
+            // No human players left — check if any connected at all
+            const anyConnected = Array.from(room.connections.entries()).find(
+              ([, m]) => m && m.playerId !== undefined
+            );
+            if (!anyConnected) {
+              log("No human players remaining, resetting room");
+              resetRoomState(true);
+              scheduleLobbyBroadcast();
+              return;
+            }
+            // Still have connections but all AI — pick any as host
+            room.host = anyConnected[0];
+            send(room.host, { type: "host", value: true });
+          }
+        }
+        broadcastViews();
+      }
+    }
+  }
 }
 
 function promoteWaitingSpectatorsToSeats() {
@@ -782,6 +853,7 @@ wss.on("connection", (ws, req) => {
         }
         if (!room.started || !room.engine) return;
         try {
+          checkAfkPlayers(); // must run before voteActions.clear()
           const humanVotes = Object.fromEntries(room.voteActions.entries());
           const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
           room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
