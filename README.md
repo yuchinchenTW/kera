@@ -41,6 +41,7 @@ npm start          # serves http://localhost:3001
 | `multiplayer.html` | 多人模式入口頁面 |
 | `styles.css` | 共用樣式表 |
 | `tests/simulate.js` | 無頭模擬測試，勝率分析工具 |
+| `tests/behavior_audit.js` | 250 場行為審計：驗證各角色行動/聊天/投票邏輯一致性 |
 
 ## Multiplayer / 多人模式
 
@@ -136,14 +137,16 @@ npm install && npm start
 - **自我辯護 Self-defense**：被指控的 AI 以投票記錄為證據進行反駁。
 - **紅方沉默策略 Red silence**：殺手偶爾保持沉默避免露餡；連續沉默 2 輪後強制發言。
 - **假警察宣告 Fake police claim**：殺手罕見策略（8%，每局一次），偽造警察調查結果來陷害藍方。
-- **信任建立 Trust building**：紅方 AI 先為真正的藍方辯護以建立可信度，再伺機出手。
-- **策略遺言 Strategic last words**：瀕死 AI 留下角色相關訊息 — 藍方指控/辯護、紅方虛張/栽贓、綠方威脅。警察傾倒所有調查結果。
-- **陣營私聊（日夜皆有）Faction chat**：殺手/警察/怨靈獸私人頻道討論 — 目標規劃、威脅預警、投票協調、調查分享。
+- **信任建立 Trust building**：紅方 AI 先為低嫌疑玩家辯護以建立可信度，再伺機出手。只有殺手能看到殺手隊友（用真實角色辯護），其他紅方（狙擊手等）依靠觀察推測，避免資訊外洩。
+- **策略遺言 Strategic last words**：瀕死 AI 留下角色相關訊息 — 藍方指控/辯護、紅方虛張/栽贓、綠方威脅。警察傾倒所有調查結果。遺言以 `[LAST]` 標記寫入 dayChat，AI 信念系統可解析為線索但不計入活人聊天活躍度。
+- **陣營私聊（日夜皆有）Faction chat**：殺手/警察/怨靈獸私人頻道，與實際 AI 決策邏輯統一。殺手夜間私聊呼叫真實目標選擇函式，白天描述實際投票策略分支（sell-out/scatter/split/mimic）；警察私聊引用真實調查目標與結果。回覆者針對 speaker 內容情境式回應，不再隨機挑模板。
 
 **投票策略 Vote Strategy:**
 - **投票時機感知 Vote timing**：第二輪跟風投票趨向共識目標。
 - **策略性棄權 Strategic abstaining**：低信心藍方 AI 可能棄權而非隨機投票。
-- **投票解釋 Vote explanation**：AI 投票後在聊天中解釋投票理由。
+- **投票解釋 Vote explanation**：AI 投票後在聊天中解釋投票理由（`[VOTE]` 標記，不會被下一輪信念系統重複計算）。
+- **投票修正 Vote correction**：當 AI 公聊指控 A 但實際投 B 時，補一句「改主意」修正句，減少表層不一致。
+- **跟隨警察揭露 Follow reveal**：藍方非警察在公聊中 85% 會呼應已揭露紅方（對應投票端 95% 跟投率）。
 - **分散投票 Vote scatter**：殺手協調分散票數到不同目標。
 
 **藍方（警察陣營）Blue Team:**
@@ -159,7 +162,7 @@ npm install && npm start
 
 **紅方（殺手陣營）Red Team:**
 - **殺手 Killer**：避開被保護目標，優先活躍發言者與警察；目標輪替（跳過被救者、變換活躍度特徵）。
-- **狙擊手 Sniper**：前期保守（第 1 天 30%），情報累積後轉為激進（第 3 天 65%+）。
+- **狙擊手 Sniper**：前期保守（第 1 天 30%），情報累積後轉為激進（第 3 天 65%+）。無法看到紅方隊友，依靠 suspicion 中位數過濾避免友射（跳過嫌疑最高 1/3 的候選人），優先射擊有正面藍方證據的目標（被救過、被紅方指控者）。
 - **恐怖份子 Terrorist**：安全時按兵不動，自身威脅高時（即將被投出）引爆。
 - **綁匪 Kidnapper**：鎖定高價值藍方（醫生 > 警察 > 特務）使其無法行動；永不綁架殺手隊友。
 - **縱火狂 Arsonist**：耐心標記 3+ 目標再引燃；標記高價值藍方；受威脅時恐慌引燃。
@@ -171,6 +174,12 @@ npm install && npm start
 - **怨靈獸（審判）Grudge Beast (judging)**：避免審判平民（會導致怨靈獸死亡）；偏好審判紅方（安全且情報給警察）。
 - **怨靈獸（狂暴）Grudge Beast (berserk)**：追蹤觸發狂暴的陣營並追殺；優先活躍發言者。
 - **喪屍 Zombie**：追蹤咬擊歷史 — 優先完成待轉化目標；避開可能被保護的目標。
+
+### 資訊完整性 Information Integrity
+AI 決策邏輯遵守與玩家相同的資訊可見性規則：
+- 平民投票邏輯不讀取隱藏角色（警察身份改由公開宣告 `roleClaims` 判斷，怨獸數量用主題預期數減已死數估算）。
+- 非殺手紅方（狙擊手、恐怖份子等）無法看到殺手隊友，公聊/遺言的「辯護盟友」改用低嫌疑玩家替代。
+- 投票後生成的解釋句（`[VOTE]`）和遺言（`[LAST]`）不會被下一輪信念系統當作新指控信號重複計算。
 
 ### 單人 vs 多人 AI Single-player vs Multiplayer AI
 - 單人模式：難度在建立遊戲時選擇。
@@ -287,8 +296,13 @@ node tests/simulate.js 100 GOOD_VS_EVIL hard --json  # 機器可讀 JSON 輸出
 node tests/simulate.js 100 --zh                      # 中文版結果輸出
 node tests/simulate.js 100 --zh --compare            # 中文版難度比較
 node tests/simulate.js --help                        # 顯示所有選項及可用主題
+node tests/behavior_audit.js                         # 250 場行為審計（行動/聊天/投票邏輯）
 ```
 
 輸出內容包括：陣營勝率、遊戲長度分佈、勝利原因、各角色統計（勝率、存活率、夜殺率、票殺率），以及可選的難度比較表。
 
 Output includes: faction win rates, game length distribution, victory reasons, per-role stats (win rate, survival rate, night-kill rate, vote-kill rate), and optional difficulty comparison table.
+
+行為審計輸出包括：警察調查準確度、殺手友射率/分散投票率/私聊目標命中率、醫生連續同目標率、狙擊手命中率、平民跟投率/聊天-投票一致性、死人發言檢測。
+
+Behavior audit output includes: police investigation accuracy, killer friendly-fire / scatter-vote / private-chat target hit rates, doctor consecutive-target rate, sniper accuracy, civilian follow-reveal / chat-vote consistency, dead-speaker detection.
