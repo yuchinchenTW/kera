@@ -930,10 +930,17 @@ export class GameEngine {
     }
 
     this.state.phase = Phase.DAY;
+    // Preserve any human messages already in dayChat (e.g. from night chat)
+    const priorHumanChat = (this.state.dayChat || []).slice();
     this.state.dayChat = generateChatLines(this.state);
+    if (priorHumanChat.length) {
+      this.state.dayChat = [...priorHumanChat, ...this.state.dayChat];
+    }
     generateFactionChat(this.state);
     this.state.chatLoggedForDay = this.state.dayNumber;
-    for (const line of this.state.dayChat) {
+    // Only push AI-generated lines to publicLog (human lines are already there)
+    const newLines = this.state.dayChat.slice(priorHumanChat.length);
+    for (const line of newLines) {
       this.state.publicLog.push(line);
     }
     const countsNow = factionCounts(this.state);
@@ -1005,7 +1012,14 @@ export class GameEngine {
       }
     }
 
-    const aiVotes = buildAiVoteActions(this.state, null, { includeHuman: opts.includeHuman === true });
+    // Pass current human vote distribution so AI can coordinate with human allies
+    const humanVoteDist = {};
+    for (const hv of humanVotesList) {
+      if (hv.targetId !== null && hv.targetId !== undefined) {
+        humanVoteDist[hv.targetId] = (humanVoteDist[hv.targetId] || 0) + 1;
+      }
+    }
+    const aiVotes = buildAiVoteActions(this.state, null, { includeHuman: opts.includeHuman === true, humanVoteDist });
     for (const v of aiVotes) {
       const actor = getPlayer(this.state, v.actorId);
       const target = getPlayer(this.state, v.targetId);
@@ -1102,6 +1116,8 @@ export class GameEngine {
     } else {
       this.state.phase = Phase.NIGHT;
       this.state.dayNumber += 1;
+      // Clear dayChat so only messages added during this night carry into the next day
+      this.state.dayChat = [];
     }
   }
 

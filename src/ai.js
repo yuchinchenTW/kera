@@ -325,13 +325,20 @@ function ensureBeliefs(state) {
               if (!other || other.id === sp.id) continue;
               if (line.includes(other.name)) {
                 entry.mentionedIds.push(other.id);
-                // Detect accuse/defend keywords in the English portion (before ||)
+                // Detect accuse/defend keywords in both English (before ||) and Chinese (after ||)
                 const enPart = line.split("||")[0] || line;
                 const lowerEn = enPart.toLowerCase();
-                if (lowerEn.includes("suspicious") || lowerEn.includes("killer") || lowerEn.includes("vote") || lowerEn.includes("doesn't add up") || lowerEn.includes("acting weird") || lowerEn.includes("don't trust")) {
+                const zhPart = line.includes("||") ? line.split("||")[1] : line;
+                if (
+                  lowerEn.includes("suspicious") || lowerEn.includes("killer") || lowerEn.includes("vote") || lowerEn.includes("doesn't add up") || lowerEn.includes("acting weird") || lowerEn.includes("don't trust") ||
+                  zhPart.includes("可疑") || zhPart.includes("殺手") || zhPart.includes("投") || zhPart.includes("矛盾") || zhPart.includes("奇怪") || zhPart.includes("不信任") || zhPart.includes("有問題") || zhPart.includes("不對勁") || zhPart.includes("懷疑")
+                ) {
                   entry.accusedId = other.id;
                 }
-                if (lowerEn.includes("on our side") || lowerEn.includes("seems fine") || lowerEn.includes("leave") || lowerEn.includes("helpful") || lowerEn.includes("clean") || lowerEn.includes("innocent") || lowerEn.includes("confirmed blue") || lowerEn.includes("protect") || lowerEn.includes("don't vote") || lowerEn.includes("wrong about") || lowerEn.includes("ganging up") || lowerEn.includes("no proof")) {
+                if (
+                  lowerEn.includes("on our side") || lowerEn.includes("seems fine") || lowerEn.includes("leave") || lowerEn.includes("helpful") || lowerEn.includes("clean") || lowerEn.includes("innocent") || lowerEn.includes("confirmed blue") || lowerEn.includes("protect") || lowerEn.includes("don't vote") || lowerEn.includes("wrong about") || lowerEn.includes("ganging up") || lowerEn.includes("no proof") ||
+                  zhPart.includes("沒問題") || zhPart.includes("清白") || zhPart.includes("無辜") || zhPart.includes("好人") || zhPart.includes("保護") || zhPart.includes("別投") || zhPart.includes("不要投") || zhPart.includes("站同邊") || zhPart.includes("冤枉") || zhPart.includes("沒證據") || zhPart.includes("相信")
+                ) {
                   entry.defendedId = other.id;
                 }
               }
@@ -339,6 +346,44 @@ function ensureBeliefs(state) {
             p.aiMemory.chatMemory.push(entry);
             break; // only one speaker per line
           }
+        }
+      }
+
+      // ── Parse faction chat from human teammates as reasoning input ──
+      const factionChat =
+        p.role === Roles.KILLER.id ? (state.killerChat || []) :
+        p.role === Roles.POLICE.id ? (state.policeChat || []) :
+        p.role === Roles.GRUDGE_BEAST.id ? (state.grudgeChat || []) : [];
+      for (const line of factionChat) {
+        // Skip lines already parsed (AI-generated lines are usually in dayChat too)
+        let speakerFound = false;
+        for (const sp of state.players) {
+          if (!sp || !line.startsWith(sp.name + ":") || !sp.isHuman) continue;
+          speakerFound = true;
+          const entry = { day: dayNum, speakerId: sp.id, mentionedIds: [], accusedId: null, defendedId: null, source: "faction" };
+          for (const other of state.players) {
+            if (!other || other.id === sp.id) continue;
+            if (line.includes(other.name)) {
+              entry.mentionedIds.push(other.id);
+              const enPart = line.split("||")[0] || line;
+              const lowerEn = enPart.toLowerCase();
+              const zhPart = line.includes("||") ? line.split("||")[1] : line;
+              if (
+                lowerEn.includes("target") || lowerEn.includes("kill") || lowerEn.includes("suspicious") || lowerEn.includes("vote") ||
+                zhPart.includes("目標") || zhPart.includes("殺") || zhPart.includes("可疑") || zhPart.includes("投")
+              ) {
+                entry.accusedId = other.id;
+              }
+              if (
+                lowerEn.includes("protect") || lowerEn.includes("safe") || lowerEn.includes("trust") || lowerEn.includes("skip") ||
+                zhPart.includes("保護") || zhPart.includes("安全") || zhPart.includes("相信") || zhPart.includes("跳過") || zhPart.includes("別動")
+              ) {
+                entry.defendedId = other.id;
+              }
+            }
+          }
+          if (entry.mentionedIds.length > 0) p.aiMemory.chatMemory.push(entry);
+          break;
         }
       }
     }
@@ -2735,6 +2780,7 @@ export function buildAiNightActions(state, opts = {}) {
 
 export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const includeHuman = opts.includeHuman === true;
+  const humanVoteDist = opts.humanVoteDist || {};
   const hard = isHard(state);
   ensureBeliefs(state);
   const chatMentions = {};
@@ -3198,6 +3244,12 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
           }
         }
 
+        // Bandwagon: AI allies follow human teammate vote momentum
+        if (hard) {
+          const humanVotes = humanVoteDist[t.id] || 0;
+          if (humanVotes > 0) s += 0.12 * humanVotes;
+        }
+
         s = clamp(s, 0, 1);
         if (s > bestScore || (s === bestScore && state.rng() < 0.5)) {
           bestScore = s;
@@ -3295,7 +3347,9 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       if (!target) continue;
       if (state.rng() < 0.4) continue; // not everyone explains
       const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.voteExplain);
-      state.dayChat.push(tmpl(actor.name, target.name));
+      const line = tmpl(actor.name, target.name);
+      state.dayChat.push(line);
+      state.publicLog.push(line);
       explained++;
     }
   }

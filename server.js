@@ -599,8 +599,23 @@ wss.on("connection", (ws, req) => {
         {
           const actorPlayer = room.engine.state.players?.[seat.playerId];
           const actorRole = actorPlayer?.role;
-          const actionLabel = msg.action.type.replace(/_/g, " ").toLowerCase();
-          const line = `[${actorName}] ${actionLabel} → ${targetName || "abstain"}`;
+          const actionLabelEn = msg.action.type.replace(/_/g, " ").toLowerCase();
+          const actionZhMap = {
+            "killer vote": "殺手投票", "police investigate": "警察調查",
+            "doctor inject": "醫生注射", "sniper shot": "狙擊手射擊",
+            "agent protect": "特務保護", "fiend protect": "天邪鬼吸收",
+            "fiend shoot": "天邪鬼射擊", "terror bomb": "恐怖份子炸彈",
+            "cowboy gamble": "牛仔賭命", "kidnap": "綁架",
+            "zombie bite": "殭屍咬", "riot smoke": "鎮暴警察煙霧",
+            "arson mark": "縱火犯標記", "arson ignite": "縱火犯點燃",
+            "vine seed": "藤蔓惡魔播種", "nightmare attack": "夢魘惡魔攻擊",
+            "exorcist strike": "驅魔師打擊", "necromancer curse": "死靈法師詛咒",
+            "purify": "淨化", "grudge judge": "怨獸審判", "grudge kill vote": "怨獸殺戮投票",
+          };
+          const actionZh = actionZhMap[actionLabelEn] || actionLabelEn;
+          const targetEn = targetName || "abstain";
+          const targetZh = targetName || "棄權";
+          const line = `[${actorName}] ${actionLabelEn} → ${targetEn}||[${actorName}] ${actionZh} → ${targetZh}`;
 
           // Only KILLER, POLICE, GRUDGE_BEAST share action logs with same-role allies.
           let chatArray = null;
