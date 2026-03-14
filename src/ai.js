@@ -109,6 +109,28 @@ function analyzeVotingPatterns(state) {
 }
 
 /**
+ * Returns the publicly-known revealed red player ID.
+ * Police can always see policeRevealedRed (it's their own intel).
+ * Other roles only see it after police announced it in public chat (policePublicRevealedRed).
+ */
+function publicRevealedRed(state, actor) {
+  // Police always know their own investigation results
+  if (actor && actor.role === Roles.POLICE.id) return state.policeRevealedRed ?? null;
+  // Others only know if it was publicly announced
+  return state.policePublicRevealedRed ?? null;
+}
+
+/**
+ * Returns policeConfirmed data gated by public visibility.
+ * Police always see their own confirmations; other roles only see them
+ * once the police reveal has been made public (policePublicRevealedRed is set).
+ */
+function publicPoliceConfirmed(state, actor) {
+  if (actor && actor.role === Roles.POLICE.id) return state.policeConfirmed ?? null;
+  return (state.policePublicRevealedRed != null) ? (state.policeConfirmed ?? null) : null;
+}
+
+/**
  * Track chat activity: who mentions whom, who defends/accuses whom.
  */
 function analyzeChatBehavior(state) {
@@ -157,8 +179,8 @@ function computeSelfThreat(state, actor) {
     const maxMention = Math.max(1, ...Object.values(mentions));
     threat += (myMentions / maxMention) * 0.2;
   }
-  // Am I the police-revealed red?
-  if (state.policeRevealedRed === actor.id) threat += 0.5;
+  // Am I the publicly-revealed red? (only know if police announced it)
+  if ((state.policePublicRevealedRed ?? null) === actor.id) threat += 0.5;
   return clamp(threat, 0, 1);
 }
 
@@ -176,7 +198,8 @@ function applyDeductionChains(state, p) {
   // Trust propagation: If police confirmed A is blue, and A consistently defends B, B gets blue boost
   const confirmedBlues = new Set();
   const confirmedReds = new Set();
-  if (state.policeRevealedRed !== null) confirmedReds.add(state.policeRevealedRed);
+  const pubRevealed = publicRevealedRed(state, p);
+  if (pubRevealed !== null) confirmedReds.add(pubRevealed);
   // Scan chat memory for defense patterns from confirmed blues
   for (const targetId of living) {
     if (targetId === p.id) continue;
@@ -286,7 +309,7 @@ function ensureBeliefs(state) {
   const diffScaleMap = { easy: 0.6, normal: 1, hard: 1.3, nightmare: 1.6 };
   const diffScale = diffScaleMap[state.difficulty || "normal"] ?? 1;
   const hard = isHard(state);
-  const revealedRed = state.policeRevealedRed;
+  // revealedRed is set per-player inside the loop via publicRevealedRed()
   const lastVoteHist = state.history?.votes?.[state.history.votes.length - 1] || null;
   const mentionMax = lastVoteHist?.mentions ? Math.max(1, ...Object.values(lastVoteHist.mentions)) : 1;
   const flipSet = new Set(lastVoteHist?.flips || []);
@@ -307,6 +330,7 @@ function ensureBeliefs(state) {
   for (const p of alivePlayers(state)) {
     if (p.isHuman) continue;
     ensureAdvancedMemory(p);
+    const revealedRed = publicRevealedRed(state, p);
 
     // Update self-threat
     if (hard) {
@@ -1040,7 +1064,7 @@ function pickTerroristSmartTarget(state, actor) {
   // Terrorist does NOT know who other reds are (different role = no shared info).
   // Use public info only: policeRevealedRed, dead player factions, AI suspicion.
   const knownReds = new Set();
-  if (state.policeRevealedRed !== null) knownReds.add(state.policeRevealedRed);
+  if ((state.policePublicRevealedRed ?? null) !== null) knownReds.add((state.policePublicRevealedRed ?? null));
   for (const p of state.players) {
     if (!p.alive && p.faction === Faction.RED) knownReds.add(p.id);
   }
@@ -1084,7 +1108,7 @@ function pickTerroristSmartTarget(state, actor) {
     if (blueProb > 0.5) score += speakRatio * 0.3;
 
     // Police-confirmed red? NEVER bomb — guaranteed only self dies
-    if (state.policeConfirmed?.[t.id]) score -= 3.0;
+    if (publicPoliceConfirmed(state, actor)?.[t.id]) score -= 3.0;
 
     // Voted together with known reds = possibly red ally, avoid
     if (votePatterns) {
@@ -1164,7 +1188,7 @@ function pickKillerSmartTarget(state, actor) {
   for (const p of state.players) {
     if (!p.alive && p.faction === Faction.RED) knownDeadReds.add(p.id);
   }
-  if (state.policeRevealedRed !== null) knownDeadReds.add(state.policeRevealedRed);
+  if ((state.policePublicRevealedRed ?? null) !== null) knownDeadReds.add((state.policePublicRevealedRed ?? null));
   for (const p of state.players) {
     if (!p.aiMemory?.chatMemory) continue;
     for (const m of p.aiMemory.chatMemory) {
@@ -1319,7 +1343,7 @@ function pickCowboySmartTarget(state, actor) {
 
   // Identify confirmed reds for vote-pattern cross-referencing
   const confirmedReds = new Set();
-  if (state.policeRevealedRed !== null) confirmedReds.add(state.policeRevealedRed);
+  if ((state.policePublicRevealedRed ?? null) !== null) confirmedReds.add((state.policePublicRevealedRed ?? null));
   for (const p of state.players) {
     if (!p.alive && p.faction === Faction.RED) confirmedReds.add(p.id);
   }
@@ -1355,7 +1379,7 @@ function pickCowboySmartTarget(state, actor) {
       const speaker = getPlayer(state, m.speakerId);
       if (!speaker) continue;
       const isKnownRed = (!speaker.alive && speaker.faction === Faction.RED) ||
-        (state.policeConfirmed?.[m.speakerId] === true);
+        (publicPoliceConfirmed(state, actor)?.[m.speakerId] === true);
       if (isKnownRed) accusedByRedIds.add(m.accusedId);
     }
   }
@@ -1384,7 +1408,7 @@ function pickCowboySmartTarget(state, actor) {
     score -= blueProb * 0.3;
 
     // Bonus: police revealed this player as red — confirmed target
-    if (state.policeRevealedRed === t.id) score += 0.6;
+    if ((state.policePublicRevealedRed ?? null) === t.id) score += 0.6;
 
     // Penalty: saved by doctor = confirmed blue
     if (savedLastNight.has(t.id)) score -= 0.5;
@@ -1461,7 +1485,7 @@ function pickSniperSmartTarget(state, actor) {
   }
   // Players accused by known reds are likely blue
   const knownRedIds = new Set();
-  if (state.policeRevealedRed !== null) knownRedIds.add(state.policeRevealedRed);
+  if ((state.policePublicRevealedRed ?? null) !== null) knownRedIds.add((state.policePublicRevealedRed ?? null));
   for (const p of state.players) {
     if (!p.alive && p.faction === Faction.RED) knownRedIds.add(p.id);
   }
@@ -1699,6 +1723,8 @@ export function buildAiNightActions(state, opts = {}) {
         if (state.usage.doctorInjections < (Roles.DOCTOR.maxInjections || 0)) {
           let target = actor;
           const dayNum = state.dayNumber || 1;
+          // Safety: never self-inject if already at overdose risk (emptyInjections >= 1)
+          const selfOverdoseRisk = actor.emptyInjections >= 1;
           // Hard+: self-protect decision based on self-threat level + game phase
           const selfThreat = actor.aiMemory?.selfThreat ?? 0;
           let selfProtectChance;
@@ -1719,7 +1745,7 @@ export function buildAiNightActions(state, opts = {}) {
                 return p.aiMemory.chatMemory.some((m) => {
                   if (m.accusedId !== actor.id) return false;
                   const sp = getPlayer(state, m.speakerId);
-                  return sp && ((!sp.alive && sp.faction === Faction.RED) || state.policeConfirmed?.[m.speakerId] === true);
+                  return sp && ((!sp.alive && sp.faction === Faction.RED) || publicPoliceConfirmed(state, actor)?.[m.speakerId] === true);
                 });
               });
               if (selfAccusedByRed) selfProtectChance = clamp(selfProtectChance + 0.1, 0.1, 0.8);
@@ -1727,8 +1753,8 @@ export function buildAiNightActions(state, opts = {}) {
           } else {
             selfProtectChance = 0.3;
           }
-          if (state.rng() > selfProtectChance) {
-            // Protect someone else
+          if (selfOverdoseRisk || state.rng() > selfProtectChance) {
+            // Protect someone else (forced if self-inject would cause overdose)
             let best = null;
             let bestScore = -Infinity;
             // Pre-compute chat behavior once (not per candidate)
@@ -1815,7 +1841,7 @@ export function buildAiNightActions(state, opts = {}) {
               for (const p of state.players) {
                 if (!p.alive && p.faction === Faction.RED) knownDeadReds.add(p.id);
               }
-              if (state.policeRevealedRed !== null) knownDeadReds.add(state.policeRevealedRed);
+              if ((state.policePublicRevealedRed ?? null) !== null) knownDeadReds.add((state.policePublicRevealedRed ?? null));
               for (const p of state.players) {
                 if (!p.aiMemory?.chatMemory) continue;
                 for (const m of p.aiMemory.chatMemory) {
@@ -1844,7 +1870,7 @@ export function buildAiNightActions(state, opts = {}) {
                   const speaker = getPlayer(state, m.speakerId);
                   if (!speaker) continue;
                   const isKnownRed = (!speaker.alive && speaker.faction === Faction.RED) ||
-                    (state.policeConfirmed?.[m.speakerId] === true);
+                    (publicPoliceConfirmed(state, actor)?.[m.speakerId] === true);
                   if (isKnownRed) accusedByRedIds.add(m.accusedId);
                 }
               }
@@ -1948,7 +1974,7 @@ export function buildAiNightActions(state, opts = {}) {
                 best = t;
               }
             }
-            target = best || actor;
+            target = best || (selfOverdoseRisk ? null : actor);
           }
           if (target) {
             actions.push({ actorId: actor.id, type: "DOCTOR_INJECT", targetId: target.id });
@@ -1995,7 +2021,7 @@ export function buildAiNightActions(state, opts = {}) {
 
           // Pre-compute: known reds, saved targets
           const knownReds = new Set();
-          if (state.policeRevealedRed !== null) knownReds.add(state.policeRevealedRed);
+          if ((state.policePublicRevealedRed ?? null) !== null) knownReds.add((state.policePublicRevealedRed ?? null));
           for (const dp of state.players) {
             if (!dp.alive && dp.faction === Faction.RED) knownReds.add(dp.id);
           }
@@ -2027,7 +2053,7 @@ export function buildAiNightActions(state, opts = {}) {
             const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
 
             // Skip: don't protect known/likely reds
-            if (state.policeConfirmed?.[t.id]) continue;
+            if (publicPoliceConfirmed(state, actor)?.[t.id]) continue;
             if (redProb > 0.7) continue;
 
             // Simulate killer's view of this target (how attractive to kill?)
@@ -2170,12 +2196,13 @@ export function buildAiNightActions(state, opts = {}) {
           let triggerChance;
           const dayNum = state.dayNumber || 1;
 
-          if (dayNum <= 1 && state.policeRevealedRed !== actor.id) {
+          if (dayNum <= 1 && selfThreat < 0.5) {
             // Day 1: beliefs are unreliable, hold bomb (5% emergency only)
             triggerChance = 0.05;
-          } else if (state.policeRevealedRed === actor.id) {
-            // Exposed — 95% trigger (last chance before vote execution)
-            triggerChance = 0.95;
+          } else if (selfThreat > 0.7) {
+            // About to be voted out — desperate bomb (terrorist appears BLUE to police,
+            // so policeRevealedRed won't point at us; use selfThreat as the trigger instead)
+            triggerChance = clamp(0.6 + selfThreat * 0.3, 0.7, 0.95);
           } else if (selfThreat > 0.6) {
             // High threat — likely to be voted out
             triggerChance = clamp(0.5 + selfThreat * 0.4, 0.5, 0.9);
@@ -2260,7 +2287,7 @@ export function buildAiNightActions(state, opts = {}) {
             if (aliveCount <= 5 && !underPressure) threshold = clamp(threshold + 0.1, 0.3, 0.75);
 
             // Police confirmed red: override threshold — shoot with near certainty
-            if (state.policeRevealedRed === bestTarget.id) threshold = 0.15;
+            if ((state.policePublicRevealedRed ?? null) === bestTarget.id) threshold = 0.15;
 
             // EV check: P(hit red) × value - P(backfire) × cost
             // 2/6 kill, 3/6 nothing, 1/6 wild (target + bystander + self die)
@@ -2378,7 +2405,7 @@ export function buildAiNightActions(state, opts = {}) {
               }
 
               // Police-confirmed red: very high priority
-              if (state.policeRevealedRed === t.id) score += 1.0;
+              if ((state.policePublicRevealedRed ?? null) === t.id) score += 1.0;
 
               // Late-game urgency
               if (bluePressure && dayNum >= 3) score *= 1.2;
@@ -2520,7 +2547,7 @@ export function buildAiNightActions(state, opts = {}) {
 
           // Confirmed reds (dead + revealed)
           const exKnownReds = new Set();
-          if (state.policeRevealedRed !== null) exKnownReds.add(state.policeRevealedRed);
+          if ((state.policePublicRevealedRed ?? null) !== null) exKnownReds.add((state.policePublicRevealedRed ?? null));
           for (const p of state.players) {
             if (!p.alive && p.faction === Faction.RED) exKnownReds.add(p.id);
           }
@@ -2549,7 +2576,7 @@ export function buildAiNightActions(state, opts = {}) {
               if (m.accusedId === null) continue;
               const sp = getPlayer(state, m.speakerId);
               if (!sp) continue;
-              if ((!sp.alive && sp.faction === Faction.RED) || state.policeConfirmed?.[m.speakerId] === true) {
+              if ((!sp.alive && sp.faction === Faction.RED) || publicPoliceConfirmed(state, actor)?.[m.speakerId] === true) {
                 exAccusedByRed.add(m.accusedId);
               }
             }
@@ -2603,7 +2630,7 @@ export function buildAiNightActions(state, opts = {}) {
               score += nightmareProb * 0.5;
 
               // Bonus: police revealed this target as red — guaranteed hit
-              if (state.policeRevealedRed === t.id) score += 2.0;
+              if ((state.policePublicRevealedRed ?? null) === t.id) score += 2.0;
 
               // Bonus: voted with known reds
               if (exVotePatterns) {
@@ -2671,7 +2698,7 @@ export function buildAiNightActions(state, opts = {}) {
             if (picks.length >= maxPicksThisNight) break;
             const threshold = thresholds[picks.length] ?? 0.9;
             // Police revealed red: always strike (override threshold)
-            if (state.policeRevealedRed === c.player.id) {
+            if ((state.policePublicRevealedRed ?? null) === c.player.id) {
               picks.push(c.player);
               continue;
             }
@@ -2686,7 +2713,7 @@ export function buildAiNightActions(state, opts = {}) {
           // is worth attempting since killing a red is a free elimination
           if (picks.length === 0 && candidates.length > 0) {
             const top = candidates[0];
-            if (top.redProb > 0.28 || top.score > 0.8 || state.policeRevealedRed === top.player.id) {
+            if (top.redProb > 0.28 || top.score > 0.8 || (state.policePublicRevealedRed ?? null) === top.player.id) {
               picks.push(top.player);
             }
           }
@@ -2756,7 +2783,7 @@ export function buildAiNightActions(state, opts = {}) {
             // Nightmare demon: blocking their civilian kills is high value
             score += nightmareProb * 0.8;
             // Bonus: revealed red — cleanse to block their night action
-            if (state.policeRevealedRed === t.id) score += 0.6;
+            if ((state.policePublicRevealedRed ?? null) === t.id) score += 0.6;
             if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
               bestScore = score;
               best = t;
@@ -2871,6 +2898,17 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const maxMention = Math.max(1, ...Object.values(chatMentions));
   const chatWeight = (id) => (chatMentions[id] || 0) / maxMention;
 
+  // Check if police publicly revealed a red in this round's dayChat
+  // Non-police should only follow the reveal if it was actually announced
+  const revealedRedTarget = (state.policePublicRevealedRed ?? null) !== null ? getPlayer(state, (state.policePublicRevealedRed ?? null)) : null;
+  const policePubliclyRevealed = revealedRedTarget && chats.some((line) => {
+    if (line.startsWith("[VOTE] ") || line.startsWith("[LAST] ")) return false;
+    // Check if any police speaker mentioned the revealed red with accusation keywords
+    const en = (line.split("||")[0] || "").toLowerCase();
+    return line.includes(revealedRedTarget.name) &&
+      (en.includes("red") || en.includes("confirmed") || en.includes("investigation"));
+  });
+
   // Hard+: behavioral analysis for vote scoring
   const votePatterns = hard ? analyzeVotingPatterns(state) : null;
 
@@ -2896,9 +2934,9 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
   }
 
-  // Hard+: collect police-confirmed reds (policeConfirmed stores only reds)
+  // Hard+: collect police-confirmed reds — only if publicly revealed
   const confirmedRedIds = new Set();
-  if (hard && state.policeConfirmed) {
+  if (hard && state.policePublicRevealedRed != null && state.policeConfirmed) {
     for (const [id, result] of Object.entries(state.policeConfirmed)) {
       if (result === true) confirmedRedIds.add(Number(id));
     }
@@ -2949,7 +2987,7 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         const speaker = getPlayer(state, m.speakerId);
         if (!speaker) continue;
         const isKnownRed = (!speaker.alive && speaker.faction === Faction.RED) ||
-          (state.policeConfirmed?.[m.speakerId] === true);
+          (state.policePublicRevealedRed != null && state.policeConfirmed?.[m.speakerId] === true);
         if (isKnownRed) accusedByRedIds.add(m.accusedId);
       }
     }
@@ -3051,7 +3089,7 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       if (votePhase === "late") abstainChance = 0.05;
       if (actor.aiMemory.personality === "cautious") abstainChance += 0.1;
       if (actor.aiMemory.personality === "aggressive") abstainChance -= 0.08;
-      if (topSusp < 0.35 && state.policeRevealedRed === null && state.rng() < abstainChance) {
+      if (topSusp < 0.35 && (state.policePublicRevealedRed ?? null) === null && state.rng() < abstainChance) {
         // Abstain — low confidence, no police intel
         return;
       }
@@ -3061,8 +3099,8 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     // Before revealed: blend in by voting with the crowd
     if (hard && actor.role === Roles.BRAT.id && !actor.status.bratRevealed) {
       // Follow police reveal if available
-      if (state.policeRevealedRed !== null) {
-        const redTarget = getPlayer(state, state.policeRevealedRed);
+      if ((state.policePublicRevealedRed ?? null) !== null) {
+        const redTarget = getPlayer(state, (state.policePublicRevealedRed ?? null));
         if (redTarget?.alive) {
           votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
           return;
@@ -3096,7 +3134,8 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         return;
       }
     }
-    if (state.policeRevealedRed !== null && actor.faction === Faction.BLUE && actor.role !== Roles.POLICE.id) {
+    // Non-police blue: only follow reveal if police actually announced it in public chat
+    if (policePubliclyRevealed && actor.faction === Faction.BLUE && actor.role !== Roles.POLICE.id) {
       const redTarget = getPlayer(state, state.policeRevealedRed);
       const followPoliceChance = { easy: 0.5, normal: 0.7, hard: 0.95, nightmare: 0.98 };
       const chance = followPoliceChance[state.difficulty || "normal"] ?? 0.7;
@@ -3113,7 +3152,8 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
 
     // Hard+ 紅方策略投票
     if (hard && actor.faction === Faction.RED) {
-      const redTargetId = state.policeRevealedRed;
+      // Red only knows about exposed teammate if police publicly announced it
+      const redTargetId = policePubliclyRevealed ? state.policeRevealedRed : null;
       const exposedRed =
         redTargetId !== null ? getPlayer(state, redTargetId) : null;
 
@@ -3590,10 +3630,10 @@ const CHAT_TEMPLATES = {
   ],
   // Improvement 10: Vote explanation chat
   followReveal: [
-    (s, t) => `${s}: ${t} is confirmed red — I'm voting them, no question.||${s}：${t} 確認是紅方——我一定投他，沒問題。`,
-    (s, t) => `${s}: Police confirmed ${t} is red. Let's all vote them out.||${s}：警察確認 ${t} 是紅方。大家一起投掉他。`,
-    (s, t) => `${s}: Voting ${t} — the police have spoken.||${s}：投 ${t}——警察已經說了。`,
-    (s, t) => `${s}: ${t} is red, no doubt. Focus fire.||${s}：${t} 是紅方，毫無疑問。集火投他。`,
+    (s, t) => `${s}: If the police say ${t} is red, I'm voting them.||${s}：如果警察說 ${t} 是紅方，我就投他。`,
+    (s, t) => `${s}: I trust the police on this — voting ${t}.||${s}：這次我相信警察——投 ${t}。`,
+    (s, t) => `${s}: ${t} was called out as red. I'll follow that lead.||${s}：${t} 被指認紅方了。我跟著投。`,
+    (s, t) => `${s}: Sounds like ${t} is red. Count me in on the vote.||${s}：聽起來 ${t} 是紅方。算我一票。`,
   ],
   voteExplain: [
     (s, t) => `${s}: I'm voting ${t} because their behavior has been suspicious.||${s}：我投 ${t}，因為他行為一直很可疑。`,
@@ -3685,6 +3725,10 @@ export function generateChatLines(state, maxLines = 6) {
 
   // Track who accused whom in this round for bandwagon detection (improvement 6)
   const accuseCounts = {}; // accuseCounts[targetId] = count of accuse lines
+  // Track whether police has publicly revealed a red in this round's chat
+  let policeRevealedInChat = false;
+  // Track speakers who already have a line (prevent contradictory replies)
+  const spokenSpeakers = new Set();
 
   // Advanced: Game phase for chat tone adjustment
   const gamePhase = hard ? getGamePhase(state) : "mid";
@@ -3745,8 +3789,9 @@ export function generateChatLines(state, maxLines = 6) {
         state.policeRevealedRed === null &&
         (state.dayNumber || 1) >= 2 &&
         state.rng() < 0.08) {
-      const blueTargets = allCandidates.filter((t) => t.faction === Faction.BLUE);
-      const frameTarget = randomChoice(blueTargets.length ? blueTargets : allCandidates, state.rng);
+      // Killers know other killers, so target non-killers (likely blue)
+      const framePool = allCandidates.filter((t) => t.role !== Roles.KILLER.id);
+      const frameTarget = randomChoice(framePool.length ? framePool : allCandidates, state.rng);
       if (frameTarget) {
         const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.fakePoliceClaim);
         lines.push(tmpl(speaker.name, frameTarget.name));
@@ -3757,9 +3802,9 @@ export function generateChatLines(state, maxLines = 6) {
 
     // ── Improvement 14: Trust building chat (15% chance for hard RED AI) ──
     if (hard && isRedSpeaker && state.rng() < 0.15) {
-      // Defend genuinely blue players (not allies) to seem credible
-      const blueTargets = allCandidates.filter((t) => t.faction === Faction.BLUE);
-      const trustTarget = randomChoice(blueTargets.length ? blueTargets : allCandidates, state.rng);
+      // Defend low-suspicion players to seem credible (no true faction access)
+      const lowSusp = allCandidates.filter((t) => (speaker.aiMemory?.suspicion?.[t.id] ?? 0.5) < 0.35);
+      const trustTarget = randomChoice(lowSusp.length ? lowSusp : allCandidates, state.rng);
       if (trustTarget) {
         const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.trustBuild);
         lines.push(tmpl(speaker.name, trustTarget.name));
@@ -3920,6 +3965,10 @@ export function generateChatLines(state, maxLines = 6) {
           if (infoParts.length > 0) {
             const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeDeathDump);
             lines.push(tmpl(speaker.name, infoParts.join(", ")));
+            if (results.some((r) => r.result === "red")) {
+              policeRevealedInChat = true;
+              state.policePublicRevealedRed = state.policeRevealedRed;
+            }
             continue;
           }
         }
@@ -3933,6 +3982,8 @@ export function generateChatLines(state, maxLines = 6) {
             if (redTarget) {
               const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeRevealRed);
               lines.push(tmpl(speaker.name, redTarget.name));
+              policeRevealedInChat = true;
+              state.policePublicRevealedRed = state.policeRevealedRed;
               continue;
             }
           }
@@ -3961,11 +4012,13 @@ export function generateChatLines(state, maxLines = 6) {
     if (speaker.role === Roles.POLICE.id && redFound?.alive && state.rng() < 0.8) {
       const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeReveal);
       lines.push(tmpl(speaker.name, redFound.name));
+      policeRevealedInChat = true;
+      state.policePublicRevealedRed = state.policeRevealedRed;
       continue;
     }
 
-    // ── Blue non-police follow police reveal (mirrors 95% vote-follow logic) ──
-    if (hard && state.policeRevealedRed !== null && speaker.faction === Faction.BLUE && speaker.role !== Roles.POLICE.id) {
+    // ── Blue non-police follow police reveal — ONLY after police has publicly announced ──
+    if (hard && policeRevealedInChat && state.policeRevealedRed !== null && speaker.faction === Faction.BLUE && speaker.role !== Roles.POLICE.id) {
       const revealedTarget = getPlayer(state, state.policeRevealedRed);
       if (revealedTarget?.alive && state.rng() < 0.85) {
         const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.followReveal);
@@ -4017,9 +4070,12 @@ export function generateChatLines(state, maxLines = 6) {
         continue;
       }
 
-      // Bluff — aggressively accuse an innocent
+      // Bluff — aggressively accuse someone believed to be non-red
       if (deceptionRoll < bluffThreshold) {
-        const innocents = allCandidates.filter((t) => t.faction !== Faction.RED);
+        // Killers know other killers; non-Killer reds use suspicion
+        const innocents = speaker.role === Roles.KILLER.id
+          ? allCandidates.filter((t) => t.role !== Roles.KILLER.id)
+          : allCandidates.filter((t) => (speaker.aiMemory?.suspicion?.[t.id] ?? 0.5) < 0.4);
         const bluffTarget = randomChoice(innocents.length ? innocents : allCandidates, state.rng);
         if (bluffTarget) {
           const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.bluff);
@@ -4139,6 +4195,12 @@ export function generateChatLines(state, maxLines = 6) {
   }
 
   // ── Improvement 5: Responsive chat (reply to accusation lines) ──
+  // Build set of speakers who already have a line to prevent contradictions
+  for (const line of lines) {
+    for (const p of state.players) {
+      if (p && line.startsWith(p.name + ":")) { spokenSpeakers.add(p.name); break; }
+    }
+  }
   if (hard && lines.length > 0) {
     const replyLines = [];
     for (const line of lines) {
@@ -4160,9 +4222,9 @@ export function generateChatLines(state, maxLines = 6) {
       }
       if (!speakerName || !accusedName) continue;
 
-      // Pick a responder (different from speaker and accused)
+      // Pick a responder (different from speaker, accused, and anyone who already spoke)
       const responders = living.filter(
-        (p) => p.name !== speakerName && p.name !== accusedName
+        (p) => p.name !== speakerName && p.name !== accusedName && !spokenSpeakers.has(p.name)
       );
       const responder = randomChoice(responders, state.rng);
       if (!responder) continue;
@@ -4493,9 +4555,9 @@ export function generateNightFactionChat(state) {
         (a.aiMemory?.selfThreat ?? 0) > (b.aiMemory?.selfThreat ?? 0) ? a : b, allKillersAlive[0]);
       const exposedThreat = mostExposed?.aiMemory?.selfThreat ?? 0;
 
-      // Police reveal danger
-      const policeRevealed = state.policeRevealedRed !== null;
-      const revealedIsUs = policeRevealed && allKillersAlive.some((k) => k.id === state.policeRevealedRed);
+      // Police reveal danger — only if publicly announced
+      const policeRevealed = (state.policePublicRevealedRed ?? null) !== null;
+      const revealedIsUs = policeRevealed && allKillersAlive.some((k) => k.id === state.policePublicRevealedRed);
 
       // ─ Build tactical lines ─
       if (isFirstNight) {
@@ -4772,10 +4834,10 @@ export function generateFactionChat(state) {
         }
       }
 
-      // ─ Vote strategy: describe what AI will actually do ─
-      const policeRevealed = state.policeRevealedRed !== null;
-      const revealedIsUs = policeRevealed && allKillersAlive.some((k) => k.id === state.policeRevealedRed);
-      const exposed = revealedIsUs ? allKillersAlive.find((k) => k.id === state.policeRevealedRed) : null;
+      // ─ Vote strategy: describe what AI will actually do (only react to public reveals) ─
+      const policeRevealed = (state.policePublicRevealedRed ?? null) !== null;
+      const revealedIsUs = policeRevealed && allKillersAlive.some((k) => k.id === state.policePublicRevealedRed);
+      const exposed = revealedIsUs ? allKillersAlive.find((k) => k.id === state.policePublicRevealedRed) : null;
       const dayNum = state.dayNumber || 1;
 
       if (revealedIsUs && exposed) {
