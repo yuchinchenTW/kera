@@ -1067,8 +1067,12 @@ export class GameEngine {
         );
         if (target.role === Roles.BRAT.id && !target.status.bratRevived) {
           target.alive = true;
+          target.deathCause = null;
+          target.deathDay = null;
           target.status.bratRevived = true;
           target.status.bratRevealed = true;
+          this.state.aliveIds = this.state.players.filter((p) => p.alive).map((p) => p.id);
+          this.state.deadIds = this.state.deadIds.filter((id) => id !== target.id);
           addPublicLog(this.state, `${target.name} revealed as Brat and revived (loses voting power).`);
         } else {
           const candidate = lastWordsByPlayer[target.id] ?? humanLastWords;

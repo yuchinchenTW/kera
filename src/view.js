@@ -46,7 +46,7 @@ export function buildPlayerView(state, playerId) {
   if (viewer.role === Roles.KILLER.id) privateIntel = privateIntel.concat(state.privateLogs.killer || []);
   if (viewer.role === Roles.GRUDGE_BEAST.id) privateIntel = privateIntel.concat(state.privateLogs.grudge || []);
 
-  const aiTakenOver = !viewer.isHuman && state.started;
+  const aiTakenOver = !viewer.isHuman && state.phase !== "SETUP";
 
   return {
     phase: state.phase,
@@ -64,6 +64,7 @@ export function buildPlayerView(state, playerId) {
       aiTakenOver,
       noLastWords: !!viewer.noLastWords,
       maxChains: viewer.maxChains ?? 0,
+      fiendMode: viewer.status?.fiendMode || null,
     },
     players,
     publicLog: [...state.publicLog],

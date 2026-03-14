@@ -561,6 +561,16 @@ wss.on("connection", (ws, req) => {
             send(ws, { type: "error", message: "Invalid target." });
             return;
           }
+          // Role-specific targeting rules (mirror single-player restrictions).
+          const tid = msg.action.targetId;
+          if (actor.role === "KILLER" && t.faction === "RED") {
+            send(ws, { type: "error", message: "Cannot target your own faction." });
+            return;
+          }
+          if (actor.role === "POLICE" && t.role === "POLICE") {
+            send(ws, { type: "error", message: "Cannot investigate fellow police." });
+            return;
+          }
         }
         if (Array.isArray(msg.action.extraTargets)) {
           for (const tid of msg.action.extraTargets) {
@@ -758,6 +768,11 @@ wss.on("connection", (ws, req) => {
         }
         const seat = room.connections.get(ws);
         if (!seat || seat.spectator) return;
+        const chatActor = room.engine.state.players?.[seat.playerId];
+        if (!chatActor?.alive) {
+          send(ws, { type: "error", message: "Dead players cannot use public chat." });
+          return;
+        }
         const text = (msg.text || "").trim();
         if (!text) return;
         const line = `${room.engine.state.players[seat.playerId]?.name || "Player"}: ${text.slice(0, 120)}`;
@@ -861,11 +876,7 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "Only host can restart." });
           return;
         }
-        room.started = false;
-        room.engine = null;
-        room.nightActions.clear();
-        room.voteActions.clear();
-        room.lastWords.clear();
+        resetRoomState(false);
         scheduleLobbyBroadcast();
         break;
       }

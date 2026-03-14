@@ -152,6 +152,7 @@ export function markDeath(state, playerId, cause, opts = {}) {
   if (!player || !player.alive) return;
   player.alive = false;
   player.deathCause = cause;
+  player.deathDay = state.dayNumber || 1;
   if (typeof opts.noLastWords === "boolean") {
     player.noLastWords = !!opts.noLastWords;
   }

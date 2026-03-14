@@ -456,7 +456,25 @@ function connect() {
     isHost = false;
     seatId = null;
     latestView = null;
-    render();
+    // Reset all game UI fields to avoid stale state from previous game
+    timerState = null;
+    els.phaseDisplay.textContent = "-";
+    els.dayDisplay.textContent = "-";
+    els.youDisplay.textContent = "-";
+    els.victoryDisplay.textContent = "-";
+    els.victoryDisplay.style.color = "#333";
+    els.playersList.innerHTML = "";
+    els.logText.value = "";
+    if (els.timerDisplay) els.timerDisplay.textContent = "-";
+    if (els.lastWordsList) els.lastWordsList.innerHTML = "";
+    if (els.alliesDisplay) els.alliesDisplay.textContent = "-";
+    if (els.endBanner) { els.endBanner.textContent = ""; els.endBanner.classList.add("hidden"); }
+    // Hide all control panels
+    document.getElementById("hostControls").style.display = "none";
+    document.getElementById("nightControls").style.display = "none";
+    document.getElementById("voteControls").style.display = "none";
+    document.getElementById("chatControls").style.display = "none";
+    renderLobby();
   };
   ws.onmessage = (evt) => {
     let msg = null;
@@ -580,7 +598,7 @@ function renderLobby() {
   applyLocaleText();
 }
 
-function roleActionChoices(roleId, grudgeBerserk = false) {
+function roleActionChoices(roleId, grudgeBerserk = false, fiendMode = null) {
   switch (roleId) {
     case Roles.POLICE.id:
       return [{ value: "POLICE_INVESTIGATE", label: actionLabel("POLICE_INVESTIGATE"), needsTarget: true }];
@@ -593,10 +611,11 @@ function roleActionChoices(roleId, grudgeBerserk = false) {
     case Roles.AGENT.id:
       return [{ value: "AGENT_PROTECT", label: actionLabel("AGENT_PROTECT"), needsTarget: true }];
     case Roles.HEAVENLY_FIEND.id:
-      return [
-        { value: "FIEND_PROTECT", label: actionLabel("FIEND_PROTECT"), needsTarget: true },
-        { value: "FIEND_SHOOT", label: actionLabel("FIEND_SHOOT"), needsTarget: true },
-      ];
+      // fiendMode from view determines which action is available (mirrors single-player)
+      if (fiendMode === "CHARGE") {
+        return [{ value: "FIEND_SHOOT", label: actionLabel("FIEND_SHOOT"), needsTarget: true }];
+      }
+      return [{ value: "FIEND_PROTECT", label: actionLabel("FIEND_PROTECT"), needsTarget: true }];
     case Roles.TERRORIST.id:
       return [{ value: "TERROR_BOMB", label: actionLabel("TERROR_BOMB"), needsTarget: true }];
     case Roles.COWBOY.id:
@@ -756,10 +775,15 @@ function renderView() {
   const you = v.you;
   const isGrudgeBerserk = !!v.grudgeState?.berserk;
   const isGrudge = you && you.role === Roles.GRUDGE_BEAST.id && you.alive;
-  let choices = you ? roleActionChoices(you.role, isGrudgeBerserk) : [];
+  let choices = you ? roleActionChoices(you.role, isGrudgeBerserk, you.fiendMode) : [];
   buildOptions(els.nightActionType, choices, choices.length ? t("pickAction") : t("noNightAction"));
   const targetOptions = (v.players || [])
-    .filter((p) => p.id !== you?.id && p.alive)
+    .filter((p) => {
+      if (!p.alive) return false;
+      // Doctor can self-inject (matches single-player behavior)
+      if (you?.role === Roles.DOCTOR.id) return true;
+      return p.id !== you?.id;
+    })
     .map((p) => ({ value: String(p.id), label: p.name }));
   buildOptions(els.nightTarget, targetOptions, t("chooseTarget"));
   // Exorcist: show N target dropdowns (maxChains); others: single target
@@ -974,7 +998,7 @@ els.sendNightAction.addEventListener("click", () => {
   const type = els.nightActionType.value;
   if (!type) return;
   const selected = latestView?.you
-    ? roleActionChoices(latestView.you.role, !!latestView.grudgeState?.berserk).find((c) => c.value === type)
+    ? roleActionChoices(latestView.you.role, !!latestView.grudgeState?.berserk, latestView.you.fiendMode).find((c) => c.value === type)
     : null;
   const needsTarget = selected ? selected.needsTarget !== false : true;
   let targetId = undefined;
