@@ -138,7 +138,7 @@ npm install && npm start
 - **紅方沉默策略 Red silence**：殺手偶爾保持沉默避免露餡；連續沉默 2 輪後強制發言。
 - **假警察宣告 Fake police claim**：殺手罕見策略（8%，每局一次），偽造警察調查結果來陷害藍方。
 - **信任建立 Trust building**：紅方 AI 先為低嫌疑玩家辯護以建立可信度，再伺機出手。只有殺手能看到殺手隊友（用真實角色辯護），其他紅方（狙擊手等）依靠觀察推測，避免資訊外洩。
-- **策略遺言 Strategic last words**：瀕死 AI 留下角色相關訊息 — 藍方指控/辯護、紅方虛張/栽贓、綠方威脅。警察傾倒所有調查結果。遺言以 `[LAST]` 標記寫入 dayChat，AI 信念系統可解析為線索但不計入活人聊天活躍度。
+- **策略遺言 Strategic last words**：瀕死 AI 留下角色相關訊息 — 藍方指控/辯護、紅方虛張/栽贓、綠方威脅。警察傾倒所有調查結果（分類型：RED/BLUE/GREEN，紅方優先排序）。醫生/特務遺言引用實際保護對象（`lastProtected`）。遺言以 `[LAST]` 標記寫入 dayChat，AI 信念系統可解析為線索但不計入活人聊天活躍度。
 - **陣營私聊（日夜皆有）Faction chat**：殺手/警察/怨靈獸私人頻道，與實際 AI 決策邏輯統一。殺手夜間私聊呼叫真實目標選擇函式，白天描述實際投票策略分支（sell-out/scatter/split/mimic）；警察私聊引用真實調查目標與結果。回覆者針對 speaker 內容情境式回應，不再隨機挑模板。
 
 **投票策略 Vote Strategy:**
@@ -151,8 +151,8 @@ npm install && npm start
 
 **藍方（警察陣營）Blue Team:**
 - **警察 Police**：智慧調查選擇；策略性揭露時機（第 1 天不揭露，瀕死時傾倒所有情報）。
-- **醫生 Doctor**：根據威脅程度自保；避免重複保護同一人（除非成功救援）；預測殺手目標。
-- **特務 Agent**：預測殺手目標（活躍發言者、疑似警察、曾被救者）並保護。
+- **醫生 Doctor**：根據威脅程度自保（自動避免 overdose 風險 — 自身已有 1 次空針時強制保護他人）；避免重複保護同一人（除非成功救援）；預測殺手目標。
+- **特務 Agent**：預測殺手目標（活躍發言者、疑似警察、曾被救者）並保護。遺言引用實際保護對象（`aiMemory.lastProtected`）。
 - **天煞 Heavenly Fiend**：吸收模式模仿特務邏輯；充能模式優先射擊高殺手機率目標。
 - **防暴警察 Riot Police**：煙霧彈只用在高信心紅方目標；不浪費在不確定的對象。
 - **牛仔 Cowboy**：信心超過門檻才開槍；後期更為激進。
@@ -163,9 +163,9 @@ npm install && npm start
 **紅方（殺手陣營）Red Team:**
 - **殺手 Killer**：避開被保護目標，優先活躍發言者與警察；目標輪替（跳過被救者、變換活躍度特徵）。
 - **狙擊手 Sniper**：前期保守（第 1 天 30%），情報累積後轉為激進（第 3 天 65%+）。無法看到紅方隊友，依靠 suspicion 中位數過濾避免友射（跳過嫌疑最高 1/3 的候選人），優先射擊有正面藍方證據的目標（被救過、被紅方指控者）。
-- **恐怖份子 Terrorist**：安全時按兵不動，自身威脅高時（即將被投出）引爆。
+- **恐怖份子 Terrorist**：安全時按兵不動，自身威脅高時（`selfThreat > 0.7` → 70-95% 引爆）引爆。不依賴 `policeRevealedRed`（恐怖份子被查到會顯示為藍方）。
 - **綁匪 Kidnapper**：鎖定高價值藍方（醫生 > 警察 > 特務）使其無法行動；永不綁架殺手隊友。
-- **縱火狂 Arsonist**：耐心標記 3+ 目標再引燃；標記高價值藍方；受威脅時恐慌引燃。
+- **縱火狂 Arsonist**：耐心標記 3+ 目標再引燃；標記高價值藍方；高自危時降為 2+ 標記即引燃。
 - **藤魔 Vine Demon**：種子目標選擇最可能被警察調查的人（高嫌疑 + 高藍方機率）。
 - **夢魔 Nightmare Demon**：優先擊殺平民/屁孩；對不確定角色進行情報蒐集。
 - **死靈 Necromancer**：儲存靈魂至 3+（更強效果）；只在瀕死時使用 2 靈魂。
@@ -177,9 +177,11 @@ npm install && npm start
 
 ### 資訊完整性 Information Integrity
 AI 決策邏輯遵守與玩家相同的資訊可見性規則：
+- **警察調查結果分層**：引擎在夜間查到紅方時寫入 `policeRevealedRed`（私有），但非警察 AI 只讀 `policePublicRevealedRed`（僅在警察公開宣布後才設值）。投票、信念系統、夜間行動評分全面使用公開版本。
 - 平民投票邏輯不讀取隱藏角色（警察身份改由公開宣告 `roleClaims` 判斷，怨獸數量用主題預期數減已死數估算）。
 - 非殺手紅方（狙擊手、恐怖份子等）無法看到殺手隊友，公聊/遺言的「辯護盟友」改用低嫌疑玩家替代。
 - 投票後生成的解釋句（`[VOTE]`）和遺言（`[LAST]`）不會被下一輪信念系統當作新指控信號重複計算。
+- **結構化事件追蹤**：夜間救援使用 `state.lastNightSavedIds[]` 結構化陣列（取代字串解析），所有 AI 角色和模擬工具共用。
 
 ### 單人 vs 多人 AI Single-player vs Multiplayer AI
 - 單人模式：難度在建立遊戲時選擇。
@@ -295,13 +297,14 @@ node tests/simulate.js 200 --compare                 # 比較全部 4 種難度
 node tests/simulate.js 100 GOOD_VS_EVIL hard --json  # 機器可讀 JSON 輸出
 node tests/simulate.js 100 --zh                      # 中文版結果輸出
 node tests/simulate.js 100 --zh --compare            # 中文版難度比較
+node tests/simulate.js 100 GOOD_VS_EVIL hard --seed=12345  # 固定種子重現結果
 node tests/simulate.js --help                        # 顯示所有選項及可用主題
 node tests/behavior_audit.js                         # 250 場行為審計（行動/聊天/投票邏輯）
 ```
 
 輸出內容包括：陣營勝率、遊戲長度分佈、勝利原因、各角色統計（勝率、存活率、夜殺率、票殺率），以及可選的難度比較表。
 
-Output includes: faction win rates, game length distribution, victory reasons, per-role stats (win rate, survival rate, night-kill rate, vote-kill rate), and optional difficulty comparison table.
+Output includes: faction win rates, game length distribution, victory reasons, per-role stats (win rate, survival rate, night-kill rate, vote-kill rate), and optional difficulty comparison table. Statistics are read from engine structural counters (`state.usage`), not string parsing.
 
 行為審計輸出包括：警察調查準確度、殺手友射率/分散投票率/私聊目標命中率、醫生連續同目標率、狙擊手命中率、平民跟投率/聊天-投票一致性、死人發言檢測。
 
