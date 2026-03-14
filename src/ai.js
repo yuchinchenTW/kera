@@ -5037,11 +5037,20 @@ const LAST_WORDS_TEMPLATES = {
     (name) => `The truth will come out.||真相會大白的。`,
     (name) => `I did my best for the team.||我為大家盡力了。`,
   ],
-  // Police dies — reveal investigation results
-  policeReveal: [
+  // Police dies — reveal confirmed RED
+  policeRevealRed: [
     (name, t) => `I confirmed ${t} is RED!||我確認 ${t} 是紅方！`,
-    (name, t) => `My investigation: ${t} is suspicious.||我的調查結果：${t} 有問題。`,
-    (name, t) => `${t} is clean, protect them.||${t} 是好人，保護他。`,
+    (name, t) => `Police report: ${t} is RED. Vote them out!||警察報告：${t} 是紅方，投掉他！`,
+  ],
+  // Police dies — reveal confirmed BLUE
+  policeRevealBlue: [
+    (name, t) => `${t} is clean, I checked them. Protect them.||${t} 是好人，我查過了。保護他。`,
+    (name, t) => `I verified ${t} — they're BLUE. Don't waste votes on them.||我查驗了 ${t}，是藍方。別浪費票在他身上。`,
+  ],
+  // Police dies — accuse suspicious target (no confirmed result)
+  policeAccuse: [
+    (name, t) => `My investigation points to ${t} — be careful.||我的調查指向 ${t}，小心他。`,
+    (name, t) => `I'm sure ${t} is the killer.||我確定 ${t} 是殺手。`,
   ],
   // Red player dies — mislead or frame innocents
   redBluff: [
@@ -5115,20 +5124,50 @@ export function generateLastWords(state, playerId) {
 
   // ── BLUE faction dying ──
   if (player.faction === Faction.BLUE) {
-    // Police: reveal investigation intel
+    // Police: dump all investigation results (most valuable intel on death)
     if (player.role === Roles.POLICE.id) {
-      // If there's a revealed red, reinforce it
+      const results = player.aiMemory?.investigationResults || [];
+      const redParts = []; // highest priority
+      const otherParts = [];
+
+      // If there's a revealed red not in results, add it first
       if (state.policeRevealedRed !== null) {
         const redTarget = getPlayer(state, state.policeRevealedRed);
-        if (redTarget?.alive) {
-          const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.policeReveal);
-          return tmpl(player.name, redTarget.name);
+        if (redTarget?.alive && !results.some((r) => r.targetId === redTarget.id)) {
+          const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.policeRevealRed);
+          redParts.push(tmpl(player.name, redTarget.name));
         }
       }
-      // Otherwise accuse most suspicious
-      if (mostSuspicious && highestSusp > 0.5) {
-        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.policeReveal);
-        return tmpl(player.name, mostSuspicious.name);
+
+      // Dump each investigation result with correct template
+      for (const r of results) {
+        const tp = getPlayer(state, r.targetId);
+        if (!tp?.alive) continue; // skip dead players (already public info)
+        if (r.result === "red") {
+          const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.policeRevealRed);
+          redParts.push(tmpl(player.name, tp.name));
+        } else if (r.result === "green") {
+          // GREEN results get their own accurate phrasing
+          otherParts.push(`${player.name}: ${tp.name} is GREEN (third party).||${player.name}：${tp.name} 是綠方（第三方）。`);
+        } else {
+          const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.policeRevealBlue);
+          otherParts.push(tmpl(player.name, tp.name));
+        }
+      }
+
+      // Red intel first, then blue/green — prioritize actionable info
+      const parts = [...redParts, ...otherParts];
+
+      // If no results yet, accuse most suspicious
+      if (parts.length === 0 && mostSuspicious && highestSusp > 0.5) {
+        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.policeAccuse);
+        parts.push(tmpl(player.name, mostSuspicious.name));
+      }
+
+      if (parts.length > 0) {
+        // Combine up to 2 results (last words character limit), red always first
+        return parts.slice(0, 2).map((p) => p.split("||")[0]).join(" ") +
+          "||" + parts.slice(0, 2).map((p) => p.split("||")[1] || "").join(" ");
       }
     }
 
