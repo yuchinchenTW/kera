@@ -1516,14 +1516,21 @@ export function buildAiNightActions(state, opts = {}) {
   const humanKillerTarget = pickHumanTarget("KILLER_VOTE");
   let sharedKillerTarget = humanKillerTarget;
   if (!sharedKillerTarget) {
-    // Hard+: use smart targeting instead of simple group suspicion
-    if (hard && killerActors.length > 0) {
-      sharedKillerTarget = pickKillerSmartTarget(state, killerActors[0]);
-    } else {
-      sharedKillerTarget =
-        state.rng() < 0.6
-          ? pickGroupTarget(state, killerActors, (t) => t.role !== Roles.KILLER.id)
-          : null;
+    // If night faction chat already coordinated a target, use it for consistency
+    if (hard && state._killerChatTarget !== undefined) {
+      sharedKillerTarget = getPlayer(state, state._killerChatTarget);
+      if (sharedKillerTarget && !sharedKillerTarget.alive) sharedKillerTarget = null;
+    }
+    if (!sharedKillerTarget) {
+      // Hard+: use smart targeting instead of simple group suspicion
+      if (hard && killerActors.length > 0) {
+        sharedKillerTarget = pickKillerSmartTarget(state, killerActors[0]);
+      } else {
+        sharedKillerTarget =
+          state.rng() < 0.6
+            ? pickGroupTarget(state, killerActors, (t) => t.role !== Roles.KILLER.id)
+            : null;
+      }
     }
   }
   // Pre-pick a shared police target to avoid split votes.
@@ -4262,81 +4269,149 @@ export function generateNightFactionChat(state) {
 
   const alive = alivePlayers(state);
 
-  // ── Killer Night Chat ──
+  // ── Killer Night Chat (tactical briefing) ──
   const killers = alive.filter((p) => p.role === Roles.KILLER.id && !p.isHuman);
   if (killers.length > 0) {
     state.killerChat = state.killerChat || [];
+    state.privateLogs.killer = state.privateLogs.killer || [];
     const speaker = randomChoice(killers, state.rng);
     if (speaker) {
       ensureAdvancedMemory(speaker);
       const nonKillers = alive.filter((t) => t.role !== Roles.KILLER.id);
+      const dayNum = state.dayNumber || 1;
+      const isFirstNight = dayNum === 1;
+      const s = speaker.name;
+      const lines = [];
 
-      // Check if a target was saved recently
+      // ─ Use the real targeting logic to pick the actual kill target ─
+      const smartTarget = pickKillerSmartTarget(state, speaker);
+      // Check if saved recently and needs rotation (same logic as buildAiNightActions)
       const savedRecently = (state.lastNightSummary || []).some(
         (e) => typeof e === "string" && e.includes("saved")
       );
-
-      const roll = state.rng();
-      let line = null;
-
-      // Pick high-value target
-      let bestTarget = null;
-      let bestScore = -Infinity;
-      for (const t of nonKillers) {
-        const blueProb = factionProb(speaker, t.id, Faction.BLUE) ?? 0.5;
-        const policeProb = speaker.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
-        const score = blueProb + policeProb * 0.5;
-        if (score > bestScore) { bestScore = score; bestTarget = t; }
+      const savedName = savedRecently ? nonKillers.find((t) =>
+        (state.lastNightSummary || []).some((e) => typeof e === "string" && e.includes(t.name) && e.includes("saved"))
+      ) : null;
+      let actualTarget = smartTarget;
+      if (actualTarget && savedName && actualTarget.id === savedName.id && state.killerLastTarget === actualTarget.id) {
+        // Target was saved and is the same as last — AI will rotate, pick next best
+        actualTarget = pickKillerSmartTarget(state, speaker) || smartTarget;
       }
-      const target = bestTarget || randomChoice(nonKillers, state.rng);
+      // Store the coordinated target so buildAiNightActions uses the same one
+      if (actualTarget) state._killerChatTarget = actualTarget.id;
 
-      const isFirstNight = (state.dayNumber || 1) === 1;
-      if (savedRecently && target && roll < 0.3) {
-        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.avoidWarn);
-        line = tmpl(speaker.name, target.name);
-      } else if (roll < 0.5 && target) {
-        const killTemplates = isFirstNight
-          ? NIGHT_FACTION_CHAT.killer.planKillFirstNight
-          : NIGHT_FACTION_CHAT.killer.planKill;
-        const tmpl = pickTemplate(state.rng, killTemplates);
-        line = tmpl(speaker.name, target.name);
-      } else if (roll < 0.75 && target) {
-        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.tomorrowPlan);
-        line = tmpl(speaker.name, target.name);
+      // Build role probability info for the chosen target
+      const topProbs = actualTarget ? {
+        policeProb: speaker.aiMemory?.roleProbs?.[actualTarget.id]?.[Roles.POLICE.id] ?? 0,
+        doctorProb: speaker.aiMemory?.roleProbs?.[actualTarget.id]?.[Roles.DOCTOR.id] ?? 0,
+        agentProb: speaker.aiMemory?.roleProbs?.[actualTarget.id]?.[Roles.AGENT.id] ?? 0,
+        blueProb: factionProb(speaker, actualTarget.id, Faction.BLUE) ?? 0.5,
+        wasSaved: savedName && savedName.id === actualTarget.id,
+      } : null;
+      const top = actualTarget ? { p: actualTarget, ...topProbs } : null;
+      // Fallback alt target
+      const altTarget = nonKillers.find((t) => t.id !== actualTarget?.id && t.alive);
+      const alt = altTarget ? { p: altTarget } : null;
+
+      // Find most suspected killer among our team (selfThreat)
+      const allKillersAlive = alive.filter((p) => p.role === Roles.KILLER.id);
+      const mostExposed = allKillersAlive.reduce((a, b) =>
+        (a.aiMemory?.selfThreat ?? 0) > (b.aiMemory?.selfThreat ?? 0) ? a : b, allKillersAlive[0]);
+      const exposedThreat = mostExposed?.aiMemory?.selfThreat ?? 0;
+
+      // Police reveal danger
+      const policeRevealed = state.policeRevealedRed !== null;
+      const revealedIsUs = policeRevealed && allKillersAlive.some((k) => k.id === state.policeRevealedRed);
+
+      // ─ Build tactical lines ─
+      if (isFirstNight) {
+        // First night: target recommendation + reasoning
+        if (top) {
+          const reason = top.policeProb > 0.15
+            ? `police prob ${Math.round(top.policeProb * 100)}%||警察機率 ${Math.round(top.policeProb * 100)}%`
+            : `high blue prob ${Math.round(top.blueProb * 100)}%||藍方機率高 ${Math.round(top.blueProb * 100)}%`;
+          lines.push(`${s}: Target ${top.p.name} tonight (${reason.split("||")[0]}).||${s}：今晚目標 ${top.p.name}（${reason.split("||")[1]}）。`);
+        }
       } else {
-        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.urgency);
-        line = tmpl(speaker.name);
+        // Subsequent nights: richer briefing
+
+        // 1. Save warning — specific intel
+        if (top && top.wasSaved) {
+          lines.push(`${s}: ${top.p.name} was saved last night — doctor or agent is on them. Switch to ${alt ? alt.p.name : "someone else"}.||${s}：${top.p.name} 昨晚被救了，醫生或特務在守他。改殺 ${alt ? alt.p.name : "其他人"}。`);
+        } else if (savedRecently && savedName) {
+          lines.push(`${s}: ${savedName.name} got saved — they have protection. Avoid them.||${s}：${savedName.name} 被救了，有人在保他，避開。`);
+        }
+
+        // 2. Kill target + reasoning
+        if (top && !top.wasSaved) {
+          if (top.policeProb > 0.2) {
+            lines.push(`${s}: Kill ${top.p.name} — ${Math.round(top.policeProb * 100)}% chance they're police.||${s}：殺 ${top.p.name}——${Math.round(top.policeProb * 100)}% 機率是警察。`);
+          } else if (top.doctorProb > 0.15) {
+            lines.push(`${s}: Go for ${top.p.name}, I think they're the doctor (${Math.round(top.doctorProb * 100)}%).||${s}：殺 ${top.p.name}，我認為他是醫生（${Math.round(top.doctorProb * 100)}%）。`);
+          } else {
+            lines.push(`${s}: ${top.p.name} is our best target — threat score highest.||${s}：${top.p.name} 是最佳目標，威脅最高。`);
+          }
+        } else if (alt) {
+          lines.push(`${s}: Fallback to ${alt.p.name} (threat rank #2).||${s}：改殺 ${alt.p.name}（威脅排名第二）。`);
+        }
+
+        // 3. Team exposure warning
+        if (exposedThreat > 0.5) {
+          lines.push(`${s}: Warning — ${mostExposed.name} is getting suspected (${Math.round(exposedThreat * 100)}% threat). ${revealedIsUs ? "We're exposed, act fast." : "Lay low in chat."}||${s}：警告——${mostExposed.name} 被懷疑了（威脅度 ${Math.round(exposedThreat * 100)}%）。${revealedIsUs ? "已經暴露，加速行動。" : "聊天低調點。"}`);
+        }
+
+        // 4. Vote coordination for tomorrow
+        if (state.rng() < 0.6) {
+          // Find a blue who's already suspicious to frame
+          const frameable = nonKillers.filter((t) => {
+            const susp = speaker.aiMemory?.suspicion?.[t.id] ?? 0;
+            return susp > 0.4;
+          });
+          if (frameable.length > 0) {
+            const frame = randomChoice(frameable, state.rng);
+            lines.push(`${s}: Tomorrow push ${frame.name} in chat — they're already at ${Math.round((speaker.aiMemory?.suspicion?.[frame.id] ?? 0) * 100)}% suspicion.||${s}：明天帶風向指控 ${frame.name}——他已經有 ${Math.round((speaker.aiMemory?.suspicion?.[frame.id] ?? 0) * 100)}% 嫌疑了。`);
+          } else {
+            lines.push(`${s}: Tomorrow scatter votes, don't cluster.||${s}：明天分散投票，別聚在一起。`);
+          }
+        }
       }
 
-      if (line) {
+      // 5. Urgency if few killers remain
+      if (allKillersAlive.length <= 2 && dayNum >= 3) {
+        lines.push(`${s}: ${allKillersAlive.length} of us left — every kill counts now.||${s}：我們只剩 ${allKillersAlive.length} 人了，每一刀都關鍵。`);
+      }
+
+      // Push lines (cap at 3 to avoid flooding)
+      const output = lines.slice(0, 3);
+      for (const line of output) {
         state.killerChat.push(line);
-        state.privateLogs.killer = state.privateLogs.killer || [];
         state.privateLogs.killer.push(line);
       }
 
-      // Second killer responds
+      // ─ Responder reacts to speaker's briefing ─
       const otherKillers = killers.filter((k) => k.id !== speaker.id);
-      if (otherKillers.length > 0 && state.rng() < 0.5) {
+      if (otherKillers.length > 0 && output.length > 0 && state.rng() < 0.65) {
         const responder = randomChoice(otherKillers, state.rng);
-        const t2 = randomChoice(nonKillers, state.rng);
-        const r2 = state.rng();
+        const r = responder.name;
+        ensureAdvancedMemory(responder);
         let reply = null;
-        if (r2 < 0.4 && t2) {
-          const killT = isFirstNight
-            ? NIGHT_FACTION_CHAT.killer.planKillFirstNight
-            : NIGHT_FACTION_CHAT.killer.planKill;
-          const tmpl = pickTemplate(state.rng, killT);
-          reply = tmpl(responder.name, t2.name);
-        } else if (r2 < 0.7 && t2) {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.tomorrowPlan);
-          reply = tmpl(responder.name, t2.name);
-        } else if (r2 < 0.7) {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.tomorrowPlanGeneral);
-          reply = tmpl(responder.name);
-        } else {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.killer.urgency);
-          reply = tmpl(responder.name);
+
+        // React contextually to the briefing
+        if (top && top.wasSaved && alt) {
+          reply = `${r}: Agreed, switch to ${alt.p.name}. The protection is too strong on ${top.p.name}.||${r}：同意，改殺 ${alt.p.name}。${top.p.name} 的保護太強了。`;
+        } else if (top && top.policeProb > 0.2) {
+          reply = `${r}: If ${top.p.name} really is police, we need them gone ASAP.||${r}：如果 ${top.p.name} 真的是警察，必須馬上解決。`;
+        } else if (exposedThreat > 0.5) {
+          reply = `${r}: I'll cover for ${mostExposed.name} in chat tomorrow.||${r}：明天我在聊天幫 ${mostExposed.name} 打掩護。`;
+        } else if (top) {
+          const agree = state.rng() < 0.7;
+          if (agree) {
+            reply = `${r}: Copy, ${top.p.name} it is.||${r}：收到，就 ${top.p.name}。`;
+          } else if (alt) {
+            reply = `${r}: I'd rather hit ${alt.p.name} — ${top.p.name} might be bait.||${r}：我比較想殺 ${alt.p.name}——${top.p.name} 可能是陷阱。`;
+          }
         }
+
         if (reply) {
           state.killerChat.push(reply);
           state.privateLogs.killer.push(reply);
@@ -4488,90 +4563,129 @@ export function generateFactionChat(state) {
 
   const alive = alivePlayers(state);
 
-  // ── Killer Chat ──
+  // ── Killer Day Chat (strategy description — mirrors actual vote logic) ──
   const killers = alive.filter((p) => p.role === Roles.KILLER.id && !p.isHuman);
   if (killers.length > 0) {
     state.killerChat = state.killerChat || [];
+    state.privateLogs.killer = state.privateLogs.killer || [];
     const speaker = randomChoice(killers, state.rng);
     if (speaker) {
       ensureAdvancedMemory(speaker);
       const nonKillers = alive.filter((t) => t.role !== Roles.KILLER.id);
+      const allKillersAlive = alive.filter((p) => p.role === Roles.KILLER.id);
+      const s = speaker.name;
+      const lines = [];
+      // Track which strategy branch the chat describes for responder context
+      let chatStrategy = "generic";
 
-      // Check if someone was saved last night
+      // ─ Last night debrief ─
       const savedTarget = (state.lastNightSummary || []).find(
         (e) => typeof e === "string" && e.includes("saved")
       );
+      const savedP = savedTarget ? nonKillers.find((t) =>
+        typeof savedTarget === "string" && savedTarget.includes(t.name)
+      ) : null;
 
-      const roll = state.rng();
-      let line = null;
-
-      if (savedTarget && state.rng() < 0.5) {
-        // Warn about protected target
-        const protectedName = nonKillers.find((t) =>
-          typeof savedTarget === "string" && savedTarget.includes(t.name)
-        );
-        if (protectedName) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.avoidProtected);
-          line = tmpl(speaker.name, protectedName.name);
-        }
-      }
-
-      if (!line) {
-        // Pick highest-value target to discuss
-        let bestTarget = null;
-        let bestScore = -Infinity;
-        for (const t of nonKillers) {
-          const blueProb = factionProb(speaker, t.id, Faction.BLUE) ?? 0.5;
-          const policeProb = speaker.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
-          const score = blueProb + policeProb * 0.5;
-          if (score > bestScore) { bestScore = score; bestTarget = t; }
-        }
-        const target = bestTarget || randomChoice(nonKillers, state.rng);
-
-        if (roll < 0.35 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.targetPlan);
-          line = tmpl(speaker.name, target.name);
-        } else if (roll < 0.55 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.threat);
-          line = tmpl(speaker.name, target.name);
-        } else if (roll < 0.75 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.voteStrategy);
-          line = tmpl(speaker.name, target.name);
-        } else if (target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.reactTargeted);
-          line = tmpl(speaker.name, target.name);
+      if (savedP) {
+        const doctorProb = speaker.aiMemory?.roleProbs?.[savedP.id]?.[Roles.DOCTOR.id] ?? 0;
+        if (doctorProb > 0.15) {
+          lines.push(`${s}: ${savedP.name} got saved — and they might BE the doctor (${Math.round(doctorProb * 100)}%). Watch who protects whom.||${s}：${savedP.name} 被救了，而且他可能就是醫生（${Math.round(doctorProb * 100)}%）。注意誰在保誰。`);
         } else {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.react);
-          line = tmpl(speaker.name);
+          lines.push(`${s}: Kill failed on ${savedP.name} — someone's protecting them. Note that for tonight.||${s}：${savedP.name} 殺失敗了，有人在保他。今晚要記住這點。`);
         }
       }
 
-      if (line) {
+      // ─ Vote strategy: describe what AI will actually do ─
+      const policeRevealed = state.policeRevealedRed !== null;
+      const revealedIsUs = policeRevealed && allKillersAlive.some((k) => k.id === state.policeRevealedRed);
+      const exposed = revealedIsUs ? allKillersAlive.find((k) => k.id === state.policeRevealedRed) : null;
+      const dayNum = state.dayNumber || 1;
+
+      if (revealedIsUs && exposed) {
+        // Mirrors sell-out logic: 60% early, 85% late — per-killer independent roll
+        const sellOutRate = dayNum >= 4 ? 85 : 60;
+        chatStrategy = "sellout";
+        if (allKillersAlive.length > 1) {
+          lines.push(`${s}: ${exposed.name} is confirmed red. Consider voting them to blend in (~${sellOutRate}% safe). Don't defend too hard — but if you see a grudge or better play, take it.||${s}：${exposed.name} 確認紅方了。考慮跟投來偽裝（約 ${sellOutRate}% 安全）。別太用力辯護，但如果有怨獸或更好的機會，自行判斷。`);
+        } else {
+          lines.push(`${s}: I'm exposed. Everyone's voting me — just vote whoever looks most suspicious to blend in.||${s}：我暴露了，大家都會投我。你們投最可疑的人來偽裝就好。`);
+        }
+      } else if (policeRevealed) {
+        // Mirrors: blue follows police reveal, red blends in
+        chatStrategy = "blend";
+        lines.push(`${s}: Police revealed a red (not us). Vote with the crowd to stay hidden.||${s}：警察揭露了紅方（不是我們）。跟著大家投，保持隱藏。`);
+      } else if (allKillersAlive.length >= 3) {
+        // Mirrors scatter logic: killerVoteTargets avoids clustering (60% per killer)
+        chatStrategy = "scatter";
+        lines.push(`${s}: 3+ of us alive — try to scatter votes if possible. Some of us might end up on the same target depending on the situation, but avoid obvious clustering.||${s}：我們還有 3 人以上，盡量分散投票。根據情況有些人可能投同一個，但避免明顯聚集。`);
+      } else if (allKillersAlive.length === 2) {
+        // 2 killers: one can push a target, other votes elsewhere
+        const suspScores = nonKillers.map((t) => {
+          let totalSusp = 0;
+          for (const k of allKillersAlive) {
+            ensureAdvancedMemory(k);
+            totalSusp += k.aiMemory?.suspicion?.[t.id] ?? 0;
+          }
+          return { p: t, avgSusp: totalSusp / allKillersAlive.length };
+        }).sort((a, b) => b.avgSusp - a.avgSusp);
+        const voteTarget = suspScores[0];
+        if (voteTarget && voteTarget.avgSusp > 0.35) {
+          chatStrategy = "split";
+          lines.push(`${s}: ${voteTarget.p.name} has high suspicion (${Math.round(voteTarget.avgSusp * 100)}%). Ideally we split — one pushes them, other goes elsewhere. But adapt to the vote flow.||${s}：${voteTarget.p.name} 嫌疑高（${Math.round(voteTarget.avgSusp * 100)}%）。理想上分工，一人帶他一人投別處。但看實際投票風向調整。`);
+        } else {
+          chatStrategy = "scatter";
+          lines.push(`${s}: No obvious target yet. Vote separately, follow the crowd.||${s}：還沒明確目標。各自投票，跟著風向走。`);
+        }
+      } else {
+        // Solo killer: mimic blue behavior
+        chatStrategy = "mimic";
+        lines.push(`${s}: I'm the last one — voting whoever looks most suspicious to blend in.||${s}：只剩我一個了，投最可疑的人來偽裝。`);
+      }
+
+      // ─ Self-threat check ─
+      const mostExposed = allKillersAlive.reduce((a, b) =>
+        (a.aiMemory?.selfThreat ?? 0) > (b.aiMemory?.selfThreat ?? 0) ? a : b, allKillersAlive[0]);
+      const exposedThreat = mostExposed?.aiMemory?.selfThreat ?? 0;
+      if (exposedThreat > 0.4 && !revealedIsUs) {
+        lines.push(`${s}: Heads up — ${mostExposed.name} is drawing attention (${Math.round(exposedThreat * 100)}% threat). Talk less in public.||${s}：注意——${mostExposed.name} 引起注意了（威脅度 ${Math.round(exposedThreat * 100)}%）。公開場合少說話。`);
+      }
+
+      // Push lines (cap at 3)
+      const output = lines.slice(0, 3);
+      for (const line of output) {
         state.killerChat.push(line);
-        state.privateLogs.killer = state.privateLogs.killer || [];
         state.privateLogs.killer.push(line);
       }
 
-      // Second killer may respond (50% chance)
+      // ─ Responder (contextual to described strategy) ─
       const otherKillers = killers.filter((k) => k.id !== speaker.id);
-      if (otherKillers.length > 0 && state.rng() < 0.5) {
+      if (otherKillers.length > 0 && output.length > 0 && state.rng() < 0.65) {
         const responder = randomChoice(otherKillers, state.rng);
-        const target = randomChoice(nonKillers, state.rng);
-        const roll2 = state.rng();
+        const r = responder.name;
         let reply = null;
-        if (roll2 < 0.4 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.targetPlan);
-          reply = tmpl(responder.name, target.name);
-        } else if (roll2 < 0.7 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.reactTargeted);
-          reply = tmpl(responder.name, target.name);
-        } else if (roll2 < 0.7) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.react);
-          reply = tmpl(responder.name);
-        } else if (target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.killer.threat);
-          reply = tmpl(responder.name, target.name);
+
+        switch (chatStrategy) {
+          case "sellout":
+            reply = exposed && responder.id !== exposed.id
+              ? `${r}: Leaning toward voting ${exposed.name} to blend in, but I'll read the room first.||${r}：傾向投 ${exposed.name} 來偽裝，但會先看情況再決定。`
+              : `${r}: I know I'm the target. You all play it safe — don't stick your neck out for me.||${r}：我知道我是目標。你們安全行事，別為我出頭。`;
+            break;
+          case "blend":
+            reply = `${r}: Got it, following the crowd vote.||${r}：收到，跟著大家投。`;
+            break;
+          case "scatter":
+            reply = `${r}: I'll try to pick a different target. Let's see how the vote shapes up.||${r}：我盡量選不同的人。看投票怎麼走。`;
+            break;
+          case "split":
+            reply = `${r}: I'll aim for a different target if I can. Depends on what others do.||${r}：我盡量投別人。看其他人怎麼投再說。`;
+            break;
+          case "mimic":
+            reply = `${r}: Stay safe. Vote smart.||${r}：小心。聰明投票。`;
+            break;
+          default:
+            reply = `${r}: Understood.||${r}：了解。`;
         }
+
         if (reply) {
           state.killerChat.push(reply);
           state.privateLogs.killer.push(reply);

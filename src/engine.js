@@ -1118,6 +1118,8 @@ export class GameEngine {
       this.state.dayNumber += 1;
       // Clear dayChat so only messages added during this night carry into the next day
       this.state.dayChat = [];
+      // Clear faction chat coordination flags for the new round
+      delete this.state._killerChatTarget;
     }
   }
 
