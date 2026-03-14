@@ -1120,6 +1120,7 @@ export class GameEngine {
       this.state.dayChat = [];
       // Clear faction chat coordination flags for the new round
       delete this.state._killerChatTarget;
+      delete this.state._policeChatTarget;
     }
   }
 

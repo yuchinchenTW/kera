@@ -1538,6 +1538,13 @@ export function buildAiNightActions(state, opts = {}) {
   const humanPoliceTarget = pickHumanTarget("POLICE_INVESTIGATE");
   // Hard+: use smart targeting for group consensus instead of raw suspicion
   let sharedPoliceTarget = humanPoliceTarget;
+  if (!sharedPoliceTarget) {
+    // If night faction chat already coordinated a target, use it for consistency
+    if (hard && state._policeChatTarget !== undefined) {
+      sharedPoliceTarget = getPlayer(state, state._policeChatTarget);
+      if (sharedPoliceTarget && !sharedPoliceTarget.alive) sharedPoliceTarget = null;
+    }
+  }
   if (!sharedPoliceTarget && policeActors.length > 0) {
     sharedPoliceTarget = hard
       ? pickPoliceSmartTarget(state, policeActors[0])
@@ -4420,86 +4427,89 @@ export function generateNightFactionChat(state) {
     }
   }
 
-  // ── Police Night Chat ──
+  // ── Police Night Chat (tactical briefing — uses real targeting logic) ──
   const police = alive.filter((p) => p.role === Roles.POLICE.id && !p.isHuman);
   if (police.length > 0) {
     state.policeChat = state.policeChat || [];
+    state.privateLogs.police = state.privateLogs.police || [];
     const speaker = randomChoice(police, state.rng);
     if (speaker) {
       ensureAdvancedMemory(speaker);
       const nonPolice = alive.filter((t) => t.role !== Roles.POLICE.id);
-      const roll = state.rng();
-      let line = null;
+      const s = speaker.name;
+      const dayNum = state.dayNumber || 1;
+      const isFirstNight = dayNum === 1;
+      const lines = [];
 
-      // Share last investigation result if available
-      const revealedRed = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
-      if (revealedRed?.alive && state.rng() < 0.4) {
-        const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.shareResultRed);
-        line = tmpl(speaker.name, revealedRed.name);
+      // Use the real targeting logic to get tonight's actual investigation target
+      const smartTarget = pickPoliceSmartTarget(state, speaker);
+      const actualTarget = smartTarget || randomChoice(nonPolice, state.rng);
+      // Store so buildAiNightActions uses the same target
+      if (actualTarget) state._policeChatTarget = actualTarget.id;
+
+      // Share last investigation results
+      const results = speaker.aiMemory?.investigationResults || [];
+      const lastResult = results.length > 0 ? results[results.length - 1] : null;
+      if (lastResult && !isFirstNight) {
+        const targetP = getPlayer(state, lastResult.targetId);
+        if (targetP) {
+          if (lastResult.result === "red") {
+            lines.push(`${s}: Last check: ${targetP.name} is RED — confirmed.||${s}：上次查驗：${targetP.name} 是紅方，確認了。`);
+          } else {
+            lines.push(`${s}: Last check: ${targetP.name} is ${lastResult.result.toUpperCase()} — cleared.||${s}：上次查驗：${targetP.name} 是${lastResult.result === "blue" ? "藍方" : "綠方"}，排除了。`);
+          }
+        }
       }
 
-      const isFirstNight = (state.dayNumber || 1) === 1;
-
-      if (!line) {
-        // Pick most suspicious to investigate
-        let suspect = null;
-        let highSusp = -1;
-        for (const t of nonPolice) {
-          const s = speaker.aiMemory?.suspicion?.[t.id] ?? 0.5;
-          if (s > highSusp) { highSusp = s; suspect = t; }
-        }
-        const target = suspect || randomChoice(nonPolice, state.rng);
-
-        if (roll < 0.4 && target) {
-          const investTemplates = isFirstNight
-            ? NIGHT_FACTION_CHAT.police.planInvestigateFirstNight
-            : NIGHT_FACTION_CHAT.police.planInvestigate;
-          const tmpl = pickTemplate(state.rng, investTemplates);
-          line = tmpl(speaker.name, target.name);
-        } else if (roll < 0.65 && target) {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.tomorrowPlan);
-          line = tmpl(speaker.name, target.name);
-        } else if (roll < 0.85 && target) {
-          const protTemplates = isFirstNight
-            ? NIGHT_FACTION_CHAT.police.protectAdviceFirstNight
-            : NIGHT_FACTION_CHAT.police.protectAdvice;
-          const tmpl = pickTemplate(state.rng, protTemplates);
-          line = tmpl(speaker.name, target.name);
+      // Tonight's investigation plan — references the real target
+      if (actualTarget) {
+        const susp = speaker.aiMemory?.suspicion?.[actualTarget.id] ?? 0;
+        const redProb = speaker.aiMemory?.roleProbs?.[actualTarget.id] || {};
+        const killerProb = redProb[Roles.KILLER.id] ?? 0;
+        if (isFirstNight) {
+          lines.push(`${s}: Investigating ${actualTarget.name} tonight — starting with them.||${s}：今晚查 ${actualTarget.name}，從他開始。`);
+        } else if (killerProb > 0.15) {
+          lines.push(`${s}: Investigating ${actualTarget.name} tonight — ${Math.round(killerProb * 100)}% killer probability.||${s}：今晚查 ${actualTarget.name}——殺手機率 ${Math.round(killerProb * 100)}%。`);
+        } else if (susp > 0.4) {
+          lines.push(`${s}: Checking ${actualTarget.name} tonight — suspicion at ${Math.round(susp * 100)}%.||${s}：今晚查 ${actualTarget.name}——嫌疑度 ${Math.round(susp * 100)}%。`);
         } else {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdviceGeneral);
-          line = tmpl(speaker.name);
+          lines.push(`${s}: Investigating ${actualTarget.name} tonight — haven't verified them yet.||${s}：今晚查 ${actualTarget.name}——還沒查驗過。`);
         }
       }
 
-      if (line) {
+      // Revealed red reminder
+      const revealedRed = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
+      if (revealedRed?.alive) {
+        lines.push(`${s}: Reminder: ${revealedRed.name} is confirmed red. We vote them out tomorrow.||${s}：提醒：${revealedRed.name} 確認紅方。明天投他出局。`);
+      }
+
+      // Push lines (cap at 3)
+      const output = lines.slice(0, 3);
+      for (const line of output) {
         state.policeChat.push(line);
-        state.privateLogs.police = state.privateLogs.police || [];
         state.privateLogs.police.push(line);
       }
 
-      // Second police responds
+      // Responder reacts to the actual briefing
       const otherPolice = police.filter((p) => p.id !== speaker.id);
-      if (otherPolice.length > 0 && state.rng() < 0.5) {
+      if (otherPolice.length > 0 && output.length > 0 && state.rng() < 0.6) {
         const responder = randomChoice(otherPolice, state.rng);
-        const target = randomChoice(nonPolice, state.rng);
+        const r = responder.name;
         let reply = null;
-        const r2 = state.rng();
-        if (r2 < 0.5 && target) {
-          const investT = isFirstNight
-            ? NIGHT_FACTION_CHAT.police.planInvestigateFirstNight
-            : NIGHT_FACTION_CHAT.police.planInvestigate;
-          const tmpl = pickTemplate(state.rng, investT);
-          reply = tmpl(responder.name, target.name);
-        } else if (target) {
-          const protT = isFirstNight
-            ? NIGHT_FACTION_CHAT.police.protectAdviceFirstNight
-            : NIGHT_FACTION_CHAT.police.protectAdvice;
-          const tmpl = pickTemplate(state.rng, protT);
-          reply = tmpl(responder.name, target.name);
+
+        if (revealedRed?.alive) {
+          reply = `${r}: Agreed, ${revealedRed.name} is priority vote. Focus investigation elsewhere.||${r}：同意，${revealedRed.name} 是優先投票目標。查驗集中在其他人。`;
+        } else if (actualTarget) {
+          const susp = responder.aiMemory?.suspicion?.[actualTarget.id] ?? 0;
+          if (susp > 0.4) {
+            reply = `${r}: ${actualTarget.name} is on my radar too — ${Math.round(susp * 100)}% suspicion. Good pick.||${r}：${actualTarget.name} 我也有注意到——嫌疑 ${Math.round(susp * 100)}%。好選擇。`;
+          } else {
+            reply = `${r}: Copy, checking ${actualTarget.name}. Let's see what turns up.||${r}：收到，查 ${actualTarget.name}。看看結果如何。`;
+          }
         } else {
-          const tmpl = pickTemplate(state.rng, NIGHT_FACTION_CHAT.police.protectAdviceGeneral);
-          reply = tmpl(responder.name);
+          reply = `${r}: Stay sharp tonight.||${r}：今晚保持警覺。`;
         }
+
         if (reply) {
           state.policeChat.push(reply);
           state.privateLogs.police.push(reply);
@@ -4694,85 +4704,94 @@ export function generateFactionChat(state) {
     }
   }
 
-  // ── Police Chat ──
+  // ── Police Day Chat (debrief + vote coordination — mirrors actual vote logic) ──
   const police = alive.filter((p) => p.role === Roles.POLICE.id && !p.isHuman);
   if (police.length > 0) {
     state.policeChat = state.policeChat || [];
+    state.privateLogs.police = state.privateLogs.police || [];
     const speaker = randomChoice(police, state.rng);
     if (speaker) {
       ensureAdvancedMemory(speaker);
       const nonPolice = alive.filter((t) => t.role !== Roles.POLICE.id);
-      const roll = state.rng();
-      let line = null;
+      const s = speaker.name;
+      const lines = [];
+      let chatContext = "generic"; // for responder
 
-      // If police have revealed a red, coordinate around it
+      // ─ Vote strategy: mirrors actual vote logic ─
+      // Police with policeRevealedRed alive → 100% vote them (ai.js:3021-3026)
       const revealedRed = state.policeRevealedRed !== null ? getPlayer(state, state.policeRevealedRed) : null;
-      if (revealedRed?.alive && state.rng() < 0.5) {
-        const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.voteCoordinate);
-        line = tmpl(speaker.name, revealedRed.name);
+      if (revealedRed?.alive) {
+        chatContext = "voteRed";
+        lines.push(`${s}: ${revealedRed.name} is confirmed red — all police vote them, no exceptions. Push the village to follow.||${s}：${revealedRed.name} 確認紅方——所有警察都投他，沒有例外。帶動村民跟投。`);
       }
 
-      if (!line) {
-        // Find most suspicious target to discuss
+      // ─ Share investigation intel ─
+      const results = speaker.aiMemory?.investigationResults || [];
+      if (results.length > 0 && state.rng() < 0.7) {
+        // Share most recent unshared or notable result
+        const lastResult = results[results.length - 1];
+        const targetP = getPlayer(state, lastResult.targetId);
+        if (targetP && targetP.alive) {
+          if (lastResult.result === "red") {
+            lines.push(`${s}: Intel: ${targetP.name} checked RED. High priority target.||${s}：情報：${targetP.name} 查出紅方。高優先目標。`);
+            chatContext = "intelRed";
+          } else {
+            lines.push(`${s}: Intel: ${targetP.name} checked ${lastResult.result.toUpperCase()} — cleared, skip them.||${s}：情報：${targetP.name} 查出${lastResult.result === "blue" ? "藍方" : "綠方"}——排除，跳過他。`);
+            if (chatContext === "generic") chatContext = "intelClear";
+          }
+        }
+      }
+
+      // ─ Threat analysis ─
+      if (!revealedRed?.alive && state.rng() < 0.5) {
+        // Find highest suspicion non-police target
         let suspect = null;
         let highSusp = -1;
         for (const t of nonPolice) {
-          const s = speaker.aiMemory?.suspicion?.[t.id] ?? 0.5;
-          if (s > highSusp) { highSusp = s; suspect = t; }
+          const susp = speaker.aiMemory?.suspicion?.[t.id] ?? 0;
+          if (susp > highSusp) { highSusp = susp; suspect = t; }
         }
-        const target = suspect || randomChoice(nonPolice, state.rng);
-
-        if (roll < 0.3 && target) {
-          // Pick correct shareIntel template based on actual investigation result
-          const confirmed = state.policeConfirmed || {};
-          let intelTemplates;
-          if (confirmed[target.id]) {
-            intelTemplates = FACTION_CHAT.police.shareIntelRed;
-          } else if (target.faction === Faction.BLUE) {
-            intelTemplates = FACTION_CHAT.police.shareIntelSuspect;
-          } else {
-            intelTemplates = FACTION_CHAT.police.shareIntelSuspect;
-          }
-          const tmpl = pickTemplate(state.rng, intelTemplates);
-          line = tmpl(speaker.name, target.name);
-        } else if (roll < 0.55 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.investigatePlan);
-          line = tmpl(speaker.name, target.name);
-        } else if (roll < 0.75 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.voteCoordinate);
-          line = tmpl(speaker.name, target.name);
-        } else if (target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysis);
-          line = tmpl(speaker.name, target.name);
-        } else {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysisGeneral);
-          line = tmpl(speaker.name);
+        if (suspect && highSusp > 0.35) {
+          lines.push(`${s}: ${suspect.name} has ${Math.round(highSusp * 100)}% suspicion — worth pushing in the vote if no better lead.||${s}：${suspect.name} 嫌疑度 ${Math.round(highSusp * 100)}%——如果沒更好的線索，值得投票時推一下。`);
+          if (chatContext === "generic") chatContext = "suspect";
         }
       }
 
-      if (line) {
+      // Push lines (cap at 3)
+      const output = lines.slice(0, 3);
+      for (const line of output) {
         state.policeChat.push(line);
-        state.privateLogs.police = state.privateLogs.police || [];
         state.privateLogs.police.push(line);
       }
 
-      // Second police may respond
+      // ─ Responder reacts to the actual briefing ─
       const otherPolice = police.filter((p) => p.id !== speaker.id);
-      if (otherPolice.length > 0 && state.rng() < 0.5) {
+      if (otherPolice.length > 0 && output.length > 0 && state.rng() < 0.6) {
         const responder = randomChoice(otherPolice, state.rng);
-        const target = randomChoice(nonPolice, state.rng);
+        const r = responder.name;
         let reply = null;
-        const roll2 = state.rng();
-        if (roll2 < 0.4 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.investigatePlan);
-          reply = tmpl(responder.name, target.name);
-        } else if (roll2 < 0.7 && target) {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysis);
-          reply = tmpl(responder.name, target.name);
-        } else {
-          const tmpl = pickTemplate(state.rng, FACTION_CHAT.police.analysisGeneral);
-          reply = tmpl(responder.name);
+
+        switch (chatContext) {
+          case "voteRed":
+            reply = `${r}: Voting ${revealedRed.name}, no question. I'll back it up in public chat.||${r}：投 ${revealedRed.name}，沒問題。我會在公開聊天支持。`;
+            break;
+          case "intelRed": {
+            const redP = results.length > 0 ? getPlayer(state, results[results.length - 1].targetId) : null;
+            reply = redP
+              ? `${r}: ${redP.name} is red — should we reveal publicly or save for next round?||${r}：${redP.name} 是紅方——要公開揭露還是留到下回合？`
+              : `${r}: Good intel. Let's use it wisely.||${r}：好情報。謹慎使用。`;
+            break;
+          }
+          case "intelClear":
+            reply = `${r}: One less suspect. Focus investigation on the remaining unknowns.||${r}：少一個嫌疑人。查驗集中在剩下的未知者。`;
+            break;
+          case "suspect":
+            reply = `${r}: Agreed, they've been acting suspicious. Let's coordinate the vote.||${r}：同意，他一直很可疑。我們協調投票。`;
+            break;
+          default:
+            reply = `${r}: Stay vigilant. We'll figure this out.||${r}：保持警覺。我們會找出來的。`;
         }
+
         if (reply) {
           state.policeChat.push(reply);
           state.privateLogs.police.push(reply);
