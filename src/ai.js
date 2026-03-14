@@ -318,6 +318,8 @@ function ensureBeliefs(state) {
       if (!alreadyParsedThisDay) {
         const chats = state.dayChat || [];
         for (const line of chats) {
+          // Skip vote-phase tagged lines — they're post-decision, not new evidence
+          if (line.startsWith("[VOTE] ")) continue;
           for (const sp of state.players) {
             if (!sp || !line.startsWith(sp.name + ":")) continue;
             const entry = { day: dayNum, speakerId: sp.id, mentionedIds: [], accusedId: null, defendedId: null };
@@ -1438,14 +1440,11 @@ function pickSniperSmartTarget(state, actor) {
   ensureBeliefs(state);
   const dayNum = state.dayNumber || 1;
 
-  // Night 1: no information, conserve bullet
-  if (dayNum <= 1) return null;
-
-  // Calculate suspicion median for relative filtering
+  // Calculate suspicion threshold — skip the top 1/3 most suspicious (likely red allies)
   const candidates = alivePlayers(state).filter((t) => t.id !== actor.id);
   const suspValues = candidates.map((t) => actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
   const sortedSusp = suspValues.slice().sort((a, b) => a - b);
-  const suspMedian = sortedSusp[Math.floor(sortedSusp.length / 2)] ?? 0.5;
+  const suspThreshold = sortedSusp[Math.floor(sortedSusp.length * 2 / 3)] ?? 0.5;
 
   // Identify confirmed-blue signals: saved by doctor, accused by known reds
   const confirmedBluish = new Set();
@@ -1478,8 +1477,8 @@ function pickSniperSmartTarget(state, actor) {
     const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
     const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
 
-    // Skip targets in the more-suspicious half — they might be red allies
-    if (suspicion >= suspMedian) continue;
+    // Skip targets in the top 1/3 of suspicion — they might be red allies
+    if (suspicion >= suspThreshold) continue;
 
     // Base: inverse suspicion (low = confident blue = good target)
     let score = (1.0 - suspicion);
@@ -1520,6 +1519,18 @@ function pickSniperSmartTarget(state, actor) {
       best = t;
     }
   }
+
+  // Fallback: if threshold filtered everyone out, pick lowest-suspicion candidate
+  if (!best && candidates.length > 0) {
+    let fallback = null;
+    let lowestSusp = Infinity;
+    for (const t of candidates) {
+      const s = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
+      if (s < lowestSusp) { lowestSusp = s; fallback = t; }
+    }
+    best = fallback;
+  }
+
   return best;
 }
 
@@ -3410,7 +3421,9 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       if (!target) continue;
       if (state.rng() < 0.4) continue; // not everyone explains
       const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.voteExplain);
-      const line = tmpl(actor.name, target.name);
+      const raw = tmpl(actor.name, target.name);
+      // Tag vote-phase lines so chat memory parser skips them (avoids artificial accusation signal)
+      const line = "[VOTE] " + raw;
       state.dayChat.push(line);
       state.publicLog.push(line);
       explained++;
@@ -3450,17 +3463,18 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
 
     let corrections = 0;
     for (const v of votes) {
-      if (corrections >= 3) break;
+      if (corrections >= 2) break;
       const actor = getPlayer(state, v.actorId);
       if (!actor || actor.isHuman) continue;
       const accused = chatAccused[v.actorId];
       if (!accused || accused.size === 0) continue;
       // If the AI accused someone but is voting a different person, and never accused their vote target
-      if (!accused.has(v.targetId) && state.rng() < 0.6) {
+      if (!accused.has(v.targetId) && state.rng() < 0.35) {
         const target = getPlayer(state, v.targetId);
         if (!target) continue;
         const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.voteCorrection);
-        const line = tmpl(actor.name, target.name);
+        const raw = tmpl(actor.name, target.name);
+        const line = "[VOTE] " + raw;
         state.dayChat.push(line);
         state.publicLog.push(line);
         corrections++;
@@ -3584,9 +3598,9 @@ const CHAT_TEMPLATES = {
     (s, t) => `${s}: I'm voting ${t} based on last night's results.||${s}：根據昨晚的結果，我投 ${t}。`,
   ],
   voteCorrection: [
-    (s, t) => `${s}: Changed my mind — voting ${t} after thinking it over.||${s}：我改主意了，想清楚後決定投 ${t}。`,
-    (s, t) => `${s}: Actually, ${t} is the bigger threat. Switching my vote.||${s}：其實 ${t} 威脅更大。我改票了。`,
-    (s, t) => `${s}: Wait — looking at the votes, ${t} is the right call.||${s}：等等，看了投票情況，投 ${t} 才對。`,
+    (s, t) => `${s}: On second thought, I'm going with ${t}.||${s}：再想想，我選 ${t}。`,
+    (s, t) => `${s}: Changed my mind — ${t} seems like the right call now.||${s}：我改主意了，現在覺得 ${t} 比較對。`,
+    (s, t) => `${s}: Reconsidering... going with ${t} instead.||${s}：重新考慮⋯改選 ${t}。`,
   ],
   voteAbstain: [
     (s) => `${s}: I'm not confident in anyone... abstaining for now.||${s}：我對誰都沒把握⋯先棄票。`,
