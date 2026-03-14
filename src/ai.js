@@ -425,10 +425,8 @@ function ensureBeliefs(state) {
       const aliveCount = alivePlayers(state).length || 1;
       const voteRatio = myVotesReceived / aliveCount;
       const selfThreat = p.aiMemory.selfThreat || 0;
-      // Was saved by doctor? Check lastNightSummary for mention of this player being saved
-      const wasSaved = (state.lastNightSummary || []).some(
-        (e) => typeof e === "string" && e.includes(p.name) && e.includes("saved")
-      );
+      // Was saved by doctor? Check lastNightSavedIds for this player
+      const wasSaved = (state.lastNightSavedIds || []).includes(p.id);
 
       if (wasSaved) {
         p.aiMemory.emotion = "grateful";
@@ -599,10 +597,7 @@ function ensureBeliefs(state) {
         ? p.aiMemory.nightResultInference[p.aiMemory.nightResultInference.length - 1].day
         : 0;
       if (dayNum > lastInferDay) {
-        const nightSummary = state.lastNightSummary || [];
-        const hasSave = nightSummary.some(
-          (e) => typeof e === "string" && e.includes("saved")
-        );
+        const hasSave = (state.lastNightSavedIds || []).length > 0;
         const nightDeaths = state.players.filter(
           (pl) => !pl.alive && pl.deathCause && pl.deathCause !== "VOTE_EXECUTION" && (pl.deathDay || 0) >= dayNum - 1
         );
@@ -783,16 +778,7 @@ function pickPoliceSmartTarget(state, actor) {
   ).length;
 
   // Hard+: identify saved players (confirmed blue by action)
-  const savedIds = new Set();
-  if (hard) {
-    for (const entry of (state.lastNightSummary || [])) {
-      if (typeof entry === "string" && entry.includes("saved")) {
-        for (const p of state.players) {
-          if (p.alive && entry.includes(p.name)) savedIds.add(p.id);
-        }
-      }
-    }
-  }
+  const savedIds = new Set(hard ? (state.lastNightSavedIds || []) : []);
 
   // Hard+: arson-marked = confirmed blue (arsonist targets blues)
   const arsonMarkedIds = new Set();
@@ -1120,11 +1106,8 @@ function pickTerroristSmartTarget(state, actor) {
     }
 
     // Saved by doctor last night = confirmed blue, high-value target
-    const lastSummary = state.lastNightSummary || [];
-    for (const entry of lastSummary) {
-      if (typeof entry === "string" && entry.includes(t.name) && entry.includes("saved")) {
-        score += 0.4; // confirmed blue = very worth bombing
-      }
+    if ((state.lastNightSavedIds || []).includes(t.id)) {
+      score += 0.4; // confirmed blue = very worth bombing
     }
 
     // Avoid overlap with killer's likely target — don't waste 2 red actions on 1 blue
@@ -1205,14 +1188,7 @@ function pickKillerSmartTarget(state, actor) {
   }
 
   // Pre-compute: saved last night
-  const savedLastNight = new Set();
-  for (const entry of (state.lastNightSummary || [])) {
-    if (typeof entry === "string" && entry.includes("saved")) {
-      for (const p of state.players) {
-        if (p.alive && entry.includes(p.name)) savedLastNight.add(p.id);
-      }
-    }
-  }
+  const savedLastNight = new Set(state.lastNightSavedIds || []);
 
   // Pre-compute: heavily voted targets (might be voted out — lower priority for night kill)
   const heavilyVoted = new Set();
@@ -1332,14 +1308,7 @@ function pickCowboySmartTarget(state, actor) {
   let bestScore = -Infinity;
 
   // Identify who was saved last night (likely blue — doctor protects blue)
-  const savedLastNight = new Set();
-  for (const entry of (state.lastNightSummary || [])) {
-    if (typeof entry === "string" && entry.includes("saved")) {
-      for (const p of state.players) {
-        if (p.alive && entry.includes(p.name)) savedLastNight.add(p.id);
-      }
-    }
-  }
+  const savedLastNight = new Set(state.lastNightSavedIds || []);
 
   // Identify confirmed reds for vote-pattern cross-referencing
   const confirmedReds = new Set();
@@ -1475,14 +1444,7 @@ function pickSniperSmartTarget(state, actor) {
   const suspThreshold = sortedSusp[Math.floor(sortedSusp.length * 2 / 3)] ?? 0.5;
 
   // Identify confirmed-blue signals: saved by doctor, accused by known reds
-  const confirmedBluish = new Set();
-  for (const entry of (state.lastNightSummary || [])) {
-    if (typeof entry === "string" && entry.includes("saved")) {
-      for (const p of state.players) {
-        if (p?.alive && entry.includes(p.name)) confirmedBluish.add(p.id);
-      }
-    }
-  }
+  const confirmedBluish = new Set(state.lastNightSavedIds || []);
   // Players accused by known reds are likely blue
   const knownRedIds = new Set();
   if ((state.policePublicRevealedRed ?? null) !== null) knownRedIds.add((state.policePublicRevealedRed ?? null));
@@ -1531,11 +1493,8 @@ function pickSniperSmartTarget(state, actor) {
     score -= (doctorProb * 0.4 + agentProb * 0.3) * 0.5;
 
     // Penalty: target was saved last night — likely still protected
-    const lastSummary = state.lastNightSummary || [];
-    for (const entry of lastSummary) {
-      if (typeof entry === "string" && entry.includes(t.name) && entry.includes("saved")) {
-        score -= 0.7;
-      }
+    if ((state.lastNightSavedIds || []).includes(t.id)) {
+      score -= 0.7;
     }
 
     // Penalty: grudge beast — night-killing them triggers berserk
@@ -1686,9 +1645,7 @@ export function buildAiNightActions(state, opts = {}) {
         // ── Improvement 12: Killer target rotation ──
         // If hard and shared target was saved last night, 80% chance to skip them
         if (hard && target && state.killerLastTarget !== undefined && target.id === state.killerLastTarget) {
-          const wasSaved = (state.lastNightSummary || []).some(
-            (e) => typeof e === "string" && e.includes(target.name) && e.includes("saved")
-          );
+          const wasSaved = (state.lastNightSavedIds || []).includes(target.id);
           if (wasSaved && state.rng() < 0.8) {
             target = null; // force re-pick
           }
@@ -1786,16 +1743,7 @@ export function buildAiNightActions(state, opts = {}) {
             }
 
             // Identify who was saved last night
-            const savedLastNight = new Set();
-            if (hard) {
-              for (const entry of (state.lastNightSummary || [])) {
-                if (typeof entry === "string" && entry.includes("saved")) {
-                  for (const p of state.players) {
-                    if (p.alive && entry.includes(p.name)) savedLastNight.add(p.id);
-                  }
-                }
-              }
-            }
+            const savedLastNight = new Set(hard ? (state.lastNightSavedIds || []) : []);
 
             // Multi-night attack trend: count blue deaths by speaking pattern
             let nightDeathActive = 0;
@@ -2026,14 +1974,7 @@ export function buildAiNightActions(state, opts = {}) {
             if (!dp.alive && dp.faction === Faction.RED) knownReds.add(dp.id);
           }
 
-          const lastSummary = state.lastNightSummary || [];
-          const savedLastNight = new Set();
-          for (const entry of lastSummary) {
-            if (typeof entry !== "string") continue;
-            for (const p of state.players) {
-              if (entry.includes(p.name) && entry.includes("saved")) savedLastNight.add(p.id);
-            }
-          }
+          const savedLastNight = new Set(state.lastNightSavedIds || []);
 
           // KEY INSIGHT: Mirror the KILLER's scoring logic to predict their target.
           // Killer logic: blueProb + policeProb×0.5 + speakRatio×0.3
@@ -2109,7 +2050,13 @@ export function buildAiNightActions(state, opts = {}) {
           if (agentInDanger && state.rng() < 0.15) break;
 
           const target = best;
-          if (target) actions.push({ actorId: actor.id, type: "AGENT_PROTECT", targetId: target.id });
+          if (target) {
+            actions.push({ actorId: actor.id, type: "AGENT_PROTECT", targetId: target.id });
+            if (hard) {
+              ensureAdvancedMemory(actor);
+              actor.aiMemory.lastProtected = target.id;
+            }
+          }
         } else {
           // Non-hard: pick highest blue prob target
           let best = null;
@@ -2121,7 +2068,11 @@ export function buildAiNightActions(state, opts = {}) {
             const score = blueProb - redProb + (state.rng() - 0.5) * 0.2;
             if (score > bestScore) { bestScore = score; best = t; }
           }
-          if (best) actions.push({ actorId: actor.id, type: "AGENT_PROTECT", targetId: best.id });
+          if (best) {
+            actions.push({ actorId: actor.id, type: "AGENT_PROTECT", targetId: best.id });
+            ensureAdvancedMemory(actor);
+            actor.aiMemory.lastProtected = best.id;
+          }
         }
         break;
       }
@@ -2553,14 +2504,7 @@ export function buildAiNightActions(state, opts = {}) {
           }
 
           // Saved last night = confirmed blue
-          const exSavedIds = new Set();
-          for (const entry of (state.lastNightSummary || [])) {
-            if (typeof entry === "string" && entry.includes("saved")) {
-              for (const p of state.players) {
-                if (p.alive && entry.includes(p.name)) exSavedIds.add(p.id);
-              }
-            }
-          }
+          const exSavedIds = new Set(state.lastNightSavedIds || []);
 
           // Arson-marked = confirmed blue
           const exArsonIds = new Set();
@@ -2923,16 +2867,7 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const killerVoteTargets = new Set();
 
   // Hard+: identify saved players (confirmed blue by doctor action)
-  const voteSavedIds = new Set();
-  if (hard) {
-    for (const entry of (state.lastNightSummary || [])) {
-      if (typeof entry === "string" && entry.includes("saved")) {
-        for (const p of state.players) {
-          if (p.alive && entry.includes(p.name)) voteSavedIds.add(p.id);
-        }
-      }
-    }
-  }
+  const voteSavedIds = new Set(hard ? (state.lastNightSavedIds || []) : []);
 
   // Hard+: collect police-confirmed reds — only if publicly revealed
   const confirmedRedIds = new Set();
@@ -4151,9 +4086,7 @@ export function generateChatLines(state, maxLines = 6) {
           if (voteHistory[t.id]?.[dead.id]) s += 0.06;
         }
         // Penalty: saved players are confirmed blue
-        const wasSaved = (state.lastNightSummary || []).some(
-          (e) => typeof e === "string" && e.includes("saved") && e.includes(t.name)
-        );
+        const wasSaved = (state.lastNightSavedIds || []).includes(t.id);
         if (wasSaved) s -= 0.2;
         // Jitter for variety
         s += (state.rng() - 0.5) * 0.2;
@@ -4522,11 +4455,9 @@ export function generateNightFactionChat(state) {
       // ─ Use the real targeting logic to pick the actual kill target ─
       const smartTarget = pickKillerSmartTarget(state, speaker);
       // Check if saved recently and needs rotation (same logic as buildAiNightActions)
-      const savedRecently = (state.lastNightSummary || []).some(
-        (e) => typeof e === "string" && e.includes("saved")
-      );
+      const savedRecently = (state.lastNightSavedIds || []).length > 0;
       const savedName = savedRecently ? nonKillers.find((t) =>
-        (state.lastNightSummary || []).some((e) => typeof e === "string" && e.includes(t.name) && e.includes("saved"))
+        (state.lastNightSavedIds || []).includes(t.id)
       ) : null;
       let actualTarget = smartTarget;
       if (actualTarget && savedName && actualTarget.id === savedName.id && state.killerLastTarget === actualTarget.id) {
@@ -4818,12 +4749,9 @@ export function generateFactionChat(state) {
       let chatStrategy = "generic";
 
       // ─ Last night debrief ─
-      const savedTarget = (state.lastNightSummary || []).find(
-        (e) => typeof e === "string" && e.includes("saved")
-      );
-      const savedP = savedTarget ? nonKillers.find((t) =>
-        typeof savedTarget === "string" && savedTarget.includes(t.name)
-      ) : null;
+      const savedP = (state.lastNightSavedIds || []).length > 0
+        ? nonKillers.find((t) => (state.lastNightSavedIds || []).includes(t.id))
+        : null;
 
       if (savedP) {
         const doctorProb = speaker.aiMemory?.roleProbs?.[savedP.id]?.[Roles.DOCTOR.id] ?? 0;
@@ -5243,11 +5171,13 @@ export function generateLastWords(state, playerId) {
       }
     }
 
-    // Agent: defend who they were protecting
+    // Agent: defend who they were actually protecting
     if (player.role === Roles.AGENT?.id) {
-      if (mostTrusted && state.rng() < 0.4) {
+      const lastProt = player.aiMemory?.lastProtected;
+      const protTarget = lastProt !== null && lastProt !== undefined ? getPlayer(state, lastProt) : null;
+      if (protTarget?.alive && state.rng() < 0.5) {
         const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.blueDefend);
-        return tmpl(player.name, mostTrusted.name);
+        return tmpl(player.name, protTarget.name);
       }
     }
 

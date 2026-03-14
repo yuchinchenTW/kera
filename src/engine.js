@@ -74,6 +74,7 @@ export class GameEngine {
   startNight() {
     this.state.phase = Phase.NIGHT;
     this.state.lastNightSummary = [];
+    this.state.lastNightSavedIds = [];
 
     // Convert pending zombie infections before actions.
     let pendingZombieCount = 0;
@@ -702,6 +703,7 @@ export class GameEngine {
       if (agentInterceptsSniper) {
         this.state.lastNightSummary.push(`Agent shield saved ${target.name} from sniper.`);
         this.state.usage.agentBlocks++;
+        if (!this.state.lastNightSavedIds.includes(target.id)) this.state.lastNightSavedIds.push(target.id);
         continue;
       }
       const fiendImmuneCauses = new Set([
@@ -717,6 +719,7 @@ export class GameEngine {
         if (target.status.protectedByAgent && !agentImmuneCauses.has(k.cause)) {
           this.state.lastNightSummary.push(`Agent shield saved ${target.name} from attack.`);
           this.state.usage.agentBlocks++;
+          if (!this.state.lastNightSavedIds.includes(target.id)) this.state.lastNightSavedIds.push(target.id);
           continue;
         }
         if (target.status.protectedByFiend) {
@@ -725,6 +728,7 @@ export class GameEngine {
             fiendAbsorbed.add(sourceId);
             this.state.lastNightSummary.push(`Fiend absorbed attack on ${target.name}.`);
             this.state.usage.agentBlocks++;
+            if (!this.state.lastNightSavedIds.includes(target.id)) this.state.lastNightSavedIds.push(target.id);
             continue;
           }
         }
@@ -787,6 +791,7 @@ export class GameEngine {
         if (remaining.length !== filteredKills.length) {
           addPublicLog(this.state, `Someone saved ${target.name} from death.`);
           this.state.usage.doctorSaves++;
+          if (!this.state.lastNightSavedIds.includes(target.id)) this.state.lastNightSavedIds.push(target.id);
         } else {
           target.emptyInjections += 1;
           if (target.emptyInjections >= Roles.DOCTOR.emptyKillsAt) {
