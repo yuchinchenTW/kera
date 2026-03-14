@@ -970,6 +970,7 @@ export class GameEngine {
     const mentionCounts = {};
     const chats = this.state.dayChat || [];
     for (const line of chats) {
+      if (line.startsWith("[VOTE] ") || line.startsWith("[LAST] ")) continue;
       for (const p of this.state.players) {
         if (line.includes(p.name)) {
           mentionCounts[p.id] = (mentionCounts[p.id] || 0) + 1;
@@ -1140,10 +1141,10 @@ export class GameEngine {
     addPublicLog(this.state, logEntry);
     // Also add to dayChat so AI chat memory can parse last words for accusations/defenses
     if (!this.state.dayChat) this.state.dayChat = [];
-    // Format as speaker line so AI keyword detection can identify who is mentioned
+    // Tag with [LAST] so chat behavior analysis skips dead speakers but AI keyword parser can still read
     const chatLine = trimmed.includes("||")
-      ? `${player.name}: ${trimmed.split("||")[0]}||${player.name}：${trimmed.split("||")[1]}`
-      : `${player.name}: ${trimmed}`;
+      ? `[LAST] ${player.name}: ${trimmed.split("||")[0]}||${player.name}：${trimmed.split("||")[1]}`
+      : `[LAST] ${player.name}: ${trimmed}`;
     this.state.dayChat.push(chatLine);
     return true;
   }

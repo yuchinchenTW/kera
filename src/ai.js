@@ -117,6 +117,8 @@ function analyzeChatBehavior(state) {
   const mentionedBy = {}; // mentionedBy[targetId] = [speakerId, ...]
 
   for (const line of chats) {
+    // Skip tagged lines — vote-phase and last words shouldn't count as active chat behavior
+    if (line.startsWith("[VOTE] ") || line.startsWith("[LAST] ")) continue;
     for (const p of state.players) {
       if (!p) continue;
       if (line.startsWith(p.name + ":")) {
@@ -317,9 +319,11 @@ function ensureBeliefs(state) {
       const alreadyParsedThisDay = p.aiMemory.chatMemory.some((m) => m.day === dayNum);
       if (!alreadyParsedThisDay) {
         const chats = state.dayChat || [];
-        for (const line of chats) {
+        for (let line of chats) {
           // Skip vote-phase tagged lines — they're post-decision, not new evidence
           if (line.startsWith("[VOTE] ")) continue;
+          // Strip [LAST] prefix — last words are valid evidence but from dead speakers
+          if (line.startsWith("[LAST] ")) line = line.slice(7);
           for (const sp of state.players) {
             if (!sp || !line.startsWith(sp.name + ":")) continue;
             const entry = { day: dayNum, speakerId: sp.id, mentionedIds: [], accusedId: null, defendedId: null };
