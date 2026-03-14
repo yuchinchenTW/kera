@@ -5024,7 +5024,12 @@ const LAST_WORDS_TEMPLATES = {
   blueDefend: [
     (name, t) => `Protect ${t}, they're one of us.||保護 ${t}，他是自己人。`,
     (name, t) => `${t} is innocent, I'm certain.||${t} 是無辜的，我很確定。`,
-    (name, t) => `Don't vote ${t}, I checked them.||別投 ${t}，我查過了。`,
+    (name, t) => `Don't vote ${t}, they've been helping us.||別投 ${t}，他一直在幫我們。`,
+  ],
+  doctorDefend: [
+    (name, t) => `I was protecting ${t} — keep them safe.||我一直在保護 ${t}，守好他。`,
+    (name, t) => `${t} is important, I've been healing them. Don't let them die.||${t} 很重要，我一直在救他。別讓他死。`,
+    (name, t) => `As the doctor, I trust ${t}. Protect them for me.||身為醫生，我信任 ${t}。替我保護他。`,
   ],
   blueGeneral: [
     (name) => `Don't trust the quiet ones...||別相信那些沉默的人⋯`,
@@ -5127,8 +5132,18 @@ export function generateLastWords(state, playerId) {
       }
     }
 
-    // Doctor/Agent: defend who they were protecting or accuse likely killer
-    if (player.role === Roles.DOCTOR.id || player.role === Roles.AGENT.id) {
+    // Doctor: defend who they were actually protecting
+    if (player.role === Roles.DOCTOR.id) {
+      const lastProt = player.aiMemory?.lastProtected;
+      const protTarget = lastProt !== null && lastProt !== undefined ? getPlayer(state, lastProt) : null;
+      if (protTarget?.alive && state.rng() < 0.5) {
+        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.doctorDefend);
+        return tmpl(player.name, protTarget.name);
+      }
+    }
+
+    // Agent: defend who they were protecting
+    if (player.role === Roles.AGENT?.id) {
       if (mostTrusted && state.rng() < 0.4) {
         const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.blueDefend);
         return tmpl(player.name, mostTrusted.name);
@@ -5155,9 +5170,12 @@ export function generateLastWords(state, playerId) {
   // ── RED faction dying ──
   if (player.faction === Faction.RED) {
     const roll = state.rng();
-    // 35%: frame an innocent blue player
+    // 35%: frame someone the dying red believes is blue (no true faction access)
     if (roll < 0.35) {
-      const innocents = alive.filter((t) => t.faction !== Faction.RED);
+      // Killers know other killers; non-Killer reds know nothing — use suspicion
+      const innocents = player.role === Roles.KILLER.id
+        ? alive.filter((t) => t.role !== Roles.KILLER.id)
+        : alive.filter((t) => (player.aiMemory?.suspicion?.[t.id] ?? 0.5) < 0.4);
       const frameTarget = innocents.length > 0
         ? randomChoice(innocents, state.rng)
         : mostSuspicious;
