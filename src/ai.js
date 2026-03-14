@@ -2389,7 +2389,7 @@ export function buildAiNightActions(state, opts = {}) {
           // Hard+: be patient — mark more before igniting for bigger impact
           // Ignite when 3+ marked, or 2+ if self-threat is high (about to die)
           const selfThreat = actor.aiMemory?.selfThreat ?? 0;
-          const igniteThreshold = selfThreat > 0.5 ? 1 : 3;
+          const igniteThreshold = selfThreat > 0.5 ? 2 : 3;
           if (marked >= igniteThreshold) {
             actions.push({ actorId: actor.id, type: "ARSON_IGNITE" });
           } else if (state.usage.arsonMarks < (Roles.ARSONIST.maxMarks || 4)) {
