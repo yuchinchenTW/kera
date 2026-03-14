@@ -1528,7 +1528,7 @@ function pickSniperSmartTarget(state, actor) {
   if (!best && candidates.length > 0) {
     let fallback = null;
     let lowestSusp = Infinity;
-    for (const t of candidates) {
+    for (const t of shuffled(candidates, state.rng)) {
       const s = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
       if (s < lowestSusp) { lowestSusp = s; fallback = t; }
     }
