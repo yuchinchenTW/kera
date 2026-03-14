@@ -108,9 +108,15 @@ export function createInitialState(
   policeConfirmed: {},
     usage: {
       doctorInjections: 0,
+      doctorSaves: 0,
       sniperShots: 0,
       riotGrenades: 0,
       arsonMarks: 0,
+      agentBlocks: 0,
+      cowboyShots: 0,
+      cowboyHits: 0,
+      cowboyMisses: 0,
+      cowboyBackfires: 0,
     },
     difficulty,
     grudgeState: {

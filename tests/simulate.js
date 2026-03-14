@@ -63,6 +63,7 @@ Flags:
   --compare   Run all 4 difficulties side-by-side
   --json      Output raw stats as JSON (no formatting)
   --zh        Output in Chinese
+  --seed=N    Fixed seed for reproducible results (default: Date.now())
   --help      Show this help
 
 Examples:
@@ -70,6 +71,7 @@ Examples:
   node tests/simulate.js 200 --compare
   node tests/simulate.js 100 GOOD_VS_EVIL hard --json
   node tests/simulate.js 200 GOOD_VS_EVIL hard --zh
+  node tests/simulate.js 100 GOOD_VS_EVIL hard --seed=12345
 `,
   },
   zh: {
@@ -150,6 +152,7 @@ Examples:
   --compare   比較所有 4 種難度
   --json      輸出 JSON 格式
   --zh        中文輸出
+  --seed=N    固定種子以重現結果（預設：Date.now()）
   --help      顯示說明
 
 範例：
@@ -157,6 +160,7 @@ Examples:
   node tests/simulate.js 200 --compare
   node tests/simulate.js 100 GOOD_VS_EVIL hard --json
   node tests/simulate.js 200 GOOD_VS_EVIL hard --zh
+  node tests/simulate.js 100 GOOD_VS_EVIL hard --seed=12345
 `,
   },
 };
@@ -201,8 +205,6 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   const engine = new GameEngine(seed, theme, difficulty, { allAi: true });
 
   let safety = 200;
-  let doctorSaves = 0;
-  let agentBlocks = 0;
   let totalVoteRounds = 0;
   let noExecutionRounds = 0;
   let correctVoteKills = 0;
@@ -216,11 +218,6 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   let greenVotedGreen = 0; // green voter voted to kill green
   let zombieConversions = 0;
   let kidnaps = 0;
-  let arsonMarks = 0;
-  let cowboyShots = 0;
-  let cowboyHits = 0;
-  let cowboyMisses = 0;
-  let cowboyBackfires = 0;
   const deathCauseCounts = {}; // deathCause -> count
   const aliveCurve = [];  // alive count at start of each day
   const firstNightKills = []; // roles killed on night 1
@@ -230,18 +227,8 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     roundNum++;
     engine.resolveNight(null, { includeHuman: true });
 
-    // Count events from lastNightSummary (reset to [] each night by startNight)
-    for (const entry of (engine.state.lastNightSummary || [])) {
-      if (typeof entry === "string") {
-        if (entry.includes("saved") && entry.includes("from death")) doctorSaves++;
-        if (entry.includes("Agent shield") || entry.includes("Fiend absorbed")) agentBlocks++;
-        if (entry.includes("kidnapped")) kidnaps++;
-        if (entry.includes("splashed fuel")) arsonMarks++;
-        if (entry.includes("risky shot")) { cowboyShots++; cowboyHits++; }
-        if (entry.includes("chamber clicked")) { cowboyShots++; cowboyMisses++; }
-        if (entry.includes("wild bullet")) { cowboyShots++; cowboyBackfires++; }
-      }
-    }
+    // All event counts are read from engine structural counters (state.usage)
+    // — no string parsing needed.
 
     // Track zombie conversions (players whose role changed to ZOMBIE from something else)
     for (const p of engine.state.players) {
@@ -344,11 +331,20 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     }
   }
 
+  // Read structural counters from engine state (no string parsing)
+  const u = engine.state.usage || {};
   return {
     victory, dayNumber, playerResults, timedOut,
-    doctorSaves, agentBlocks, totalVoteRounds, noExecutionRounds,
+    doctorSaves: u.doctorSaves || 0,
+    agentBlocks: u.agentBlocks || 0,
+    totalVoteRounds, noExecutionRounds,
     correctVoteKills, totalVoteKills, zombieConversions,
-    kidnaps, arsonMarks, cowboyShots, cowboyHits, cowboyMisses, cowboyBackfires,
+    kidnaps,
+    arsonMarks: u.arsonMarks || 0,
+    cowboyShots: u.cowboyShots || 0,
+    cowboyHits: u.cowboyHits || 0,
+    cowboyMisses: u.cowboyMisses || 0,
+    cowboyBackfires: u.cowboyBackfires || 0,
     deathCauseCounts, aliveCurve, firstNightKills,
     blueVotedRed, blueVotedBlue, redVotedRed, redVotedBlue,
     greenVotedRed, greenVotedBlue, greenVotedGreen,
@@ -403,7 +399,7 @@ if (!isMainThread) {
 
     completed++;
     if (completed % 20 === 0) {
-      parentPort.postMessage({ type: "progress", completed });
+      parentPort.postMessage({ type: "progress", delta: 20 });
     }
 
     if (timedOut) { timeouts++; continue; }
@@ -531,7 +527,7 @@ function simulateGames(count, theme, difficulty, { L }) {
   return new Promise((resolve) => {
     if (numThreads <= 1) {
       // Fallback to single-threaded for very small counts
-      const baseSeed = Date.now();
+      const baseSeed = cliSeed ?? Date.now();
       let acc = emptyStats();
 
       for (let i = 0; i < count; i++) {
@@ -603,7 +599,7 @@ function simulateGames(count, theme, difficulty, { L }) {
     }
 
     // Multi-threaded
-    const baseSeed = Date.now();
+    const baseSeed = cliSeed ?? Date.now();
     const chunkSize = Math.ceil(count / numThreads);
     let completedGames = 0;
     let finishedWorkers = 0;
@@ -621,9 +617,9 @@ function simulateGames(count, theme, difficulty, { L }) {
 
       worker.on("message", (msg) => {
         if (msg.type === "progress") {
-          completedGames += 20;
+          completedGames = Math.min(completedGames + (msg.delta || 20), count);
           if (count >= 100) {
-            process.stderr.write(`\r  ${L.progress(Math.min(completedGames, count), count)}        `);
+            process.stderr.write(`\r  ${L.progress(completedGames, count)}        `);
           }
         } else if (msg.type === "done") {
           merged = mergeStats(merged, msg.stats);
@@ -636,7 +632,12 @@ function simulateGames(count, theme, difficulty, { L }) {
       });
 
       worker.on("error", (err) => {
-        console.error("Worker error:", err);
+        console.error("[PARTIAL] Worker crashed:", err.message || err);
+        process.stderr.write("\n  ⚠ Results may be incomplete due to worker crash\n");
+        finishedWorkers++;
+        if (finishedWorkers === Math.min(numThreads, Math.ceil(count / chunkSize))) {
+          resolve(merged);
+        }
       });
     }
   });
@@ -680,6 +681,8 @@ if (args.includes("--help") || args.includes("-h")) {
 const zhMode = args.includes("--zh");
 const jsonMode = args.includes("--json");
 const compareMode = args.includes("--compare");
+const seedArg = args.find((a) => a.startsWith("--seed="));
+const cliSeed = seedArg ? Number(seedArg.split("=")[1]) : null;
 const L = zhMode ? LANG.zh : LANG.en;
 const positional = args.filter((a) => !a.startsWith("--"));
 
@@ -740,7 +743,8 @@ async function main() {
     const sorted = [...days].sort((a, b) => a - b);
     const minDays = sorted[0];
     const maxDays = sorted[sorted.length - 1];
-    const medianDays = sorted[Math.floor(sorted.length / 2)];
+    const mid = Math.floor(sorted.length / 2);
+    const medianDays = sorted.length % 2 === 1 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
     const variance = days.reduce((sum, d) => sum + (d - avgDaysNum) ** 2, 0) / days.length;
     const stddev = Math.sqrt(variance).toFixed(1);
 

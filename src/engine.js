@@ -400,11 +400,14 @@ export class GameEngine {
           if (!target || isUntargetable(target)) break;
           trackBlueTarget(targetedByBlue, action.targetId, actor);
           const roll = this.state.rng();
+          this.state.usage.cowboyShots++;
           if (roll < 2 / 6) {
             delayedKills.push({ targetId: target.id, cause: DeathCause.COWBOY_SHOT, killerId: actor.id });
             addPublicLog(this.state, `Someone fired a risky shot at ${target.name}.`);
+            this.state.usage.cowboyHits++;
           } else if (roll < 5 / 6) {
             addPublicLog(this.state, `A cowboy's chamber clicked on ${target.name}.`);
+            this.state.usage.cowboyMisses++;
           } else {
             addKill(target.id, DeathCause.COWBOY_SHOT, { killerId: actor.id });
             const others = alivePlayers(this.state).filter((p) => p.id !== actor.id && p.id !== target.id && p.alive);
@@ -412,6 +415,7 @@ export class GameEngine {
             if (extra) addKill(extra.id, DeathCause.COWBOY_BACKFIRE, { killerId: actor.id });
             addKill(actor.id, DeathCause.COWBOY_BACKFIRE, { killerId: actor.id });
             addPublicLog(this.state, `A cowboy drew a wild bullet. Chaos ensued.`);
+            this.state.usage.cowboyBackfires++;
           }
           break;
         }
@@ -697,6 +701,7 @@ export class GameEngine {
         target.status.protectedByAgent && k.cause === DeathCause.SNIPER_HEADSHOT;
       if (agentInterceptsSniper) {
         this.state.lastNightSummary.push(`Agent shield saved ${target.name} from sniper.`);
+        this.state.usage.agentBlocks++;
         continue;
       }
       const fiendImmuneCauses = new Set([
@@ -711,6 +716,7 @@ export class GameEngine {
       if (!k.unstoppable) {
         if (target.status.protectedByAgent && !agentImmuneCauses.has(k.cause)) {
           this.state.lastNightSummary.push(`Agent shield saved ${target.name} from attack.`);
+          this.state.usage.agentBlocks++;
           continue;
         }
         if (target.status.protectedByFiend) {
@@ -718,6 +724,7 @@ export class GameEngine {
           if (!fiendImmuneCauses.has(k.cause)) {
             fiendAbsorbed.add(sourceId);
             this.state.lastNightSummary.push(`Fiend absorbed attack on ${target.name}.`);
+            this.state.usage.agentBlocks++;
             continue;
           }
         }
@@ -779,6 +786,7 @@ export class GameEngine {
         }
         if (remaining.length !== filteredKills.length) {
           addPublicLog(this.state, `Someone saved ${target.name} from death.`);
+          this.state.usage.doctorSaves++;
         } else {
           target.emptyInjections += 1;
           if (target.emptyInjections >= Roles.DOCTOR.emptyKillsAt) {
