@@ -1433,14 +1433,62 @@ function pickSniperSmartTarget(state, actor) {
   let best = null;
   let bestScore = -Infinity;
 
+  // Sniper can't see red allies — must rely on accumulated evidence.
+  // Conserve bullets early; only shoot when there's positive blue evidence.
+  ensureBeliefs(state);
+  const dayNum = state.dayNumber || 1;
+
+  // Night 1: no information, conserve bullet
+  if (dayNum <= 1) return null;
+
+  // Calculate suspicion median for relative filtering
+  const candidates = alivePlayers(state).filter((t) => t.id !== actor.id);
+  const suspValues = candidates.map((t) => actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+  const sortedSusp = suspValues.slice().sort((a, b) => a - b);
+  const suspMedian = sortedSusp[Math.floor(sortedSusp.length / 2)] ?? 0.5;
+
+  // Identify confirmed-blue signals: saved by doctor, accused by known reds
+  const confirmedBluish = new Set();
+  for (const entry of (state.lastNightSummary || [])) {
+    if (typeof entry === "string" && entry.includes("saved")) {
+      for (const p of state.players) {
+        if (p?.alive && entry.includes(p.name)) confirmedBluish.add(p.id);
+      }
+    }
+  }
+  // Players accused by known reds are likely blue
+  const knownRedIds = new Set();
+  if (state.policeRevealedRed !== null) knownRedIds.add(state.policeRevealedRed);
+  for (const p of state.players) {
+    if (!p.alive && p.faction === Faction.RED) knownRedIds.add(p.id);
+  }
+  for (const p of state.players) {
+    if (!p?.aiMemory?.chatMemory) continue;
+    for (const m of p.aiMemory.chatMemory) {
+      if (knownRedIds.has(m.speakerId) && m.accusedId !== null) {
+        confirmedBluish.add(m.accusedId);
+      }
+    }
+  }
+
   for (const t of shuffled(alivePlayers(state), state.rng)) {
-    // Never shoot fellow red teammates
-    const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
     if (t.id === actor.id) continue;
 
-    // Base: prefer blue targets (opposite of suspicion — sniper wants to kill blue)
+    const suspicion = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
     const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
-    let score = blueProb;
+    const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
+
+    // Skip targets in the more-suspicious half — they might be red allies
+    if (suspicion >= suspMedian) continue;
+
+    // Base: inverse suspicion (low = confident blue = good target)
+    let score = (1.0 - suspicion);
+
+    // Strong bonus: confirmed blue through game mechanics
+    if (confirmedBluish.has(t.id)) score += 0.5;
+
+    // Bonus: belief spread — when blueProb >> redProb, we're more confident
+    score += (blueProb - redProb) * 0.3;
 
     // Bonus: police are the biggest threat to red team
     const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
@@ -1448,15 +1496,12 @@ function pickSniperSmartTarget(state, actor) {
 
     // Bonus: active speakers influence votes against red — prioritize silencing them
     const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
-    score += speakRatio * 0.25;
+    score += speakRatio * 0.15;
 
     // Penalty: likely protected by doctor/agent — don't waste precious bullets
     const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
     const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
     score -= (doctorProb * 0.4 + agentProb * 0.3) * 0.5;
-
-    // Penalty: high red probability — don't shoot potential allies
-    score -= redProb * 0.4;
 
     // Penalty: target was saved last night — likely still protected
     const lastSummary = state.lastNightSummary || [];
@@ -3962,10 +4007,19 @@ export function generateChatLines(state, maxLines = 6) {
         }
       }
 
-      // Defend a red ally subtly
+      // Defend a red ally subtly — only Killers can see other Killers
       if (deceptionRoll < bluffThreshold + 0.15) {
-        const allies = allCandidates.filter((t) => t.role === Roles.KILLER.id);
-        const defendAlly = randomChoice(allies, state.rng);
+        let defendAlly = null;
+        if (speaker.role === Roles.KILLER.id) {
+          // Killers can see each other
+          const allies = allCandidates.filter((t) => t.role === Roles.KILLER.id);
+          defendAlly = randomChoice(allies, state.rng);
+        } else {
+          // Non-Killer reds (Sniper, Terrorist, etc.) can't see allies —
+          // defend someone with low suspicion as a generic deflection
+          const lowSusp = allCandidates.filter((t) => (speaker.aiMemory?.suspicion?.[t.id] ?? 0.5) < 0.35);
+          defendAlly = randomChoice(lowSusp.length ? lowSusp : allCandidates, state.rng);
+        }
         if (defendAlly) {
           const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.defend);
           lines.push(tmpl(speaker.name, defendAlly.name));
@@ -5090,11 +5144,18 @@ export function generateLastWords(state, playerId) {
         return tmpl(player.name, frameTarget.name);
       }
     }
-    // 20%: subtly defend a killer ally
+    // 20%: subtly defend an ally — only Killers see other Killers
     if (roll < 0.55) {
-      const allies = alive.filter((t) => t.role === Roles.KILLER.id);
-      if (allies.length > 0) {
-        const ally = randomChoice(allies, state.rng);
+      let ally = null;
+      if (player.role === Roles.KILLER.id) {
+        const allies = alive.filter((t) => t.role === Roles.KILLER.id);
+        ally = allies.length > 0 ? randomChoice(allies, state.rng) : null;
+      } else {
+        // Non-Killer reds: defend a low-suspicion player as generic misdirection
+        const lowSusp = alive.filter((t) => t.id !== player.id && (player.aiMemory?.suspicion?.[t.id] ?? 0.5) < 0.35);
+        ally = lowSusp.length > 0 ? randomChoice(lowSusp, state.rng) : null;
+      }
+      if (ally) {
         const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.redProtectAlly);
         return tmpl(player.name, ally.name);
       }
