@@ -3368,6 +3368,57 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
     }
   }
 
+  // ── Vote correction: if AI publicly accused X but is voting Y, add a "changed my mind" line ──
+  if (hard && votes.length > 0 && state.dayChat) {
+    // Build map: speakerId -> set of accused targetIds from dayChat
+    // Sort players by name length descending to avoid prefix collisions (Player 15 before Player 1)
+    const playersByNameLen = [...state.players].filter(Boolean).sort((a, b) => b.name.length - a.name.length);
+    const chatAccused = {};
+    for (const line of state.dayChat) {
+      // Find speaker
+      let speakerId = null;
+      for (const p of playersByNameLen) {
+        if (line.startsWith(p.name + ":")) { speakerId = p.id; break; }
+      }
+      if (speakerId === null) continue;
+      const en = (line.split("||")[0] || line).toLowerCase();
+      const zh = line.includes("||") ? line.split("||")[1] : "";
+      const isAccusation = en.includes("suspicious") || en.includes("vote") || en.includes("don't trust") ||
+        en.includes("confirmed red") || en.includes("has to go") || en.includes("not who they seem") ||
+        en.includes("acting weird") || en.includes("doesn't add up") || en.includes("watching them") ||
+        zh.includes("可疑") || zh.includes("投") || zh.includes("不信任") || zh.includes("有問題");
+      if (!isAccusation) continue;
+      // Find accused target (longest name match first to avoid prefix collision)
+      for (const other of playersByNameLen) {
+        if (other.id === speakerId) continue;
+        if (line.includes(other.name)) {
+          if (!chatAccused[speakerId]) chatAccused[speakerId] = new Set();
+          chatAccused[speakerId].add(other.id);
+          break; // one accused per line
+        }
+      }
+    }
+
+    let corrections = 0;
+    for (const v of votes) {
+      if (corrections >= 3) break;
+      const actor = getPlayer(state, v.actorId);
+      if (!actor || actor.isHuman) continue;
+      const accused = chatAccused[v.actorId];
+      if (!accused || accused.size === 0) continue;
+      // If the AI accused someone but is voting a different person, and never accused their vote target
+      if (!accused.has(v.targetId) && state.rng() < 0.6) {
+        const target = getPlayer(state, v.targetId);
+        if (!target) continue;
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.voteCorrection);
+        const line = tmpl(actor.name, target.name);
+        state.dayChat.push(line);
+        state.publicLog.push(line);
+        corrections++;
+      }
+    }
+  }
+
   return votes;
 }
 
@@ -3471,11 +3522,22 @@ const CHAT_TEMPLATES = {
     (s, t) => `${s}: Stop ganging up on ${t}, there's no proof.||${s}：別圍攻 ${t} 了，沒有證據。`,
   ],
   // Improvement 10: Vote explanation chat
+  followReveal: [
+    (s, t) => `${s}: ${t} is confirmed red — I'm voting them, no question.||${s}：${t} 確認是紅方——我一定投他，沒問題。`,
+    (s, t) => `${s}: Police confirmed ${t} is red. Let's all vote them out.||${s}：警察確認 ${t} 是紅方。大家一起投掉他。`,
+    (s, t) => `${s}: Voting ${t} — the police have spoken.||${s}：投 ${t}——警察已經說了。`,
+    (s, t) => `${s}: ${t} is red, no doubt. Focus fire.||${s}：${t} 是紅方，毫無疑問。集火投他。`,
+  ],
   voteExplain: [
     (s, t) => `${s}: I'm voting ${t} because their behavior has been suspicious.||${s}：我投 ${t}，因為他行為一直很可疑。`,
     (s, t) => `${s}: ${t} has to go — look at who they've been defending.||${s}：${t} 必須出去，看看他一直在幫誰說話。`,
     (s, t) => `${s}: My vote goes to ${t}, I've been watching them.||${s}：我投 ${t}，我一直在觀察他。`,
     (s, t) => `${s}: I'm voting ${t} based on last night's results.||${s}：根據昨晚的結果，我投 ${t}。`,
+  ],
+  voteCorrection: [
+    (s, t) => `${s}: Changed my mind — voting ${t} after thinking it over.||${s}：我改主意了，想清楚後決定投 ${t}。`,
+    (s, t) => `${s}: Actually, ${t} is the bigger threat. Switching my vote.||${s}：其實 ${t} 威脅更大。我改票了。`,
+    (s, t) => `${s}: Wait — looking at the votes, ${t} is the right call.||${s}：等等，看了投票情況，投 ${t} 才對。`,
   ],
   voteAbstain: [
     (s) => `${s}: I'm not confident in anyone... abstaining for now.||${s}：我對誰都沒把握⋯先棄票。`,
@@ -3835,6 +3897,16 @@ export function generateChatLines(state, maxLines = 6) {
       continue;
     }
 
+    // ── Blue non-police follow police reveal (mirrors 95% vote-follow logic) ──
+    if (hard && state.policeRevealedRed !== null && speaker.faction === Faction.BLUE && speaker.role !== Roles.POLICE.id) {
+      const revealedTarget = getPlayer(state, state.policeRevealedRed);
+      if (revealedTarget?.alive && state.rng() < 0.85) {
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.followReveal);
+        lines.push(tmpl(speaker.name, revealedTarget.name));
+        continue;
+      }
+    }
+
     // ── Improvement 6: Bandwagon & counter ──
     if (hard) {
       // Check if 3+ lines already accuse the same person
@@ -3933,18 +4005,37 @@ export function generateChatLines(state, maxLines = 6) {
       }
     }
 
-    // ── Standard chat (improved with template variety + game phase + personality) ──
-    const target =
-      state.rng() < 0.5
-        ? randomChoice(allCandidates, state.rng)
-        : pickTargetBySuspicion(
-            state,
-            speaker,
-            (t) => t.alive && t.id !== speaker.id
-          );
+    // ── Standard chat (uses vote-like scoring for target selection) ──
+    let target = null;
+    if (hard && state.rng() >= 0.2) {
+      // 80%: pick target using vote-relevant signals (mirrors buildAiVoteActions scoring)
+      let bestTarget = null;
+      let bestScore = -Infinity;
+      for (const t of allCandidates) {
+        let s = speaker.aiMemory?.suspicion?.[t.id] ?? 0.5;
+        // Bonus: voted together with known-dead reds
+        for (const dead of state.players.filter((dp) => !dp.alive && dp.faction === Faction.RED)) {
+          const voteHistory = speaker.aiMemory?.voteHistory || {};
+          if (voteHistory[t.id]?.[dead.id]) s += 0.06;
+        }
+        // Penalty: saved players are confirmed blue
+        const wasSaved = (state.lastNightSummary || []).some(
+          (e) => typeof e === "string" && e.includes("saved") && e.includes(t.name)
+        );
+        if (wasSaved) s -= 0.2;
+        // Jitter for variety
+        s += (state.rng() - 0.5) * 0.2;
+        if (s > bestScore) { bestScore = s; bestTarget = t; }
+      }
+      target = bestTarget;
+    }
+    if (!target) {
+      // 20%: random for natural variety
+      target = randomChoice(allCandidates, state.rng);
+    }
     const useTarget = target;
     const suspicion = speaker.aiMemory?.suspicion?.[useTarget?.id] ?? 0.5;
-    let tone = suspicion > 0.7 ? "accuse" : suspicion < 0.3 ? "defend" : "wonder";
+    let tone = suspicion > 0.6 ? "accuse" : suspicion < 0.3 ? "defend" : "wonder";
     // Advanced: Game phase adjusts tone
     if (hard) {
       if (gamePhase === "early") {
