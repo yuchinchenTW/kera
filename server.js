@@ -10,7 +10,7 @@ import { generateNightFactionChat } from "./src/ai.js";
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 18;
-const RESTART_DELAY_MS = 8000;
+const RESTART_DELAY_MS = 25000;
 
 const room = {
   started: false,
@@ -175,27 +175,51 @@ function startTimer(phase, durationMs, onFire) {
 function scheduleNightTimer() {
   // Generate AI night faction chat so players see it during the night phase
   if (room.engine) {
-    room.engine.state.nightFactionChatDay = room.engine.state.dayNumber;
-    generateNightFactionChat(room.engine.state);
+    try {
+      room.engine.state.nightFactionChatDay = room.engine.state.dayNumber;
+      generateNightFactionChat(room.engine.state);
+    } catch (err) {
+      log("Error generating night faction chat:", err.message);
+    }
     broadcastViews();
   }
   startTimer("NIGHT", DURATIONS.night, () => {
-    const humanActions = Object.fromEntries(room.nightActions.entries());
-    room.engine.resolveNight(null, { humanActions, includeHuman: false });
-    room.nightActions.clear();
-    broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
-    broadcastViews();
-    if (room.engine.state.phase !== Phase.END) scheduleDayToVote();
-    scheduleRestartAfterVictory();
+    try {
+      const humanActions = Object.fromEntries(room.nightActions.entries());
+      room.engine.resolveNight(null, { humanActions, includeHuman: false });
+      room.nightActions.clear();
+      broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
+      broadcastViews();
+      if (room.engine.state.phase !== Phase.END) scheduleDayToVote();
+      scheduleRestartAfterVictory();
+    } catch (err) {
+      log("Error resolving night:", err.message, err.stack);
+      // Attempt recovery: advance to DAY to avoid permanent hang
+      try {
+        room.nightActions.clear();
+        if (room.engine) {
+          room.engine.state.phase = Phase.DAY;
+          broadcast({ type: "phase", phase: Phase.DAY, day: room.engine.state.dayNumber });
+          broadcastViews();
+          scheduleDayToVote();
+        }
+      } catch (recoveryErr) {
+        log("Recovery failed:", recoveryErr.message);
+      }
+    }
   });
 }
 
 function advanceToVotePhase() {
-  if (!room.engine || room.engine.state.phase === Phase.END) return;
-  room.engine.state.phase = Phase.VOTE;
-  broadcast({ type: "phase", phase: Phase.VOTE, day: room.engine.state.dayNumber });
-  broadcastViews();
-  scheduleVoteTimer();
+  try {
+    if (!room.engine || room.engine.state.phase === Phase.END) return;
+    room.engine.state.phase = Phase.VOTE;
+    broadcast({ type: "phase", phase: Phase.VOTE, day: room.engine.state.dayNumber });
+    broadcastViews();
+    scheduleVoteTimer();
+  } catch (err) {
+    log("Error advancing to vote phase:", err.message, err.stack);
+  }
 }
 
 function scheduleDayToVote() {
@@ -206,15 +230,33 @@ function scheduleDayToVote() {
 
 function scheduleVoteTimer() {
   startTimer("VOTE", DURATIONS.vote, () => {
-    const humanVotes = Object.fromEntries(room.voteActions.entries());
-    const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
-    room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
-    room.voteActions.clear();
-    room.lastWords.clear();
-    broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
-    broadcastViews();
-    if (room.engine.state.phase !== Phase.END) scheduleNightTimer();
-    scheduleRestartAfterVictory();
+    try {
+      const humanVotes = Object.fromEntries(room.voteActions.entries());
+      const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
+      room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
+      room.voteActions.clear();
+      room.lastWords.clear();
+      broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
+      broadcastViews();
+      if (room.engine.state.phase !== Phase.END) scheduleNightTimer();
+      scheduleRestartAfterVictory();
+    } catch (err) {
+      log("Error resolving vote:", err.message, err.stack);
+      // Attempt recovery: advance to NIGHT to avoid permanent hang
+      try {
+        room.voteActions.clear();
+        room.lastWords.clear();
+        if (room.engine) {
+          room.engine.state.phase = Phase.NIGHT;
+          room.engine.state.dayNumber = (room.engine.state.dayNumber || 1) + 1;
+          broadcast({ type: "phase", phase: Phase.NIGHT, day: room.engine.state.dayNumber });
+          broadcastViews();
+          scheduleNightTimer();
+        }
+      } catch (recoveryErr) {
+        log("Recovery failed:", recoveryErr.message);
+      }
+    }
   });
 }
 
@@ -672,14 +714,19 @@ wss.on("connection", (ws, req) => {
           return;
         }
         if (!room.started || !room.engine) return;
-        const humanActions = Object.fromEntries(room.nightActions.entries());
-        room.engine.resolveNight(null, { humanActions, includeHuman: false });
-        room.nightActions.clear();
-        clearTimer();
-        broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
-        broadcastViews();
-        if (room.engine.state.phase !== Phase.END) scheduleDayToVote();
-        scheduleRestartAfterVictory();
+        try {
+          const humanActions = Object.fromEntries(room.nightActions.entries());
+          room.engine.resolveNight(null, { humanActions, includeHuman: false });
+          room.nightActions.clear();
+          clearTimer();
+          broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
+          broadcastViews();
+          if (room.engine.state.phase !== Phase.END) scheduleDayToVote();
+          scheduleRestartAfterVictory();
+        } catch (err) {
+          log("Error in resolve_night:", err.message, err.stack);
+          send(ws, { type: "error", message: "Night resolution failed. Try again or restart." });
+        }
         break;
       }
       case "vote": {
@@ -734,16 +781,21 @@ wss.on("connection", (ws, req) => {
           return;
         }
         if (!room.started || !room.engine) return;
-        const humanVotes = Object.fromEntries(room.voteActions.entries());
-        const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
-        room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
-        room.voteActions.clear();
-        room.lastWords.clear();
-        clearTimer();
-        broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
-        broadcastViews();
-        if (room.engine.state.phase !== Phase.END) scheduleNightTimer();
-        scheduleRestartAfterVictory();
+        try {
+          const humanVotes = Object.fromEntries(room.voteActions.entries());
+          const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
+          room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
+          room.voteActions.clear();
+          room.lastWords.clear();
+          clearTimer();
+          broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
+          broadcastViews();
+          if (room.engine.state.phase !== Phase.END) scheduleNightTimer();
+          scheduleRestartAfterVictory();
+        } catch (err) {
+          log("Error in resolve_vote:", err.message, err.stack);
+          send(ws, { type: "error", message: "Vote resolution failed. Try again or restart." });
+        }
         break;
       }
       case "last_words": {
