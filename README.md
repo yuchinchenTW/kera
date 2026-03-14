@@ -1,5 +1,7 @@
 # Night / Day 18
 
+**Live Demo / 線上體驗：** https://kera.onrender.com/multiplayer.html
+
 ## Disclaimer
 This project is an original, non-commercial technical prototype for learning and experimentation.
 It does not use or include any assets, code, data, or materials from any existing commercial games.
