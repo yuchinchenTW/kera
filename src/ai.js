@@ -2213,7 +2213,6 @@ export function buildAiNightActions(state, opts = {}) {
 
             // Self-threat awareness: if cowboy is in danger, shoot more aggressively
             const selfSusp = actor.aiMemory?.suspicion?.[actor.id] ?? 0;
-            const selfIsRevealed = state.policeRevealedRed === actor.id;
             // Count how many players have voted for us recently
             let votesAgainstMe = 0;
             for (const round of (state.history?.votes || [])) {

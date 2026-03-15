@@ -449,12 +449,12 @@ if (!isMainThread) {
     reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
 
     for (const pr of playerResults) {
-      const { role, faction, alive, nightKill, voteKill } = pr;
+      const { role, startFaction, alive, nightKill, voteKill } = pr;
       roleSeen[role] = (roleSeen[role] || 0) + 1;
 
       const roleCountsAsWin =
-        (winner === "RED" && faction === "RED") ||
-        (winner === "BLUE" && faction === "BLUE") ||
+        (winner === "RED" && startFaction === "RED") ||
+        (winner === "BLUE" && startFaction === "BLUE") ||
         (winner === "ZOMBIE" && (role === Roles.ZOMBIE.id || pr.finalRole === Roles.ZOMBIE.id)) ||
         (winner === "GRUDGE" && (role === Roles.GRUDGE_BEAST.id || pr.finalRole === Roles.GRUDGE_BEAST.id));
       if (roleCountsAsWin) roleWins[role] = (roleWins[role] || 0) + 1;
@@ -578,12 +578,14 @@ function simulateGames(count, theme, difficulty, { L }) {
         acc.reasonCounts[reason] = (acc.reasonCounts[reason] || 0) + 1;
 
         for (const pr of playerResults) {
-          const { role, faction, alive, nightKill, voteKill } = pr;
+          const { role, startFaction, alive, nightKill, voteKill } = pr;
           acc.roleSeen[role] = (acc.roleSeen[role] || 0) + 1;
 
+          // Use startFaction for win attribution — zombie-converted players still
+          // count as their original faction's win/loss
           const roleCountsAsWin =
-            (winner === "RED" && faction === "RED") ||
-            (winner === "BLUE" && faction === "BLUE") ||
+            (winner === "RED" && startFaction === "RED") ||
+            (winner === "BLUE" && startFaction === "BLUE") ||
             (winner === "ZOMBIE" && (role === Roles.ZOMBIE.id || pr.finalRole === Roles.ZOMBIE.id)) ||
             (winner === "GRUDGE" && (role === Roles.GRUDGE_BEAST.id || pr.finalRole === Roles.GRUDGE_BEAST.id));
           if (roleCountsAsWin) acc.roleWins[role] = (acc.roleWins[role] || 0) + 1;
