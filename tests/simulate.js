@@ -455,8 +455,8 @@ if (!isMainThread) {
       const roleCountsAsWin =
         (winner === "RED" && startFaction === "RED") ||
         (winner === "BLUE" && startFaction === "BLUE") ||
-        (winner === "ZOMBIE" && (role === Roles.ZOMBIE.id || pr.finalRole === Roles.ZOMBIE.id)) ||
-        (winner === "GRUDGE" && (role === Roles.GRUDGE_BEAST.id || pr.finalRole === Roles.GRUDGE_BEAST.id));
+        (winner === "ZOMBIE" && role === Roles.ZOMBIE.id) ||
+        (winner === "GRUDGE" && role === Roles.GRUDGE_BEAST.id);
       if (roleCountsAsWin) roleWins[role] = (roleWins[role] || 0) + 1;
 
       if (alive) roleSurvived[role] = (roleSurvived[role] || 0) + 1;
@@ -583,11 +583,13 @@ function simulateGames(count, theme, difficulty, { L }) {
 
           // Use startFaction for win attribution — zombie-converted players still
           // count as their original faction's win/loss
+          // Zombie/Grudge wins only count for players who STARTED as that role
+          // (converted players shouldn't inflate their original role's win rate)
           const roleCountsAsWin =
             (winner === "RED" && startFaction === "RED") ||
             (winner === "BLUE" && startFaction === "BLUE") ||
-            (winner === "ZOMBIE" && (role === Roles.ZOMBIE.id || pr.finalRole === Roles.ZOMBIE.id)) ||
-            (winner === "GRUDGE" && (role === Roles.GRUDGE_BEAST.id || pr.finalRole === Roles.GRUDGE_BEAST.id));
+            (winner === "ZOMBIE" && role === Roles.ZOMBIE.id) ||
+            (winner === "GRUDGE" && role === Roles.GRUDGE_BEAST.id);
           if (roleCountsAsWin) acc.roleWins[role] = (acc.roleWins[role] || 0) + 1;
 
           if (alive) acc.roleSurvived[role] = (acc.roleSurvived[role] || 0) + 1;

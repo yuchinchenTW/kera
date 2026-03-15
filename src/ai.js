@@ -2296,21 +2296,63 @@ export function buildAiNightActions(state, opts = {}) {
           ensureAdvancedMemory(actor);
           // Track own bite history (zombie's private knowledge)
           if (!actor.aiMemory.biteTargets) actor.aiMemory.biteTargets = {};
+
+          // Count how many conversions have happened (from public log)
+          const conversionCount = (state.publicLog || []).filter(
+            (e) => typeof e === "string" && e.includes("turned into a zombie")
+          ).length;
+          // All zombies on the field: original (1) + conversions
+          // The more zombies exist, the more cautious we must be about biting
+          const estimatedZombieCount = 1 + conversionCount;
+
+          // Track own bite targets — hard skip anyone we've bitten before
+          const myBittenTargets = new Set(
+            Object.keys(actor.aiMemory.biteTargets).map(Number).filter((id) => actor.aiMemory.biteTargets[id] > 0)
+          );
+          // Parse dead zombie last words for bite target reveals ("I bit X, Y...")
+          // This helps converted zombies avoid re-biting targets other zombies already bit
+          for (const line of (state.dayChat || [])) {
+            const stripped = line.startsWith("[LAST] ") ? line.slice(7) : null;
+            if (!stripped || !stripped.includes("I bit ")) continue;
+            for (const p of state.players) {
+              if (p?.alive && stripped.includes(p.name)) {
+                myBittenTargets.add(p.id);
+              }
+            }
+          }
+          // Also check publicLog for last words with bite reveals
+          for (const entry of (state.publicLog || [])) {
+            if (typeof entry !== "string" || !entry.includes("I bit ")) continue;
+            for (const p of state.players) {
+              if (p?.alive && entry.includes(p.name)) {
+                myBittenTargets.add(p.id);
+              }
+            }
+          }
+
           let best = null;
           let bestScore = -Infinity;
           for (const t of shuffled(alivePlayers(state), state.rng)) {
             if (t.id === actor.id) continue;
+
+            // Hard skip: anyone we've bitten before (likely already converted)
+            if (myBittenTargets.has(t.id)) continue;
+
             // Avoid likely zombies — biting a zombie kills the biter
             const zombieProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.ZOMBIE.id] ?? 0;
-            if (zombieProb > 0.4) continue;
+            // Dynamic threshold: as more zombies exist, more players could be zombies
+            // Start at 0.3, lower as zombie count grows (more cautious)
+            const zombieThreshold = Math.max(0.15, 0.3 - estimatedZombieCount * 0.03);
+            if (zombieProb > zombieThreshold) continue;
+
             let score = 1 - zombieProb; // prefer non-zombies
-            // Bonus: target we've bitten before (our own memory, not hidden state)
-            const myBites = actor.aiMemory.biteTargets[t.id] || 0;
-            if (myBites > 0) score += 0.6; // finish converting targets we started
-            // Penalty: likely protected by agent/doctor
+            // Penalty: likely protected by agent/doctor — bite would be wasted
             const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
             const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
-            score -= (doctorProb + agentProb) * 0.3;
+            score -= (doctorProb + agentProb) * 0.4;
+            // Bonus: prefer non-red targets (more useful as zombie allies than red)
+            const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+            score += blueProb * 0.3;
             if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
               bestScore = score;
               best = t;
@@ -3065,6 +3107,37 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
         }
       }
       // Fallback: random safe vote
+    }
+
+    // ── Zombie voting strategy: blend in by voting like blue (high suspicion targets) ──
+    // Zombies want the game to last long enough to snowball conversions.
+    // Best strategy: vote out killers (reduces red threat) and blend with blue voters.
+    if (hard && actor.role === Roles.ZOMBIE.id) {
+      // Follow police reveal like blue would — blending in
+      if (policePubliclyRevealed) {
+        const redTarget = getPlayer(state, (state.policePublicRevealedRed ?? null));
+        if (redTarget?.alive && state.rng() < 0.9) {
+          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
+          return;
+        }
+      }
+      // Vote for whoever has the highest suspicion (mimic blue behavior to avoid detection)
+      const zombieCandidates = alivePlayers(state).filter((t) => t.id !== actor.id && t.role !== Roles.ZOMBIE.id);
+      if (zombieCandidates.length > 0) {
+        let bestTarget = null;
+        let bestSusp = -1;
+        for (const t of zombieCandidates) {
+          const s = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
+          // Prefer voting killers out — they kill zombie's conversion targets
+          const killerBonus = (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0) * 0.3;
+          const totalScore = s + killerBonus + (state.rng() - 0.5) * 0.1;
+          if (totalScore > bestSusp) { bestSusp = totalScore; bestTarget = t; }
+        }
+        if (bestTarget) {
+          votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: bestTarget.id });
+          return;
+        }
+      }
     }
 
     const roll = state.rng();
@@ -5256,6 +5329,17 @@ export function generateLastWords(state, playerId) {
       return tmpl(player.name);
     }
     if (player.role === Roles.ZOMBIE.id) {
+      // Reveal bite targets to help allied zombies avoid re-biting (reduce FATAL)
+      const biteTargets = player.aiMemory?.biteTargets || {};
+      const bittenNames = Object.keys(biteTargets)
+        .filter((id) => biteTargets[id] > 0)
+        .map((id) => getPlayer(state, Number(id)))
+        .filter((p) => p?.alive)
+        .map((p) => p.name);
+      if (bittenNames.length > 0) {
+        const names = bittenNames.slice(0, 3).join(", ");
+        return `${player.name}: I bit ${names}... the infection spreads.||${player.name}：我咬了 ${names}⋯感染在蔓延。`;
+      }
       const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.greenZombie);
       return tmpl(player.name);
     }
