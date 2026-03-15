@@ -2264,16 +2264,19 @@ export function buildAiNightActions(state, opts = {}) {
         let bestScore = -Infinity;
         for (const t of shuffled(alivePlayers(state), state.rng)) {
           if (t.id === actor.id) continue;
-          if (t.role === Roles.KILLER.id) continue; // never kidnap allies
+          // Avoid kidnapping likely red/green allies (kidnapper can't see identities)
           if (actor.lastKidnapTarget !== null && t.id === actor.lastKidnapTarget) continue;
           let score;
           if (hard) {
+            ensureAdvancedMemory(actor);
             const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
+            const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
             const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
             const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
             const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
-            // Prioritize disabling doctor (prevents saves) and police (prevents investigation)
-            score = blueProb + doctorProb * 0.8 + policeProb * 0.6 + agentProb * 0.4;
+            // Core: prefer confirmed blue targets, strongly penalize red probability
+            score = blueProb - redProb * 2.0
+              + doctorProb * 0.8 + policeProb * 0.6 + agentProb * 0.4;
           } else {
             const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
             score = redProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
@@ -2291,17 +2294,20 @@ export function buildAiNightActions(state, opts = {}) {
         // Hard+: prioritize finishing pending conversions (bite count tracking)
         // and avoid likely-protected targets
         if (hard) {
+          ensureAdvancedMemory(actor);
+          // Track own bite history (zombie's private knowledge)
+          if (!actor.aiMemory.biteTargets) actor.aiMemory.biteTargets = {};
           let best = null;
           let bestScore = -Infinity;
           for (const t of shuffled(alivePlayers(state), state.rng)) {
             if (t.id === actor.id) continue;
-            if (t.role === Roles.ZOMBIE.id) continue; // biting zombie = death
+            // Avoid likely zombies — biting a zombie kills the biter
             const zombieProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.ZOMBIE.id] ?? 0;
+            if (zombieProb > 0.4) continue;
             let score = 1 - zombieProb; // prefer non-zombies
-            // Huge bonus: if target has pending conversion, finish them off
-            if (t.status?.pendingZombieConversion) score += 1.0;
-            // Bonus: if target was bitten before (zombieBites > 0), easier to convert
-            if ((t.status?.zombieBites || 0) > 0) score += 0.5;
+            // Bonus: target we've bitten before (our own memory, not hidden state)
+            const myBites = actor.aiMemory.biteTargets[t.id] || 0;
+            if (myBites > 0) score += 0.6; // finish converting targets we started
             // Penalty: likely protected by agent/doctor
             const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
             const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
@@ -2312,7 +2318,11 @@ export function buildAiNightActions(state, opts = {}) {
             }
           }
           const target = best || pickZombieTarget(state, actor);
-          if (target) actions.push({ actorId: actor.id, type: "ZOMBIE_BITE", targetId: target.id });
+          if (target) {
+            actions.push({ actorId: actor.id, type: "ZOMBIE_BITE", targetId: target.id });
+            // Record bite in private memory for future targeting
+            actor.aiMemory.biteTargets[target.id] = (actor.aiMemory.biteTargets[target.id] || 0) + 1;
+          }
         } else {
           const target = pickZombieTarget(state, actor);
           if (target) actions.push({ actorId: actor.id, type: "ZOMBIE_BITE", targetId: target.id });
