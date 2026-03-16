@@ -32,7 +32,16 @@ npm start          # serves http://localhost:3001
 |------|-------------|
 | `server.js` | Node.js HTTP + WebSocket 伺服器，房間/大廳管理，多人遊戲流程 |
 | `src/engine.js` | 遊戲引擎：夜晚結算、投票結算、勝利判定 |
-| `src/ai.js` | AI 決策系統：信念、夜間行動、投票、聊天生成 |
+| `src/ai/` | AI 決策系統（模組化） |
+| `src/ai/utils.js` | AI 工具函式（clamp、isHard、rng helpers） |
+| `src/ai/analysis.js` | 投票/聊天模式分析、推理鏈、陣營機率 |
+| `src/ai/memory.js` | 貝氏信念系統（ensureBeliefs） |
+| `src/ai/targeting.js` | 各角色目標選擇邏輯 |
+| `src/ai/night.js` | 夜間行動生成（buildAiNightActions） |
+| `src/ai/vote.js` | 投票決策生成（buildAiVoteActions） |
+| `src/ai/chat.js` | 公開/陣營/遺言聊天生成 |
+| `src/ai/templates.js` | 雙語聊天模板（純資料） |
+| `src/ai/index.js` | AI 模組公開 API re-export |
 | `src/state.js` | 遊戲狀態初始化、玩家/死亡管理、陣營人數統計 |
 | `src/roles.js` | 角色/陣營/主題/階段定義、角色元資料 |
 | `src/view.js` | 玩家視角產生器（依角色可見性規則隱藏資訊） |
