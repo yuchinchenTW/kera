@@ -1,4 +1,4 @@
-import { buildAiNightActions, buildAiVoteActions, generateChatLines, generateLastWords, generateFactionChat, generateNightFactionChat } from "./ai.js";
+import { buildAiNightActions, buildAiVoteActions, generateChatLines, generateLastWords, generateFactionChat, generateNightFactionChat } from "./ai/index.js";
 import {
   addPrivateLog,
   addPublicLog,

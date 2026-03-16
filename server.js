@@ -6,7 +6,7 @@ import { WebSocketServer } from "ws";
 import { GameEngine } from "./src/engine.js";
 import { buildPlayerView, buildSpectatorView } from "./src/view.js";
 import { Theme, Phase } from "./src/roles.js";
-import { generateNightFactionChat } from "./src/ai.js";
+import { generateNightFactionChat } from "./src/ai/index.js";
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 18;
