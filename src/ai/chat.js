@@ -264,6 +264,8 @@ export function generateChatLines(state, maxLines = 6) {
               policeRevealedInChat = true;
               state.policePublicRevealedRed = state.policeRevealedRed;
             }
+            state.roleClaims = state.roleClaims || {};
+            state.roleClaims[speaker.id] = Roles.POLICE.id;
             continue;
           }
         }
@@ -279,6 +281,9 @@ export function generateChatLines(state, maxLines = 6) {
               lines.push(tmpl(speaker.name, redTarget.name));
               policeRevealedInChat = true;
               state.policePublicRevealedRed = state.policeRevealedRed;
+              // Mark speaker as publicly-acting-as-police so killers can see via roleClaims
+              state.roleClaims = state.roleClaims || {};
+              state.roleClaims[speaker.id] = Roles.POLICE.id;
               continue;
             }
           }
@@ -297,6 +302,9 @@ export function generateChatLines(state, maxLines = 6) {
           if (blueTarget && state.rng() < finalChance) {
             const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeRevealBlue);
             lines.push(tmpl(speaker.name, blueTarget.name));
+            // Mark speaker as publicly-acting-as-police
+            state.roleClaims = state.roleClaims || {};
+            state.roleClaims[speaker.id] = Roles.POLICE.id;
             continue;
           }
         }
@@ -309,6 +317,8 @@ export function generateChatLines(state, maxLines = 6) {
       lines.push(tmpl(speaker.name, redFound.name));
       policeRevealedInChat = true;
       state.policePublicRevealedRed = state.policeRevealedRed;
+      state.roleClaims = state.roleClaims || {};
+      state.roleClaims[speaker.id] = Roles.POLICE.id;
       continue;
     }
 
@@ -606,17 +616,19 @@ export function generateNightFactionChat(state) {
       const s = speaker.name;
       const lines = [];
 
-      // ─ Use the real targeting logic to pick the actual kill target ─
-      const smartTarget = pickKillerSmartTarget(state, speaker);
-      // Check if saved recently and needs rotation (same logic as buildAiNightActions)
-      const savedRecently = (state.lastNightSavedIds || []).length > 0;
-      const savedName = savedRecently ? nonKillers.find((t) =>
-        (state.lastNightSavedIds || []).includes(t.id)
-      ) : null;
-      let actualTarget = smartTarget;
-      if (actualTarget && savedName && actualTarget.id === savedName.id && state.killerLastTarget === actualTarget.id) {
-        // Target was saved and is the same as last — AI will rotate, pick next best
-        actualTarget = pickKillerSmartTarget(state, speaker) || smartTarget;
+      // ─ Group consensus: each killer picks, majority wins ─
+      const killerPicks = {};
+      for (const k of killers) {
+        const pick = pickKillerSmartTarget(state, k);
+        if (pick) killerPicks[pick.id] = (killerPicks[pick.id] || 0) + 1;
+      }
+      let actualTarget = null;
+      let bestCount = 0;
+      for (const [tid, cnt] of Object.entries(killerPicks)) {
+        if (cnt > bestCount || (cnt === bestCount && state.rng() < 0.5)) {
+          bestCount = cnt;
+          actualTarget = alivePlayers(state).find(p => p.id === Number(tid)) || null;
+        }
       }
       // Store the coordinated target so buildAiNightActions uses the same one
       if (actualTarget) state._killerChatTarget = actualTarget.id;
