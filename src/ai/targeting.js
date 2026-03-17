@@ -467,12 +467,13 @@ export function pickKillerSmartTarget(state, actor) {
   }
 
   // Pre-compute: doctor protection prediction — who would doctor protect tonight?
-  // Doctor tends to protect: saved targets (repeat), correct voters, high-threat blues, accused-by-red
+  // Doctor faces overdose dilemma: protecting same target twice risks empty injection.
+  // So doctor is LESS likely to re-protect saved targets, not more.
   const doctorProtectScore = {};
   for (const t of alivePlayers(state)) {
     if (t.role === Roles.KILLER.id) continue;
     let dp = 0;
-    if (savedLastNight.has(t.id)) dp += 0.5; // doctor often repeats protection
+    if (savedLastNight.has(t.id)) dp -= 0.2; // doctor avoids repeat → overdose risk
     if (correctVoters.has(t.id)) dp += 0.2;
     if (redAccuserCount[t.id]) dp += 0.15;
     if (killerBlueDefended.has(t.id)) dp += 0.3; // police confirmed = doctor priority
@@ -530,13 +531,10 @@ export function pickKillerSmartTarget(state, actor) {
     // Penalty: likely protected by agent
     score += agentProb * W("agentProb", -0.3);
 
-    // Penalty: saved last night — likely still protected (but weaker than before if dp already penalizes)
+    // Bonus: saved last night — doctor faces overdose dilemma if they protect again.
+    // Re-attacking forces doctor to choose: risk overdose or leave target unprotected.
     if (savedLastNight.has(t.id)) {
-      score += W("savedLastNight", -0.4);
-    }
-    // Skip saved+same target 80%
-    if (state.killerLastTarget !== undefined && t.id === state.killerLastTarget && savedLastNight.has(t.id)) {
-      if (state.rng() < 0.8) continue;
+      score += W("savedLastNight", 0.25);
     }
     // Target type rotation after successful kill
     if (state.killerLastTarget !== undefined && t.id !== state.killerLastTarget) {

@@ -674,11 +674,11 @@ export function generateNightFactionChat(state) {
       } else {
         // Subsequent nights: richer briefing
 
-        // 1. Save warning — specific intel
+        // 1. Save intel — exploit doctor's overdose dilemma
         if (top && top.wasSaved) {
-          lines.push(`${s}: ${top.p.name} was saved last night — doctor or agent is on them. Switch to ${alt ? alt.p.name : "someone else"}.||${s}：${top.p.name} 昨晚被救了，醫生或特務在守他。改殺 ${alt ? alt.p.name : "其他人"}。`);
+          lines.push(`${s}: ${top.p.name} was saved last night — hit them again. Doctor can't protect twice without overdose risk.||${s}：${top.p.name} 昨晚被救了，再殺一次。醫生不敢連續保，會有過量風險。`);
         } else if (savedRecently && savedName) {
-          lines.push(`${s}: ${savedName.name} got saved — they have protection. Avoid them.||${s}：${savedName.name} 被救了，有人在保他，避開。`);
+          lines.push(`${s}: ${savedName.name} got saved — attack again, the doctor has to switch or risk overdose.||${s}：${savedName.name} 被救了，再打一次，醫生必須換人保否則會過量。`);
         }
 
         // 2. Kill target + reasoning

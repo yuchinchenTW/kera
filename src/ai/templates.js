@@ -204,9 +204,9 @@ export const FACTION_CHAT = {
       (s, t) => `${s}: Keep an eye on ${t}, they might be onto us.||${s}：注意 ${t}，他可能發現我們了。`,
     ],
     // Avoid doctor
-    avoidProtected: [
-      (s, t) => `${s}: ${t} was saved last night, skip them.||${s}：${t} 昨晚被救了，跳過他。`,
-      (s, t) => `${s}: Someone is protecting ${t}, pick another target.||${s}：有人在保 ${t}，換目標吧。`,
+    exploitSaved: [
+      (s, t) => `${s}: ${t} was saved — hit them again, doctor can't risk overdose.||${s}：${t} 被救了，再打一次，醫生不敢連保。`,
+      (s, t) => `${s}: Attack ${t} again — the doctor has to switch or overdose them.||${s}：再殺 ${t}，醫生必須換人否則會過量致死。`,
     ],
   },
   police: {
@@ -286,10 +286,10 @@ export const NIGHT_FACTION_CHAT = {
       (s, t) => `${s}: I'll go for ${t} tonight, see how it goes.||${s}：今晚先殺 ${t}，看看情況。`,
       (s, t) => `${s}: ${t} might be police, let's hit them first.||${s}：${t} 可能是警察，先殺他。`,
     ],
-    avoidWarn: [
-      (s, t) => `${s}: Don't touch ${t}, doctor might be guarding them.||${s}：別動 ${t}，醫生可能在守他。`,
-      (s, t) => `${s}: ${t} survived last time, someone is protecting them.||${s}：${t} 上次沒死，有人在保他。`,
-      (s, t) => `${s}: Skip ${t}, too risky tonight.||${s}：跳過 ${t}，今晚太危險了。`,
+    exploitSavedNight: [
+      (s, t) => `${s}: ${t} was saved — attack again, doctor risks overdose if they repeat.||${s}：${t} 被救了，再殺一次，醫生連保會過量。`,
+      (s, t) => `${s}: Hit ${t} again tonight — doctor can't afford to protect twice.||${s}：今晚再打 ${t}，醫生不敢連續保。`,
+      (s, t) => `${s}: ${t} survived, but the doctor is in a bind now. Go again.||${s}：${t} 沒死，但醫生現在進退兩難。再打一次。`,
     ],
     tomorrowPlan: [
       (s, t) => `${s}: After the kill, we frame ${t} tomorrow in chat.||${s}：殺完之後，明天帶風向指控 ${t}。`,
