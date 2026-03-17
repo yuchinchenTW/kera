@@ -1283,9 +1283,18 @@ export function generateLastWords(state, playerId) {
       }
 
       if (parts.length > 0) {
-        // Combine up to 2 results (last words character limit), red always first
-        return parts.slice(0, 2).map((p) => p.split("||")[0]).join(" ") +
-          "||" + parts.slice(0, 2).map((p) => p.split("||")[1] || "").join(" ");
+        // Combine up to 2 results, red always first
+        // Each part is "EN||ZH" — split correctly and rejoin
+        const selected = parts.slice(0, 2);
+        const enParts = selected.map((p) => {
+          const idx = p.indexOf("||");
+          return idx >= 0 ? p.slice(0, idx) : p;
+        });
+        const zhParts = selected.map((p) => {
+          const idx = p.indexOf("||");
+          return idx >= 0 ? p.slice(idx + 2) : "";
+        });
+        return enParts.join(" ") + "||" + zhParts.join(" ");
       }
     }
 

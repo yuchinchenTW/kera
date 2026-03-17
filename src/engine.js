@@ -1144,7 +1144,7 @@ export class GameEngine {
     if (player.noLastWords) return false;
     if (player.lastWords && player.lastWords.trim()) return false;
     if (this.state.phase !== Phase.DAY && this.state.phase !== Phase.VOTE && this.state.phase !== Phase.NIGHT) return false;
-    const trimmed = (text || "").trim().slice(0, 128);
+    const trimmed = (text || "").trim().slice(0, 300);
     if (!trimmed) return false;
     player.lastWords = trimmed;
     // Bilingual last words use "EN||ZH" format — wrap entire thing for client translateLine
