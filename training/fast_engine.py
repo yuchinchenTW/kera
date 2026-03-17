@@ -265,6 +265,8 @@ class FastGame:
                 vote_record[pid] = target
 
         self.vote_history.append(vote_record)
+        # Store last vote record for reward calculation
+        self.last_vote_record = vote_record
 
         # Find execution target (plurality)
         executed = None
@@ -274,6 +276,8 @@ class FastGame:
             executed = self.rng.choice(candidates)
             self.players[executed].alive = False
             self.vote_kills += 1
+
+        self.last_executed = executed
 
         # Update beliefs based on votes
         self._update_beliefs_vote(vote_record, executed)
@@ -627,19 +631,43 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
                         rewards[p.id] += 0.05  # found a red
                 game._prev_found_red = game.police_found_red
 
-    # Vote execution shaping
-    if prev_alive is not None:
-        for i in range(NUM_PLAYERS):
-            if prev_alive[i] and not game.players[i].alive and game.players[i].faction == F_RED:
-                # Blue team voted out a red — small reward for all alive blue
-                for p in game.players:
-                    if p.alive and p.faction == F_BLUE:
-                        rewards[p.id] += 0.02
-            elif prev_alive[i] and not game.players[i].alive and game.players[i].faction == F_BLUE:
-                # Blue team voted out a blue — small penalty
-                for p in game.players:
-                    if p.alive and p.faction == F_BLUE:
-                        rewards[p.id] -= 0.01
+    # Vote execution shaping — per-voter rewards
+    vote_record = getattr(game, 'last_vote_record', {})
+    executed = getattr(game, 'last_executed', None)
+    if executed is not None and vote_record:
+        victim_faction = game.players[executed].faction
+
+        for voter_id, target_id in vote_record.items():
+            voter = game.players[voter_id]
+            if not voter.alive:
+                continue
+
+            if target_id == executed:
+                # This voter voted for the executed player
+                if victim_faction == F_RED:
+                    # Voted out a red — good
+                    rewards[voter_id] += 0.04  # personal reward for correct vote
+
+                    # Extra: if following a real police reveal
+                    if game.police_public_red == executed:
+                        rewards[voter_id] += 0.02  # following real intel
+                else:
+                    # Voted out a blue — bad
+                    rewards[voter_id] -= 0.03  # personal penalty for wrong vote
+
+                    # Extra: if following a fake police reveal (got tricked)
+                    if game.police_public_red == executed:
+                        # Check if the "police" who revealed was actually a killer (fake claim)
+                        claimer = None
+                        for pid, role in game.role_claims.items():
+                            if role == R_POLICE or (isinstance(role, int) and role == R_POLICE):
+                                claimer = pid
+                                break
+                            if role == "POLICE":
+                                claimer = int(pid) if isinstance(pid, str) else pid
+                                break
+                        if claimer is not None and game.players[claimer].role == R_KILLER:
+                            rewards[voter_id] -= 0.02  # extra penalty: got tricked by fake police
 
     # ── Terminal rewards (large, game end only) ──
     if game.victory is not None:
