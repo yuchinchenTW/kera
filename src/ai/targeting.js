@@ -499,10 +499,18 @@ export function pickKillerSmartTarget(state, actor) {
     const W = (feat, def) => getWeight("KILLER", "night", feat, def);
     let score = blueProb * W("blueProb", 1.0);
 
-    // Bonus: police are high-value targets — removing police cripples blue intel
+    // ── #1 PRIORITY: publicly-claimed police must die ──
+    // A police who has revealed intel is the single biggest threat to red.
+    // This overrides ALL other considerations (protection, saves, etc.)
+    const claimedPolice = state.roleClaims?.[t.id] === Roles.POLICE.id;
+    if (claimedPolice) {
+      score += 1.5; // massive bonus — killing revealed police is always worth it
+    }
+
+    // Bonus: police probability from beliefs
     score += policeProb * W("policeProb", 0.8);
 
-    // Bonus: doctor is the #1 threat — every night save wastes a kill
+    // Bonus: doctor is high-value — every night save wastes a kill
     score += doctorProb * W("doctorProb", 0.6);
 
     // Bonus: active speakers are threats (they influence votes)
@@ -521,18 +529,18 @@ export function pickKillerSmartTarget(state, actor) {
     // Penalty: heavily voted targets may be voted out — save the kill
     if (heavilyVoted.has(t.id)) score += W("heavilyVoted", -0.3);
 
-    // Penalty: doctor protection prediction — avoid targets doctor is likely guarding
-    const dpScore = doctorProtectScore[t.id] || 0;
-    score -= dpScore * Math.abs(W("doctorProtect", 0.6));
+    // Doctor protection — less relevant if target is confirmed police (must kill regardless)
+    if (!claimedPolice) {
+      const dpScore = doctorProtectScore[t.id] || 0;
+      score -= dpScore * Math.abs(W("doctorProtect", 0.6));
+    }
 
-    // Penalty: police-confirmed blue — doctor almost certainly protecting them
-    if (killerBlueDefended.has(t.id)) score += W("blueDefended", -0.5);
-
-    // Penalty: likely protected by agent
-    score += agentProb * W("agentProb", -0.3);
+    // Penalty: likely protected by agent (but not for confirmed police — worth the risk)
+    if (!claimedPolice) {
+      score += agentProb * W("agentProb", -0.3);
+    }
 
     // Bonus: saved last night — doctor faces overdose dilemma if they protect again.
-    // Re-attacking forces doctor to choose: risk overdose or leave target unprotected.
     if (savedLastNight.has(t.id)) {
       score += W("savedLastNight", 0.25);
     }

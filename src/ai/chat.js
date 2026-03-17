@@ -705,6 +705,16 @@ export function generateNightFactionChat(state) {
       const policeRevealed = (state.policePublicRevealedRed ?? null) !== null;
       const revealedIsUs = policeRevealed && allKillersAlive.some((k) => k.id === state.policePublicRevealedRed);
 
+      // ─ Check for publicly-claimed police (highest priority kill) ─
+      const claimedPoliceTarget = nonKillers.find((t) =>
+        t.alive && state.roleClaims?.[t.id] === Roles.POLICE.id
+      );
+      if (claimedPoliceTarget && actualTarget?.id !== claimedPoliceTarget.id) {
+        // Override target to the claimed police
+        actualTarget = claimedPoliceTarget;
+        if (actualTarget) state._killerChatTarget = actualTarget.id;
+      }
+
       // ─ Build tactical lines ─
       if (isFirstNight) {
         // First night: target recommendation + reasoning
@@ -717,8 +727,13 @@ export function generateNightFactionChat(state) {
       } else {
         // Subsequent nights: richer briefing
 
+        // 0. PRIORITY: publicly-claimed police must die
+        if (claimedPoliceTarget && claimedPoliceTarget.alive) {
+          lines.push(`${s}: ${claimedPoliceTarget.name} claimed police and revealed our teammate — they MUST die tonight. Ignore protection.||${s}：${claimedPoliceTarget.name} 跳警揭露了我們的人，今晚必須殺掉。不管有沒有保護。`);
+        }
+
         // 1. Save intel — exploit doctor's overdose dilemma
-        if (top && top.wasSaved) {
+        if (top && top.wasSaved && !claimedPoliceTarget) {
           lines.push(`${s}: ${top.p.name} was saved last night — hit them again. Doctor can't protect twice without overdose risk.||${s}：${top.p.name} 昨晚被救了，再殺一次。醫生不敢連續保，會有過量風險。`);
         } else if (savedRecently && savedName) {
           lines.push(`${s}: ${savedName.name} got saved — attack again, the doctor has to switch or risk overdose.||${s}：${savedName.name} 被救了，再打一次，醫生必須換人保否則會過量。`);
