@@ -81,7 +81,7 @@ export function generateChatLines(state, maxLines = 6) {
     // ── Improvement 13: Fake police claim (8% chance, once per game, killer only) ──
     if (hard && isRedSpeaker && speaker.role === Roles.KILLER.id &&
         !speaker.aiMemory.fakePoliceClaimUsed &&
-        state.policeRevealedRed === null &&
+        (state.policePublicRevealedRed ?? null) === null &&
         (state.dayNumber || 1) >= 2 &&
         state.rng() < 0.08) {
       // Killers know other killers, so target non-killers (likely blue)

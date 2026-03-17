@@ -451,14 +451,16 @@ export function pickKillerSmartTarget(state, actor) {
     }
   }
 
-  // Pre-compute: players defended by police in chat (likely doctor-protected)
+  // Pre-compute: players defended by publicly-claimed police in chat (likely doctor-protected)
+  // Uses roleClaims (public info) instead of speaker.role (hidden info) to avoid info leak
   const killerBlueDefended = new Set();
   for (const p of state.players) {
     if (!p.aiMemory?.chatMemory) continue;
     for (const m of p.aiMemory.chatMemory) {
       if (m.defendedId === null) continue;
-      const speaker = getPlayer(state, m.speakerId);
-      if (speaker && speaker.role === Roles.POLICE.id) {
+      // Only treat as police if they publicly claimed the role
+      const claimedPolice = state.roleClaims?.[m.speakerId] === Roles.POLICE.id;
+      if (claimedPolice) {
         killerBlueDefended.add(m.defendedId);
       }
     }

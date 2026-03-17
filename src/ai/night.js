@@ -49,9 +49,25 @@ export function buildAiNightActions(state, opts = {}) {
       if (sharedKillerTarget && !sharedKillerTarget.alive) sharedKillerTarget = null;
     }
     if (!sharedKillerTarget) {
-      // Hard+: use smart targeting instead of simple group suspicion
+      // Hard+: each killer picks a target, then majority vote decides
       if (hard && killerActors.length > 0) {
-        sharedKillerTarget = pickKillerSmartTarget(state, killerActors[0]);
+        const killerPicks = {};
+        for (const k of killerActors) {
+          const pick = pickKillerSmartTarget(state, k);
+          if (pick) {
+            killerPicks[pick.id] = (killerPicks[pick.id] || 0) + 1;
+          }
+        }
+        // Majority target among all killers' individual picks
+        let bestTarget = null;
+        let bestCount = 0;
+        for (const [tid, cnt] of Object.entries(killerPicks)) {
+          if (cnt > bestCount || (cnt === bestCount && state.rng() < 0.5)) {
+            bestCount = cnt;
+            bestTarget = getPlayer(state, Number(tid));
+          }
+        }
+        sharedKillerTarget = bestTarget;
       } else {
         sharedKillerTarget =
           state.rng() < 0.6
