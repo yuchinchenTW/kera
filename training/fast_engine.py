@@ -571,19 +571,87 @@ def encode_all_fast(game):
     return obs, masks
 
 
-def compute_rewards_fast(game):
-    """Compute rewards for all players."""
+def compute_rewards_fast(game, prev_alive=None, events=None):
+    """
+    Compute rewards for all players.
+    Includes per-step shaping rewards to encourage role-appropriate actions.
+    """
     rewards = np.zeros(NUM_PLAYERS, dtype=np.float32)
-    if game.victory is None:
-        return rewards
-    for i in range(NUM_PLAYERS):
-        p = game.players[i]
-        if game.victory == "BLUE":
-            rewards[i] = 1.0 if p.faction == F_BLUE else -1.0
-        elif game.victory == "RED":
-            rewards[i] = 1.0 if p.faction == F_RED else -1.0
-        if p.alive:
-            rewards[i] += 0.05
+
+    # ── Per-step shaping rewards (small, every phase) ──
+    # These teach roles to USE their abilities instead of learning to do nothing.
+    if prev_alive is not None and events:
+        for event_type, target_id in events:
+            if event_type == "killed":
+                # Killer team gets small reward for successful kills on blue
+                victim = game.players[target_id]
+                if victim.faction == F_BLUE:
+                    for p in game.players:
+                        if p.role == R_KILLER and p.alive:
+                            rewards[p.id] += 0.03  # good kill
+                elif victim.faction == F_RED:
+                    for p in game.players:
+                        if p.role == R_KILLER and p.alive:
+                            rewards[p.id] -= 0.02  # friendly fire
+
+            elif event_type == "sniped":
+                victim = game.players[target_id]
+                sniper = next((p for p in game.players if p.role == R_SNIPER and p.alive), None)
+                if sniper:
+                    if victim.faction == F_BLUE:
+                        rewards[sniper.id] += 0.05  # good snipe
+                    else:
+                        rewards[sniper.id] -= 0.05  # friendly fire
+
+            elif event_type == "saved":
+                # Doctor gets reward for successful save
+                for p in game.players:
+                    if p.role == R_DOCTOR and p.alive:
+                        rewards[p.id] += 0.05  # good save
+
+            elif event_type == "overdose":
+                victim = game.players[target_id]
+                for p in game.players:
+                    if p.role == R_DOCTOR and p.alive:
+                        if victim.faction == F_RED:
+                            rewards[p.id] += 0.06  # overdosed a red — good
+                        else:
+                            rewards[p.id] -= 0.08  # overdosed a blue — bad
+
+        # Police: reward for finding red
+        if game.police_found_red > 0:
+            prev_found = getattr(game, '_prev_found_red', 0)
+            if game.police_found_red > prev_found:
+                for p in game.players:
+                    if p.role == R_POLICE and p.alive:
+                        rewards[p.id] += 0.05  # found a red
+                game._prev_found_red = game.police_found_red
+
+    # Vote execution shaping
+    if prev_alive is not None:
+        for i in range(NUM_PLAYERS):
+            if prev_alive[i] and not game.players[i].alive and game.players[i].faction == F_RED:
+                # Blue team voted out a red — small reward for all alive blue
+                for p in game.players:
+                    if p.alive and p.faction == F_BLUE:
+                        rewards[p.id] += 0.02
+            elif prev_alive[i] and not game.players[i].alive and game.players[i].faction == F_BLUE:
+                # Blue team voted out a blue — small penalty
+                for p in game.players:
+                    if p.alive and p.faction == F_BLUE:
+                        rewards[p.id] -= 0.01
+
+    # ── Terminal rewards (large, game end only) ──
+    if game.victory is not None:
+        for i in range(NUM_PLAYERS):
+            p = game.players[i]
+            if game.victory == "BLUE":
+                rewards[i] += 1.0 if p.faction == F_BLUE else -1.0
+            elif game.victory == "RED":
+                rewards[i] += 1.0 if p.faction == F_RED else -1.0
+            if p.alive:
+                rewards[i] += 0.05
+
     return rewards
 
 
@@ -669,6 +737,10 @@ class FastBatchEnv:
             # Parse actions for this game
             act = actions[i]  # [18, 4]
 
+            # Track alive state before step (for shaping rewards)
+            prev_alive = [p.alive for p in game.players]
+            events = []
+
             if game.phase == "NIGHT":
                 # Night actions
                 night_actions = {}
@@ -676,7 +748,7 @@ class FastBatchEnv:
                     t = int(act[pid, 0])
                     if t >= 0 and t < 18:
                         night_actions[pid] = t
-                game.resolve_night(night_actions)
+                events = game.resolve_night(night_actions)
 
                 # Process chat actions for day phase
                 if game.phase == "DAY" and game.victory is None:
@@ -698,8 +770,8 @@ class FastBatchEnv:
                         vote_actions[pid] = t
                 game.resolve_vote(vote_actions)
 
-            # Encode
-            rewards[i] = compute_rewards_fast(game)
+            # Encode (with shaping rewards)
+            rewards[i] = compute_rewards_fast(game, prev_alive, events)
             dones[i] = game.victory is not None
 
             info = {
