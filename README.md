@@ -415,7 +415,33 @@ python training/evaluate.py --games 200 --mode all_heuristic
 - **觀測向量 (1135 維)**：投票圖譜 (18x18)、聊天指控/辯護矩陣、遺言信號、信念分佈、角色資源
 - **模型**：共享策略網路 + Multi-head Attention + 集中式 critic (CTDE)，678K 參數
 - **加速**：純 Python 引擎 + Numba JIT 觀測編碼（292x），無 Node.js subprocess 開銷
-- **TensorBoard 指標**：勝率、loss、entropy、醫生打針/救援/overdose、狙擊手開槍、警察查獲紅方
+**TensorBoard 指標說明 Metrics Guide：**
+
+| 指標 Metric | 位置 | 意義 | 健康範圍 |
+|-------------|------|------|---------|
+| `loss/policy` | 訓練 | 策略改善幅度（負值=策略在變好） | -0.01 ~ 0，穩定不大跳 |
+| `loss/value` | 訓練 | critic 預測「會不會贏」的準度（越低越準） | 0.1 ~ 0.4，持續下降是好的 |
+| `loss/entropy` | 訓練 | 行動隨機程度（高=探索中，低=確定策略） | 4-head 初期 ~5.0，收斂到 ~3.0 |
+| `perf/steps_per_sec` | 效能 | 訓練速度 | 256 envs 約 1500 sps |
+| `winrate/BLUE` | 遊戲 | 藍方（警察陣營）勝率 | 自我對弈趨近 0.5 |
+| `winrate/RED` | 遊戲 | 紅方（殺手陣營）勝率 | 自我對弈趨近 0.5 |
+| `game/avg_length` | 遊戲 | 平均遊戲天數（越長=雙方越強） | 5-7 天正常 |
+| `game/total_games` | 遊戲 | 累計完成遊戲數 | 持續上升 |
+| `usage/doctorInjections` | 角色 | 每場醫生平均打針數（上限 6） | ~3-4 |
+| `usage/doctorSaves` | 角色 | 每場醫生平均救援數 | ~0.3-0.5 |
+| `usage/doctorOverdoses` | 角色 | 每場雙針殺人次數 | ~0.2-0.3 |
+| `usage/sniperShots` | 角色 | 每場狙擊手開槍數（上限 4） | ~3-3.5 |
+| `usage/policeFoundRed` | 角色 | 每場警察查獲紅方數 | ~1.5-2.0 |
+| `usage/nightKills` | 整體 | 每場夜間總死亡數 | ~7-9 |
+| `usage/voteKills` | 整體 | 每場投票處決數 | ~4-6 |
+
+**如何判斷訓練是否正常 How to tell if training is healthy：**
+- `entropy` 緩慢下降 = 策略在收斂（好），急跌 = 過早收斂（不好）
+- `value loss` 持續下降 = AI 越來越會判斷局勢
+- `winrate` 從偏向一方逐漸趨向 50:50 = 雙方都在進步
+- `avg_length` 增加 = 雙方攻防品質提升
+- `policy loss` 接近 0 且穩定 = 策略收斂
+- `steps_per_sec` 穩定 = 沒有記憶體洩漏或效能退化
 
 ### 方式二：CMA-ES 權重優化 / CMA-ES Weight Optimization
 
