@@ -78,19 +78,62 @@ export function generateChatLines(state, maxLines = 6) {
       }
     }
 
-    // ── Improvement 13: Fake police claim (8% chance, once per game, killer only) ──
+    // ── Fake police claim (40% chance, once per game, killer only) ──
+    // Killer pretends to be police and frames a blue player as "confirmed red".
+    // Writes to roleClaims so the belief system treats it as a real police reveal,
+    // misleading blue AI into voting out their own teammate.
     if (hard && isRedSpeaker && speaker.role === Roles.KILLER.id &&
         !speaker.aiMemory.fakePoliceClaimUsed &&
         (state.policePublicRevealedRed ?? null) === null &&
         (state.dayNumber || 1) >= 2 &&
-        state.rng() < 0.08) {
-      // Killers know other killers, so target non-killers (likely blue)
+        state.rng() < 0.40) {
+      // Strategic target selection: pick the most dangerous blue player to frame
+      // Killers can see other killers, so frame non-killers only
       const framePool = allCandidates.filter((t) => t.role !== Roles.KILLER.id);
-      const frameTarget = randomChoice(framePool.length ? framePool : allCandidates, state.rng);
+      let frameTarget = null;
+      let bestFrameScore = -Infinity;
+
+      for (const t of framePool) {
+        let fs = 0;
+        // Prefer framing active speakers (they're influential — removing them hurts blue)
+        const speakRatio = (state.dayChat || []).filter(l => l.startsWith(t.name + ":")).length;
+        fs += speakRatio * 0.3;
+        // Prefer framing players who accused killers (they're onto us)
+        const accusedKiller = (speaker.aiMemory?.chatMemory || []).some(
+          m => m.speakerId === t.id && m.accusedId !== null &&
+               state.players[m.accusedId]?.role === Roles.KILLER.id
+        );
+        if (accusedKiller) fs += 0.5;
+        // Prefer framing players with high blue probability (more believable as "found red")
+        const blueProb = factionProb(speaker, t.id, Faction.BLUE) ?? 0.5;
+        if (blueProb > 0.6) fs += 0.3;
+        // Avoid framing players already under heavy suspicion (less impactful)
+        const susp = speaker.aiMemory?.suspicion?.[t.id] ?? 0.5;
+        if (susp > 0.6) fs -= 0.3;
+        // Jitter
+        fs += state.rng() * 0.15;
+
+        if (fs > bestFrameScore) {
+          bestFrameScore = fs;
+          frameTarget = t;
+        }
+      }
+
       if (frameTarget) {
         const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.fakePoliceClaim);
         lines.push(tmpl(speaker.name, frameTarget.name));
         speaker.aiMemory.fakePoliceClaimUsed = true;
+
+        // Write to roleClaims — killer is now "publicly claiming police"
+        state.roleClaims = state.roleClaims || {};
+        state.roleClaims[speaker.id] = Roles.POLICE.id;
+
+        // Write fake "public reveal" so blue AI's vote logic picks it up
+        // Only if no real police has revealed yet (otherwise it conflicts)
+        if ((state.policePublicRevealedRed ?? null) === null) {
+          state.policePublicRevealedRed = frameTarget.id;
+        }
+
         continue;
       }
     }

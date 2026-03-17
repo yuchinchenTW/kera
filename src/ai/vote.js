@@ -286,10 +286,49 @@ export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
       }
     }
     // Non-police blue: only follow reveal if police actually announced it in public chat
+    // Hard+: skepticism — doubt claims from "police" who haven't shown prior investigation behavior
     if (policePubliclyRevealed && actor.faction === Faction.BLUE && actor.role !== Roles.POLICE.id) {
       const redTarget = getPlayer(state, state.policeRevealedRed);
-      const followPoliceChance = { easy: 0.5, normal: 0.7, hard: 0.95, nightmare: 0.98 };
-      const chance = followPoliceChance[state.difficulty || "normal"] ?? 0.7;
+      let followPoliceChance = { easy: 0.5, normal: 0.7, hard: 0.95, nightmare: 0.98 };
+      let chance = followPoliceChance[state.difficulty || "normal"] ?? 0.7;
+
+      // Hard+: check if the claimer is trustworthy
+      if (hard) {
+        // Find who claimed police in roleClaims
+        const policeClaimer = Object.entries(state.roleClaims || {}).find(
+          ([_, role]) => role === Roles.POLICE.id
+        );
+        if (policeClaimer) {
+          const claimerId = Number(policeClaimer[0]);
+          ensureAdvancedMemory(actor);
+          const claimerSusp = actor.aiMemory?.suspicion?.[claimerId] ?? 0.5;
+
+          // If the claimer is already suspicious, doubt them
+          if (claimerSusp > 0.5) {
+            chance *= 0.4; // heavily reduced follow rate
+          }
+
+          // If someone else already claimed police (duplicate claim), doubt both
+          const policeClaimers = Object.entries(state.roleClaims || {}).filter(
+            ([_, role]) => role === Roles.POLICE.id
+          );
+          if (policeClaimers.length >= 2) {
+            chance *= 0.3; // two "police" = one is lying
+          }
+
+          // If this is a late-game claim (day 4+) with no prior police chat, doubt it
+          if ((state.dayNumber || 1) >= 4) {
+            const priorPoliceChat = chats.some(line => {
+              const en = (line.split("||")[0] || "").toLowerCase();
+              return en.includes("investigation") || en.includes("confirmed") || en.includes("checked");
+            });
+            if (!priorPoliceChat) {
+              chance *= 0.5; // sudden late claim with no history
+            }
+          }
+        }
+      }
+
       if (redTarget?.alive && state.rng() < chance) {
         votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
         return;
