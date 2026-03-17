@@ -633,6 +633,12 @@ export function generateNightFactionChat(state) {
       // Store the coordinated target so buildAiNightActions uses the same one
       if (actualTarget) state._killerChatTarget = actualTarget.id;
 
+      // Check if someone was saved last night
+      const savedRecently = (state.lastNightSavedIds || []).length > 0;
+      const savedName = savedRecently ? nonKillers.find((t) =>
+        (state.lastNightSavedIds || []).includes(t.id)
+      ) : null;
+
       // Build role probability info for the chosen target
       const topProbs = actualTarget ? {
         policeProb: speaker.aiMemory?.roleProbs?.[actualTarget.id]?.[Roles.POLICE.id] ?? 0,
