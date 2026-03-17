@@ -23,8 +23,8 @@ from torch.utils.tensorboard import SummaryWriter
 # Add training dir to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from model import MafiaPolicy, RolloutBuffer, NUM_PLAYERS, OBS_DIM, NUM_ACTIONS, GROUND_TRUTH_DIM
-from vec_env import VecMafiaEnv
+from model import MafiaPolicy, RolloutBuffer, NUM_PLAYERS, OBS_DIM, NUM_ACTIONS, TOTAL_MASK_DIM, GROUND_TRUTH_DIM
+from fast_engine import FastBatchEnv as VecMafiaEnv
 
 
 def parse_args():
@@ -58,12 +58,11 @@ class MAPPOTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Device: {self.device}")
 
-        # Environment
+        # Environment (N parallel processes, 1 game each)
         self.env = VecMafiaEnv(
             num_envs=args.num_envs,
             theme=args.theme,
             difficulty=args.difficulty,
-            seed_start=42,
         )
 
         # Policy
@@ -118,7 +117,7 @@ class MAPPOTrainer:
         for step in range(self.args.rollout_steps):
             # Flatten [envs, agents, ...] to [envs*agents, ...] for batch forward
             flat_obs = torch.tensor(obs.reshape(-1, OBS_DIM), device=self.device)
-            flat_masks = torch.tensor(masks.reshape(-1, NUM_ACTIONS), device=self.device)
+            flat_masks = torch.tensor(masks.reshape(-1, TOTAL_MASK_DIM), device=self.device)
 
             # Ground truth for centralized critic
             gt = np.zeros((self.args.num_envs, GROUND_TRUTH_DIM), dtype=np.float32)
@@ -136,11 +135,11 @@ class MAPPOTrainer:
             )
 
             # Reshape back to [envs, agents]
-            actions_np = actions.cpu().numpy().reshape(self.args.num_envs, NUM_PLAYERS)
+            actions_np = actions.cpu().numpy().reshape(self.args.num_envs, NUM_PLAYERS, 4)  # [envs, 18, 4]
             log_probs_np = log_probs.cpu().numpy().reshape(self.args.num_envs, NUM_PLAYERS)
             values_np = values.cpu().numpy().reshape(self.args.num_envs, NUM_PLAYERS)
 
-            # Step environments
+            # Step environments — pass full multi-head actions per env
             next_obs, next_masks, rewards, dones, next_infos = self.env.step(actions_np)
 
             # Track game completions
@@ -179,7 +178,7 @@ class MAPPOTrainer:
 
         # Bootstrap value for last observation
         flat_obs = torch.tensor(obs.reshape(-1, OBS_DIM), device=self.device)
-        flat_masks = torch.tensor(masks.reshape(-1, NUM_ACTIONS), device=self.device)
+        flat_masks = torch.tensor(masks.reshape(-1, TOTAL_MASK_DIM), device=self.device)
         gt = np.zeros((self.args.num_envs, GROUND_TRUTH_DIM), dtype=np.float32)
         for i, info in enumerate(infos):
             if info and "ground_truth" in info:

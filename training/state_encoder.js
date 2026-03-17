@@ -453,53 +453,86 @@ export function encodeAllObservations(state) {
 }
 
 /**
- * Build action mask for a player.
+ * Build multi-head action mask for a player.
+ * Returns Float32Array of length 63:
+ *   [0:19]  target mask (night action / vote target)
+ *   [19:24] chat_type mask (0=silence 1=accuse 2=defend 3=claim 4=deflect)
+ *   [24:43] chat_target mask (who to accuse/defend)
+ *   [43:63] claim_role mask (which role to claim)
  */
 export function buildActionMask(state, playerId, phase) {
-  const mask = new Float32Array(19);
+  const TOTAL_MASK = 63;
+  const mask = new Float32Array(TOTAL_MASK);
   const actor = getPlayer(state, playerId);
 
   if (!actor?.alive) {
-    mask[18] = 1;
+    mask[18] = 1;    // target: no_action
+    mask[19] = 1;    // chat: silence only
+    mask[42] = 1;    // chat_target: nobody
+    // claim: all zero (can't claim)
     return mask;
   }
 
   const meta = roleMeta(actor.role);
+  const aliveOthers = alivePlayers(state).filter(p => p.id !== actor.id);
 
+  // ── Target mask [0:19] ──
   if (phase === "NIGHT") {
     if (!meta.hasNightAction || actor.status.cannotAct || actor.status.smoked > 0 ||
-        actor.status.kidnapped || actor.status.purified) {
-      mask[18] = 1;
-      return mask;
+        actor.status.kidnapped || actor.status.purified ||
+        actor.role === Roles.CIVILIAN.id || actor.role === Roles.BRAT.id) {
+      mask[18] = 1; // no_action only
+    } else {
+      if (actor.role === Roles.ARSONIST.id) mask[18] = 1; // can ignite (no target)
+      for (const p of aliveOthers) {
+        if (actor.role === Roles.KILLER.id && p.role === Roles.KILLER.id) continue;
+        mask[p.id] = 1;
+      }
+      mask[18] = 1; // can skip
     }
-    if (actor.role === Roles.CIVILIAN.id || actor.role === Roles.BRAT.id) {
-      mask[18] = 1;
-      return mask;
+  } else {
+    // VOTE / DAY
+    if ((actor.role === Roles.BRAT.id && actor.status.bratRevived) || actor.status.purified) {
+      mask[18] = 1; // abstain only
+    } else {
+      for (const p of aliveOthers) {
+        if (p.status.purified) continue;
+        mask[p.id] = 1;
+      }
+      mask[18] = 1; // abstain
     }
-    if (actor.role === Roles.ARSONIST.id) {
-      mask[18] = 1;
+  }
+
+  // ── Chat type mask [19:24] ──
+  // 0=silence, 1=accuse, 2=defend, 3=claim_role, 4=deflect
+  if (phase === "NIGHT") {
+    // Night: silence only (no public chat during night)
+    mask[19 + 0] = 1; // silence
+  } else {
+    // Day/Vote: all chat types available
+    mask[19 + 0] = 1; // silence
+    if (aliveOthers.length > 0) {
+      mask[19 + 1] = 1; // accuse
+      mask[19 + 2] = 1; // defend
     }
-    for (const p of alivePlayers(state)) {
-      if (p.id === actor.id) continue;
-      if (actor.role === Roles.KILLER.id && p.role === Roles.KILLER.id) continue;
-      mask[p.id] = 1;
+    mask[19 + 3] = 1; // claim_role
+    mask[19 + 4] = 1; // deflect
+  }
+
+  // ── Chat target mask [24:43] ──
+  if (phase !== "NIGHT") {
+    for (const p of aliveOthers) {
+      mask[24 + p.id] = 1;
     }
-    mask[18] = 1;
-  } else if (phase === "VOTE") {
-    if (actor.role === Roles.BRAT.id && actor.status.bratRevived) {
-      mask[18] = 1;
-      return mask;
+  }
+  mask[24 + 18] = 1; // nobody (for silence/deflect/claim)
+
+  // ── Claim role mask [43:63] ──
+  if (phase !== "NIGHT") {
+    // Can claim any role (including lying)
+    for (let r = 0; r < ROLE_IDS.length; r++) {
+      mask[43 + r] = 1;
     }
-    if (actor.status.purified) {
-      mask[18] = 1;
-      return mask;
-    }
-    for (const p of alivePlayers(state)) {
-      if (p.id === actor.id) continue;
-      if (p.status.purified) continue;
-      mask[p.id] = 1;
-    }
-    mask[18] = 1;
   }
 
   return mask;

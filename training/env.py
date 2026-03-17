@@ -1,46 +1,47 @@
 """
-Mafia Game Environment for RL Training
+Batched Mafia Game Environment for RL Training (v2)
 
-Wraps the JS game engine via subprocess, exposing a Gymnasium-compatible interface.
-Each environment runs a single 18-player game.
+Single Node.js process runs N games simultaneously.
+Supports step_round (night+vote in one IPC call) for maximum throughput.
 
 Usage:
-    env = MafiaEnv()
-    obs, masks, info = env.reset()
-    while not done:
-        actions = policy(obs, masks)
-        obs, masks, rewards, done, info = env.step(actions)
+    env = BatchedMafiaEnv(num_games=32)
+    obs, masks, infos = env.reset()
+    while training:
+        actions = policy(obs, masks)         # [num_games, 18, 4]
+        obs, masks, rewards, dones, infos = env.step_round(night_actions, vote_actions)
 """
 
 import json
 import subprocess
-import os
-import sys
 import numpy as np
 from pathlib import Path
 
-# Path to the JS game server
 PROJECT_ROOT = Path(__file__).parent.parent
 GAME_SERVER_PATH = PROJECT_ROOT / "training" / "game_server.js"
 NODE_CMD = "node"
 
 NUM_PLAYERS = 18
-OBS_DIM = 1135      # Must match state_encoder.js
-NUM_ACTIONS = 19     # 0-17 = target, 18 = no_action/abstain
+OBS_DIM = 1135
+NUM_ACTIONS = 19
+TOTAL_MASK_DIM = 63
 
 
-class MafiaEnv:
-    """Single-game Mafia environment wrapping JS game server via subprocess."""
+class BatchedMafiaEnv:
+    """
+    Batched environment: one Node.js process, N games.
+    Eliminates per-env subprocess overhead.
+    """
 
-    def __init__(self, theme="GOOD_VS_EVIL", difficulty="hard", seed=None):
+    def __init__(self, num_games=16, theme="GOOD_VS_EVIL", difficulty="hard"):
+        self.num_games = num_games
         self.theme = theme
         self.difficulty = difficulty
-        self.seed = seed
         self._proc = None
+        self._game_counter = 0
         self._start_server()
 
     def _start_server(self):
-        """Spawn a JS game server subprocess."""
         if self._proc is not None:
             self._proc.kill()
             self._proc.wait()
@@ -52,149 +53,208 @@ class MafiaEnv:
             stderr=subprocess.PIPE,
             cwd=str(PROJECT_ROOT),
             text=True,
-            bufsize=1,  # line-buffered
+            bufsize=1,
         )
 
-    def _send(self, cmd: dict) -> dict:
-        """Send a JSON command and receive a JSON response."""
+        # Initialize N games
+        resp = self._send({"cmd": "init", "numGames": self.num_games,
+                           "theme": self.theme, "difficulty": self.difficulty})
+        if not resp.get("ok"):
+            raise RuntimeError(f"Init failed: {resp}")
+
+    def _send(self, cmd):
         line = json.dumps(cmd) + "\n"
         try:
             self._proc.stdin.write(line)
             self._proc.stdin.flush()
             response_line = self._proc.stdout.readline()
             if not response_line:
-                raise RuntimeError("Game server closed unexpectedly")
+                raise RuntimeError("Game server closed")
             return json.loads(response_line.strip())
         except (BrokenPipeError, OSError) as e:
-            raise RuntimeError(f"Game server communication failed: {e}")
+            raise RuntimeError(f"IPC failed: {e}")
 
-    def reset(self, seed=None):
+    def reset(self, seeds=None):
+        """Reset all N games. Returns obs[N,18,1135], masks[N,18,63], infos."""
+        if seeds is None:
+            seeds = [self._game_counter + i for i in range(self.num_games)]
+            self._game_counter += self.num_games
+
+        resp = self._send({"cmd": "reset_all", "seeds": seeds})
+        if not resp.get("ok"):
+            raise RuntimeError(f"Reset failed: {resp}")
+
+        games = resp["games"]
+        obs = np.array([g["obs"] for g in games], dtype=np.float32)
+        masks = np.array([g["masks"] for g in games], dtype=np.float32)
+        gt = np.array([g["ground_truth"] for g in games], dtype=np.float32)
+
+        infos = []
+        for g in games:
+            infos.append({
+                "roles": g.get("roles"),
+                "factions": g.get("factions"),
+                "phase": g["phase"],
+                "day": g["day"],
+                "alive": g["alive"],
+                "ground_truth": np.array(g["ground_truth"], dtype=np.float32),
+            })
+
+        self._phases = [g["phase"] for g in games]
+        self._dones = [g["done"] for g in games]
+        return obs, masks, infos
+
+    def reset_game(self, game_idx, seed=None):
+        """Reset a single game (for auto-reset on done)."""
+        if seed is None:
+            seed = self._game_counter
+            self._game_counter += 1
+
+        resp = self._send({"cmd": "reset_all", "seeds":
+            [seed if i == game_idx else -1 for i in range(self.num_games)]})
+        # This resets all games, which is wasteful. Use targeted reset instead.
+        # Actually, let's just reset the one that's done via a simpler mechanism.
+        # For now, batch reset all done games at once.
+        return resp
+
+    def step_round(self, night_actions, vote_actions):
         """
-        Reset the environment to a new game.
+        Execute night + vote for all games in ONE IPC call.
+
+        Args:
+            night_actions: [N, 18, 4] — per game, per player, 4 heads
+            vote_actions:  [N, 18, 4] — per game, per player, 4 heads
+            Use all -1 to let heuristic decide.
 
         Returns:
-            obs:   np.ndarray [18, 541] — observations per player
-            masks: np.ndarray [18, 19]  — action masks per player
-            info:  dict with roles, factions, ground_truth, etc.
+            obs[N,18,1135], masks[N,18,63], rewards[N,18], dones[N], infos[N]
         """
-        cmd = {
-            "cmd": "reset",
-            "theme": self.theme,
-            "difficulty": self.difficulty,
-        }
-        if seed is not None:
-            cmd["seed"] = seed
-        elif self.seed is not None:
-            cmd["seed"] = self.seed
+        game_inputs = []
+        for g in range(self.num_games):
+            na = self._build_action_list(night_actions[g])
+            va = self._build_action_list(vote_actions[g])
+            game_inputs.append({"nightActions": na, "voteActions": va})
 
-        resp = self._send(cmd)
+        resp = self._send({"cmd": "step_round", "games": game_inputs})
         if not resp.get("ok"):
-            raise RuntimeError(f"Reset failed: {resp.get('error')}")
+            raise RuntimeError(f"Step failed: {resp}")
 
-        obs = np.array(resp["obs"], dtype=np.float32)          # [18, 541]
-        masks = np.array(resp["masks"], dtype=np.float32)      # [18, 19]
-        ground_truth = np.array(resp["ground_truth"], dtype=np.float32)  # [360]
-
-        info = {
-            "roles": resp["roles"],
-            "factions": resp.get("factions", []),
-            "phase": resp["phase"],
-            "day": resp["day"],
-            "alive": resp["alive"],
-            "ground_truth": ground_truth,
-            "seed": resp.get("seed"),
-        }
-
-        self._phase = resp["phase"]
-        self._done = False
-        return obs, masks, info
+        return self._parse_batch_response(resp["games"])
 
     def step(self, actions):
         """
-        Execute one game step (night or vote).
+        Single-phase step (night OR vote based on current phase).
+        For backward compatibility with train.py.
 
         Args:
-            actions: np.ndarray [18] of ints — target indices (0-17) or 18 for no_action/abstain.
-                     Use -1 or None to let heuristic AI decide for that player.
+            actions: [N, 18, 4] or [N, 18] — per game, per player
 
         Returns:
-            obs:     np.ndarray [18, 541]
-            masks:   np.ndarray [18, 19]
-            rewards: np.ndarray [18]
-            done:    bool
-            info:    dict
+            obs, masks, rewards, dones, infos
         """
-        if self._done:
-            raise RuntimeError("Game already ended. Call reset().")
+        actions = np.array(actions)
+        if actions.ndim == 2:
+            # Legacy [N, 18] -> expand to [N, 18, 4]
+            actions = np.stack([actions, np.zeros_like(actions),
+                                np.full_like(actions, 18), np.zeros_like(actions)], axis=-1)
 
-        # Build action list — only include players with explicit actions
+        # Determine phase per game — use majority phase
+        night_games = sum(1 for p in self._phases if p == "NIGHT")
+        if night_games > self.num_games // 2:
+            cmd = "step_night_batch"
+        else:
+            cmd = "step_vote_batch"
+
+        game_inputs = []
+        for g in range(self.num_games):
+            game_inputs.append({"actions": self._build_action_list(actions[g])})
+
+        resp = self._send({"cmd": cmd, "games": game_inputs})
+        if not resp.get("ok"):
+            raise RuntimeError(f"Step failed: {resp}")
+
+        return self._parse_batch_response(resp["games"])
+
+    def _build_action_list(self, player_actions):
+        """Convert [18, 4] numpy array to list of action dicts for game server."""
         action_list = []
         for i in range(NUM_PLAYERS):
-            a = int(actions[i]) if actions[i] is not None else -1
-            if a >= 0 and a <= 18:
-                action_list.append({"actorId": i, "targetId": a if a < 18 else None})
+            target = int(player_actions[i, 0]) if player_actions.ndim > 1 else int(player_actions[i])
+            if target < 0:
+                continue  # heuristic decides
 
-        # Determine command based on current phase
-        if self._phase == "NIGHT":
-            cmd = {"cmd": "step_night", "actions": action_list}
-        else:
-            cmd = {"cmd": "step_vote", "actions": action_list}
+            entry = {"actorId": i, "targetId": target if target < 18 else None}
 
-        resp = self._send(cmd)
-        if not resp.get("ok"):
-            raise RuntimeError(f"Step failed: {resp.get('error')}")
+            if player_actions.ndim > 1 and player_actions.shape[1] >= 4:
+                chat_type = int(player_actions[i, 1])
+                chat_target = int(player_actions[i, 2])
+                claim_role = int(player_actions[i, 3])
+                if chat_type > 0:
+                    entry["chatType"] = chat_type
+                    entry["chatTargetId"] = chat_target if chat_target < 18 else None
+                    entry["claimRoleId"] = claim_role
 
-        obs = np.array(resp["obs"], dtype=np.float32)
-        masks = np.array(resp["masks"], dtype=np.float32)
-        rewards = np.array(resp["rewards"], dtype=np.float32)
-        done = resp["done"]
-        ground_truth = np.array(resp["ground_truth"], dtype=np.float32)
+            action_list.append(entry)
+        return action_list
 
-        info = {
-            "phase": resp["phase"],
-            "day": resp["day"],
-            "alive": resp["alive"],
-            "victory": resp.get("victory"),
-            "ground_truth": ground_truth,
-            "usage": resp.get("usage"),
-            "counts": resp.get("counts"),
-        }
+    def _parse_batch_response(self, games):
+        """Parse batched game responses into numpy arrays."""
+        N = self.num_games
+        obs = np.zeros((N, NUM_PLAYERS, OBS_DIM), dtype=np.float32)
+        masks = np.zeros((N, NUM_PLAYERS, TOTAL_MASK_DIM), dtype=np.float32)
+        rewards = np.zeros((N, NUM_PLAYERS), dtype=np.float32)
+        dones = np.zeros(N, dtype=bool)
+        infos = [None] * N
 
-        self._phase = resp["phase"]
-        self._done = done
+        for g, game in enumerate(games):
+            obs[g] = np.array(game["obs"], dtype=np.float32)
+            masks[g] = np.array(game["masks"], dtype=np.float32)
+            rewards[g] = np.array(game["rewards"], dtype=np.float32)
+            dones[g] = game["done"]
+            self._phases[g] = game["phase"]
+            self._dones[g] = game["done"]
 
-        # If game ended during night (before vote), we're done
-        # If night resolved to DAY phase, auto-advance to vote phase
-        # The RL agent gets one action per full cycle (night + vote)
-        # But we expose both phases for finer control
+            infos[g] = {
+                "phase": game["phase"],
+                "day": game["day"],
+                "alive": game["alive"],
+                "victory": game.get("victory"),
+                "ground_truth": np.array(game["ground_truth"], dtype=np.float32),
+                "usage": game.get("usage"),
+                "counts": game.get("counts"),
+            }
 
-        return obs, masks, rewards, done, info
+        # Auto-reset done games
+        done_indices = [g for g in range(N) if dones[g]]
+        if done_indices:
+            # Preserve terminal info
+            for g in done_indices:
+                infos[g]["terminal_usage"] = infos[g].get("usage")
+                infos[g]["terminal_rewards"] = rewards[g].copy()
 
-    def step_full_round(self, night_actions, vote_actions):
-        """
-        Convenience: execute a full night+vote round.
+            # Reset done games
+            seeds = [self._game_counter + i for i in range(len(done_indices))]
+            self._game_counter += len(done_indices)
 
-        Args:
-            night_actions: np.ndarray [18] — night targets
-            vote_actions:  np.ndarray [18] — vote targets
+            reset_resp = self._send({"cmd": "reset_all",
+                "seeds": [seeds.pop(0) if g in done_indices else -1 for g in range(N)]})
 
-        Returns:
-            obs, masks, rewards, done, info (after vote)
-        """
-        # Night
-        obs, masks, rewards_n, done, info = self.step(night_actions)
-        if done:
-            return obs, masks, rewards_n, done, info
+            if reset_resp.get("ok"):
+                for g_idx, g_data in enumerate(reset_resp["games"]):
+                    g = g_idx
+                    if g not in done_indices:
+                        continue
+                    # Overwrite obs/masks with fresh game (but keep terminal rewards)
+                    obs[g] = np.array(g_data["obs"], dtype=np.float32)
+                    masks[g] = np.array(g_data["masks"], dtype=np.float32)
+                    self._phases[g] = g_data["phase"]
+                    self._dones[g] = False
+                    infos[g]["ground_truth"] = np.array(g_data["ground_truth"], dtype=np.float32)
+                    infos[g]["reset_roles"] = g_data.get("roles")
 
-        # Vote
-        obs, masks, rewards_v, done, info = self.step(vote_actions)
-
-        # Combine rewards (only terminal matters, but sum shaping)
-        rewards = rewards_n + rewards_v
-        return obs, masks, rewards, done, info
+        return obs, masks, rewards, dones, infos
 
     def close(self):
-        """Shut down the JS subprocess."""
         if self._proc is not None:
             try:
                 self._proc.stdin.write(json.dumps({"cmd": "quit"}) + "\n")
@@ -209,41 +269,43 @@ class MafiaEnv:
         self.close()
 
 
+# Legacy compat aliases
+MafiaEnv = BatchedMafiaEnv
+
+
 # ─── Quick Test ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("=== MafiaEnv Test ===")
-    env = MafiaEnv(theme="GOOD_VS_EVIL", difficulty="hard", seed=42)
+    import time
 
-    obs, masks, info = env.reset()
+    N = 8
+    print(f"=== BatchedMafiaEnv Test ({N} games in 1 process) ===")
+
+    env = BatchedMafiaEnv(num_games=N, difficulty="hard")
+    obs, masks, infos = env.reset()
     print(f"Reset OK — obs: {obs.shape}, masks: {masks.shape}")
-    print(f"Roles: {info['roles']}")
-    print(f"Phase: {info['phase']}, Day: {info['day']}, Alive: {len(info['alive'])}")
 
-    # Run full game with heuristic AI (actions = all -1 → let AI decide)
-    steps = 0
-    total_rewards = np.zeros(NUM_PLAYERS, dtype=np.float32)
-    done = False
+    total_games = 0
+    t0 = time.time()
 
-    while not done and steps < 30:
-        # Let heuristic AI handle everything (pass -1 for all)
-        actions = np.full(NUM_PLAYERS, -1, dtype=np.int32)
-        obs, masks, rewards, done, info = env.step(actions)
-        total_rewards += rewards
-        steps += 1
+    for step in range(50):
+        # All heuristic (-1)
+        night_act = np.full((N, NUM_PLAYERS, 4), -1, dtype=np.int32)
+        vote_act = np.full((N, NUM_PLAYERS, 4), -1, dtype=np.int32)
+        obs, masks, rewards, dones, infos = env.step_round(night_act, vote_act)
 
-        phase = info["phase"]
-        alive = len(info["alive"])
-        day = info["day"]
-        if done:
-            print(f"  Step {steps}: GAME OVER — Day {day}, Alive: {alive}")
-            print(f"  Victory: {info['victory']}")
-        elif steps % 2 == 0:
-            print(f"  Step {steps}: Phase={phase}, Day={day}, Alive={alive}")
+        for g, done in enumerate(dones):
+            if done:
+                total_games += 1
+                v = infos[g].get("victory")
+                if total_games <= 3:
+                    print(f"  Game done: {v['winner'] if v else '?'} (step {step+1})")
 
-    print(f"\nTotal steps: {steps}")
-    print(f"Final rewards: {total_rewards}")
-    print(f"Winners (reward > 0): {[i for i in range(NUM_PLAYERS) if total_rewards[i] > 0]}")
+        if total_games >= N * 3:
+            break
+
+    elapsed = time.time() - t0
+    print(f"\n{total_games} games in {elapsed:.1f}s ({total_games/elapsed:.1f} games/sec)")
 
     env.close()
     print("=== Test Complete ===")

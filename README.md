@@ -331,11 +331,13 @@ Three AI training approaches are available, usable independently or combined.
 
 | 檔案 File | 說明 Description |
 |------|-------------|
-| `training/game_server.js` | 遊戲引擎 JSON 協議伺服器（stdin/stdout），供 Python 訓練呼叫 |
-| `training/state_encoder.js` | 狀態編碼器：遊戲狀態 → 1135 維觀測向量（含投票圖譜、聊天互動、遺言信號） |
-| `training/env.py` | Gym 相容的單遊戲 Python 環境（subprocess 封裝） |
-| `training/vec_env.py` | 向量化平行環境（多進程加速） |
-| `training/model.py` | 神經網路策略模型（MAPPO，576K 參數，attention-based） |
+| `training/fast_engine.py` | 純 Python 精簡遊戲引擎（GOOD_VS_EVIL 主題，無 IPC） |
+| `training/fast_encode_jit.py` | Numba JIT 編譯的觀測編碼器（292x 加速） |
+| `training/game_server.js` | 完整遊戲引擎 JSON 協議伺服器（stdin/stdout，支援多場批次） |
+| `training/state_encoder.js` | JS 狀態編碼器：遊戲狀態 → 1135 維觀測向量（含投票圖譜、聊天互動、遺言信號） |
+| `training/env.py` | 批次遊戲 Python 環境（支援 JS subprocess 或純 Python 引擎） |
+| `training/vec_env.py` | 向量化平行環境（多進程，用於 JS 引擎模式） |
+| `training/model.py` | 神經網路策略模型（MAPPO，678K 參數，4 頭行動空間：目標+聊天+角色宣稱） |
 | `training/train.py` | MAPPO 訓練迴圈（PPO + GAE + 集中式 critic） |
 | `training/evaluate.py` | RL 策略 vs 啟發式 baseline 對戰評估 |
 | `training/distill.py` | 策略蒸餾：從 NN 提取線性權重回 JS 啟發式 |
@@ -367,15 +369,18 @@ python training/cma_optimize.py --generations 200 --games 200  # 更精確
 Trains a neural network policy through ~1M games of self-play.
 
 ```bash
-pip install torch numpy tensorboard
-python training/train.py --num_envs 16 --steps 10000000   # 10M steps, ~13hr GPU
-python training/train.py --resume training/checkpoints/policy_final.pt --steps 20000000  # 接續訓練
+pip install torch numpy tensorboard numba
+python training/train.py --num_envs 64 --steps 28000000   # 28M steps, ~10hr GPU (Numba JIT)
+python training/train.py --resume training/checkpoints/policy_final.pt --steps 50000000  # 接續訓練
 tensorboard --logdir training/logs                         # 即時監控
 ```
 
+- **多頭行動空間**：目標選擇 (19) + 聊天類型 (5: 沉默/指控/辯護/宣稱角色/轉移) + 聊天對象 (19) + 角色宣稱 (20)
+- RL 可學會：假冒警察、栽贓無辜、保護隊友、策略性沉默
 - 觀測向量 (1135 維)：投票圖譜 (18x18)、聊天指控/辯護矩陣、遺言信號、信念分佈、角色資源
-- 模型：共享策略網路 + 角色條件化 + Multi-head Attention + 集中式 critic (CTDE)
-- TensorBoard 指標：勝率、loss、entropy、醫生打針/救援、狙擊手開槍、警察查獲紅方等
+- 模型：共享策略網路 + 角色條件化 + Multi-head Attention + 集中式 critic (CTDE)，678K 參數
+- **Numba JIT 加速**：純 Python 引擎 + JIT 編譯觀測編碼，比 JS IPC 版快 4.3 倍（~750 sps）
+- TensorBoard 指標：勝率、loss、entropy、醫生打針/救援/overdose、狙擊手開槍、警察查獲紅方等
 - 輸出：`training/checkpoints/policy_final.pt`
 
 ### 方式三：策略蒸餾 / Policy Distillation

@@ -1,27 +1,25 @@
 /**
- * Game Server for RL Training
+ * Game Server for RL Training (v2 — batched multi-game)
  *
- * Headless game server that exposes step-by-step control via JSON over stdin/stdout.
- * Each line of stdin is a JSON command; each response is a JSON line on stdout.
+ * Single Node.js process runs N games simultaneously.
+ * Supports batched commands to minimize IPC overhead.
  *
  * Protocol:
- *   {cmd: "reset", theme?, seed?, difficulty?}
- *     -> {ok: true, obs: [...18x505...], masks: [...18x19...], roles: [...], alive: [...], phase: "NIGHT"}
+ *   {cmd: "init", numGames: N, theme?, difficulty?}
+ *     -> {ok, numGames}
  *
- *   {cmd: "step_night", actions: [{actorId, targetId}, ...]}
- *     -> {ok: true, obs, masks, rewards, done, phase, day, victory?, alive}
+ *   {cmd: "reset_all", seeds: [seed0, seed1, ...]}
+ *     -> {ok, games: [{obs, masks, roles, factions}, ...]}
  *
- *   {cmd: "step_vote", actions: [{actorId, targetId}, ...]}
- *     -> {ok: true, obs, masks, rewards, done, phase, day, victory?, alive}
+ *   {cmd: "step_round", games: [{nightActions, voteActions}, ...]}
+ *     -> {ok, games: [{obs, masks, rewards, done, phase, day, victory, usage, counts}, ...]}
+ *     Night + chat + vote in ONE IPC call.
  *
- *   {cmd: "get_info"}
- *     -> {ok: true, roles, factions, alive, phase, day, victory}
+ *   {cmd: "step_night", games: [{actions}, ...]}
+ *   {cmd: "step_vote", games: [{actions}, ...]}
+ *     -> Single-phase step (backward compat)
  *
- * Notes:
- *   - All 18 players are AI-controlled (allAi: true).
- *   - For step_night, omitted players get heuristic AI actions.
- *   - For step_vote, omitted players get heuristic AI votes.
- *   - The RL agent can control any subset of players per step.
+ *   {cmd: "quit"} -> exit
  */
 
 import { createInterface } from "node:readline";
@@ -37,24 +35,27 @@ import {
   OBS_DIM,
 } from "./state_encoder.js";
 
+const ROLE_IDS = [
+  "POLICE", "KILLER", "DOCTOR", "SNIPER", "AGENT", "TERRORIST", "COWBOY",
+  "KIDNAPPER", "ZOMBIE", "RIOT_POLICE", "ARSONIST", "HEAVENLY_FIEND",
+  "VINE_DEMON", "BRAT", "NIGHTMARE_DEMON", "EXORCIST", "NECROMANCER",
+  "PURIFIER", "GRUDGE_BEAST", "CIVILIAN",
+];
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Convert Float32Array to regular array for JSON serialization */
 function f32ToArray(f32) {
   return Array.from(f32);
 }
 
-/** Map RL action (target index 0-17, or 18=no_action) to engine action format */
 function rlActionToNightAction(state, actorId, targetIdx) {
   if (targetIdx === 18 || targetIdx === null || targetIdx === undefined) return null;
   const actor = getPlayer(state, actorId);
   if (!actor?.alive) return null;
-
-  const role = actor.role;
   const target = getPlayer(state, targetIdx);
   if (!target?.alive) return null;
 
-  // Map role to action type
+  const role = actor.role;
   const roleActionMap = {
     POLICE: "POLICE_INVESTIGATE",
     KILLER: "KILLER_VOTE",
@@ -67,7 +68,7 @@ function rlActionToNightAction(state, actorId, targetIdx) {
     KIDNAPPER: "KIDNAP",
     ZOMBIE: "ZOMBIE_BITE",
     RIOT_POLICE: "RIOT_SMOKE",
-    ARSONIST: "ARSON_MARK", // simplified: always mark (ignite is targetIdx=18)
+    ARSONIST: "ARSON_MARK",
     VINE_DEMON: "VINE_SEED",
     NIGHTMARE_DEMON: "NIGHTMARE_ATTACK",
     EXORCIST: "EXORCIST_STRIKE",
@@ -75,32 +76,57 @@ function rlActionToNightAction(state, actorId, targetIdx) {
     PURIFIER: "PURIFY",
     GRUDGE_BEAST: state.grudgeState?.berserk ? "GRUDGE_KILL_VOTE" : "GRUDGE_JUDGE",
   };
-
   const type = roleActionMap[role];
   if (!type) return null;
-
   return { actorId, type, targetId: targetIdx };
 }
 
-function rlActionToVote(actorId, targetIdx) {
-  if (targetIdx === 18 || targetIdx === null || targetIdx === undefined) return null;
-  return { actorId, targetId: targetIdx };
+function injectRlChat(state, actions) {
+  state.dayChat = state.dayChat || [];
+  state.roleClaims = state.roleClaims || {};
+  const CHAT_TYPES = ["silence", "accuse", "defend", "claim_role", "deflect"];
+  const roleZh = { POLICE: "警察", DOCTOR: "醫生", CIVILIAN: "平民", KILLER: "殺手", SNIPER: "狙擊手", AGENT: "特務" };
+
+  for (const a of actions) {
+    if (typeof a.actorId !== "number") continue;
+    const actor = getPlayer(state, a.actorId);
+    if (!actor?.alive) continue;
+    const chatType = CHAT_TYPES[a.chatType] || "silence";
+    if (chatType === "silence") continue;
+
+    const chatTarget = typeof a.chatTargetId === "number" ? getPlayer(state, a.chatTargetId) : null;
+    const targetName = chatTarget?.name || "someone";
+    let line = null;
+
+    if (chatType === "accuse" && chatTarget) {
+      line = `${actor.name}: I think ${targetName} is suspicious.||${actor.name}：我覺得 ${targetName} 很可疑。`;
+    } else if (chatType === "defend" && chatTarget) {
+      line = `${actor.name}: ${targetName} seems fine to me.||${actor.name}：${targetName} 我覺得沒問題。`;
+    } else if (chatType === "claim_role") {
+      const claimedRole = ROLE_IDS[a.claimRoleId] || "CIVILIAN";
+      const zhName = roleZh[claimedRole] || claimedRole;
+      line = `${actor.name}: I am ${claimedRole}.||${actor.name}：我是${zhName}。`;
+      state.roleClaims[actor.id] = claimedRole;
+    } else if (chatType === "deflect") {
+      line = `${actor.name}: Let's focus on the real threats.||${actor.name}：我們應該專注在真正的威脅上。`;
+    }
+
+    if (line) {
+      state.dayChat.push(line);
+      state.publicLog.push(line);
+    }
+  }
 }
 
-// ─── Game State ───────────────────────────────────────────────────────────────
-
-let engine = null;
-
-function buildResponse(extra = {}) {
+function buildGameResponse(engine) {
   const state = engine.state;
-  const obs = encodeAllObservations(state);
   const phase = state.victory ? "END" : state.phase;
+  const obs = encodeAllObservations(state);
   const masks = buildAllActionMasks(state, phase);
   const rewards = computeRewards(state);
   const done = !!state.victory;
 
   return {
-    ok: true,
     obs: obs.map(f32ToArray),
     masks: masks.map(f32ToArray),
     ground_truth: f32ToArray(encodeGroundTruth(state)),
@@ -112,7 +138,6 @@ function buildResponse(extra = {}) {
     victory: state.victory || null,
     usage: {
       ...(state.usage || {}),
-      // Derived stats not tracked in engine.usage
       doctorOverdoses: state.players.filter(p => !p.alive && p.deathCause === "EMPTY_INJECTION").length,
       zombieConversions: state.players.filter(p => p.alive && p.role === Roles.ZOMBIE.id && p.startRole !== Roles.ZOMBIE.id).length,
       zombieKills: state.players.filter(p => !p.alive && (p.deathCause === "ZOMBIE_BITE" || p.deathCause === "ZOMBIE_FATAL")).length,
@@ -123,112 +148,157 @@ function buildResponse(extra = {}) {
       voteKills: state.players.filter(p => !p.alive && p.deathCause === "VOTE_EXECUTION").length,
     },
     counts: done ? factionCounts(state) : null,
-    ...extra,
   };
 }
+
+// ─── Multi-Game State ─────────────────────────────────────────────────────────
+
+let engines = [];
+let config = { theme: "GOOD_VS_EVIL", difficulty: "hard" };
 
 // ─── Command Handlers ─────────────────────────────────────────────────────────
 
-function handleReset(msg) {
-  const theme = msg.theme || "GOOD_VS_EVIL";
-  const seed = msg.seed ?? Date.now();
-  const difficulty = msg.difficulty || "hard";
+function handleInit(msg) {
+  const n = msg.numGames || 1;
+  config.theme = msg.theme || "GOOD_VS_EVIL";
+  config.difficulty = msg.difficulty || "hard";
+  engines = new Array(n).fill(null);
+  return { ok: true, numGames: n };
+}
 
-  engine = new GameEngine(seed, theme, difficulty, { allAi: true });
+function handleResetAll(msg) {
+  const seeds = msg.seeds || [];
+  const games = [];
+  for (let g = 0; g < engines.length; g++) {
+    const seed = seeds[g];
+    if (seed === -1 || seed === undefined || seed === null) {
+      // Skip — keep existing game, return current state
+      if (engines[g]) {
+        games.push(buildGameResponse(engines[g]));
+      } else {
+        games.push({ done: true, phase: "END" });
+      }
+      continue;
+    }
+    engines[g] = new GameEngine(seed, config.theme, config.difficulty, { allAi: true });
+    const state = engines[g].state;
+    const resp = buildGameResponse(engines[g]);
+    resp.roles = state.players.map(p => p.role);
+    resp.factions = state.players.map(p => p.faction);
+    resp.seed = seed;
+    games.push(resp);
+  }
+  return { ok: true, games };
+}
 
-  // Run belief initialization so observations have meaningful values
-  // (ensureBeliefs is called inside buildAiNightActions, but we want obs before actions)
+function stepNightOne(engine, actions) {
+  const state = engine.state;
+  const externalActions = [];
+  for (const a of actions) {
+    if (typeof a.actorId !== "number") continue;
+    const action = rlActionToNightAction(state, a.actorId, a.targetId);
+    if (action) externalActions.push(action);
+  }
+  engine.resolveNight(null, { includeHuman: true, humanActions: externalActions });
 
-  const roles = engine.state.players.map(p => p.role);
-  const factions = engine.state.players.map(p => p.faction);
+  if (!state.victory && state.phase === Phase.DAY) {
+    injectRlChat(state, actions);
+    const chatLines = generateChatLines(state);
+    if (chatLines) {
+      state.dayChat = state.dayChat || [];
+      for (const line of chatLines) { state.dayChat.push(line); state.publicLog.push(line); }
+    }
+    generateFactionChat(state);
+  }
+}
 
-  return {
-    ...buildResponse(),
-    roles,
-    factions,
-    seed,
-  };
+function stepVoteOne(engine, actions) {
+  const state = engine.state;
+  injectRlChat(state, actions);
+  const externalVotes = [];
+  for (const a of actions) {
+    if (typeof a.actorId !== "number") continue;
+    if (a.targetId !== null && a.targetId !== undefined && a.targetId < 18) {
+      externalVotes.push({ actorId: a.actorId, targetId: a.targetId });
+    }
+  }
+  engine.resolveVote(null, "", { includeHuman: true, humanVotes: externalVotes });
+}
+
+function handleStepRound(msg) {
+  // Night + Vote in one IPC call
+  const gameInputs = msg.games || [];
+  const results = [];
+  for (let g = 0; g < engines.length; g++) {
+    const engine = engines[g];
+    if (!engine || engine.state.victory) {
+      results.push(engine ? buildGameResponse(engine) : { done: true, error: "no engine" });
+      continue;
+    }
+    const input = gameInputs[g] || {};
+
+    // Night
+    stepNightOne(engine, input.nightActions || []);
+    if (engine.state.victory) {
+      results.push(buildGameResponse(engine));
+      continue;
+    }
+
+    // Vote
+    stepVoteOne(engine, input.voteActions || []);
+    results.push(buildGameResponse(engine));
+  }
+  return { ok: true, games: results };
 }
 
 function handleStepNight(msg) {
-  if (!engine) return { ok: false, error: "No game. Call reset first." };
-  if (engine.state.victory) return { ok: false, error: "Game already ended." };
-
-  const rlActions = msg.actions || [];
-
-  // Convert RL actions to engine format
-  const externalActions = [];
-  const controlledIds = new Set();
-
-  for (const a of rlActions) {
-    if (typeof a.actorId !== "number") continue;
-    controlledIds.add(a.actorId);
-    const action = rlActionToNightAction(engine.state, a.actorId, a.targetId);
-    if (action) externalActions.push(action);
-  }
-
-  // For players NOT controlled by RL, let heuristic AI decide
-  // We pass external actions via humanActions and set includeHuman
-  // so buildAiNightActions generates for all players, then engine merges
-  engine.resolveNight(null, {
-    includeHuman: true,
-    humanActions: externalActions,
-  });
-
-  // If game didn't end after night, run day phase (chat generation)
-  if (!engine.state.victory && engine.state.phase === Phase.DAY) {
-    // Generate AI chat for the day
-    const chatLines = generateChatLines(engine.state);
-    if (chatLines) {
-      engine.state.dayChat = engine.state.dayChat || [];
-      for (const line of chatLines) {
-        engine.state.dayChat.push(line);
-        engine.state.publicLog.push(line);
-      }
+  const gameInputs = msg.games || [];
+  const results = [];
+  for (let g = 0; g < engines.length; g++) {
+    const engine = engines[g];
+    if (!engine || engine.state.victory) {
+      results.push(engine ? buildGameResponse(engine) : { done: true });
+      continue;
     }
-    generateFactionChat(engine.state);
+    stepNightOne(engine, (gameInputs[g] || {}).actions || []);
+    results.push(buildGameResponse(engine));
   }
-
-  return buildResponse();
+  return { ok: true, games: results };
 }
 
 function handleStepVote(msg) {
-  if (!engine) return { ok: false, error: "No game. Call reset first." };
-  if (engine.state.victory) return { ok: false, error: "Game already ended." };
-
-  const rlActions = msg.actions || [];
-
-  // Convert RL actions to vote format
-  const externalVotes = [];
-  for (const a of rlActions) {
-    if (typeof a.actorId !== "number") continue;
-    const vote = rlActionToVote(a.actorId, a.targetId);
-    if (vote) externalVotes.push(vote);
+  const gameInputs = msg.games || [];
+  const results = [];
+  for (let g = 0; g < engines.length; g++) {
+    const engine = engines[g];
+    if (!engine || engine.state.victory) {
+      results.push(engine ? buildGameResponse(engine) : { done: true });
+      continue;
+    }
+    stepVoteOne(engine, (gameInputs[g] || {}).actions || []);
+    results.push(buildGameResponse(engine));
   }
-
-  // resolveVote with external votes + AI fills the rest
-  engine.resolveVote(null, "", {
-    includeHuman: true,
-    humanVotes: externalVotes,
-  });
-
-  return buildResponse();
+  return { ok: true, games: results };
 }
 
-function handleGetInfo() {
-  if (!engine) return { ok: false, error: "No game. Call reset first." };
+// Legacy single-game commands (backward compat)
+function handleLegacyReset(msg) {
+  engines = [new GameEngine(msg.seed ?? Date.now(), msg.theme || config.theme, msg.difficulty || config.difficulty, { allAi: true })];
+  const state = engines[0].state;
+  const resp = buildGameResponse(engines[0]);
+  return { ok: true, ...resp, roles: state.players.map(p => p.role), factions: state.players.map(p => p.faction), seed: msg.seed };
+}
 
-  const state = engine.state;
-  return {
-    ok: true,
-    roles: state.players.map(p => p.role),
-    factions: state.players.map(p => p.faction),
-    alive: state.aliveIds,
-    phase: state.phase,
-    day: state.dayNumber,
-    victory: state.victory || null,
-    counts: factionCounts(state),
-  };
+function handleLegacyStepNight(msg) {
+  if (!engines[0]) return { ok: false, error: "No game" };
+  stepNightOne(engines[0], msg.actions || []);
+  return { ok: true, ...buildGameResponse(engines[0]) };
+}
+
+function handleLegacyStepVote(msg) {
+  if (!engines[0]) return { ok: false, error: "No game" };
+  stepVoteOne(engines[0], msg.actions || []);
+  return { ok: true, ...buildGameResponse(engines[0]) };
 }
 
 // ─── Main Loop ────────────────────────────────────────────────────────────────
@@ -237,9 +307,7 @@ const rl = createInterface({ input: process.stdin });
 
 rl.on("line", (line) => {
   let msg;
-  try {
-    msg = JSON.parse(line.trim());
-  } catch (e) {
+  try { msg = JSON.parse(line.trim()); } catch (e) {
     process.stdout.write(JSON.stringify({ ok: false, error: "Invalid JSON" }) + "\n");
     return;
   }
@@ -247,23 +315,18 @@ rl.on("line", (line) => {
   let response;
   try {
     switch (msg.cmd) {
-      case "reset":
-        response = handleReset(msg);
-        break;
-      case "step_night":
-        response = handleStepNight(msg);
-        break;
-      case "step_vote":
-        response = handleStepVote(msg);
-        break;
-      case "get_info":
-        response = handleGetInfo();
-        break;
-      case "quit":
-        process.exit(0);
-        break;
-      default:
-        response = { ok: false, error: `Unknown command: ${msg.cmd}` };
+      case "init":       response = handleInit(msg); break;
+      case "reset_all":  response = handleResetAll(msg); break;
+      case "step_round": response = handleStepRound(msg); break;
+      case "step_night_batch": response = handleStepNight(msg); break;
+      case "step_vote_batch":  response = handleStepVote(msg); break;
+      // Legacy single-game commands
+      case "reset":      response = handleLegacyReset(msg); break;
+      case "step_night": response = handleLegacyStepNight(msg); break;
+      case "step_vote":  response = handleLegacyStepVote(msg); break;
+      case "get_info":   response = { ok: true, numGames: engines.length }; break;
+      case "quit":       process.exit(0); break;
+      default:           response = { ok: false, error: `Unknown: ${msg.cmd}` };
     }
   } catch (e) {
     response = { ok: false, error: e.message };

@@ -22,7 +22,10 @@ import numpy as np
 # Must match state_encoder.js
 NUM_PLAYERS = 18
 OBS_DIM = 1135
-NUM_ACTIONS = 19
+NUM_ACTIONS = 19      # target actions (legacy name kept for buffer compat)
+NUM_CHAT_TYPES = 5    # silence, accuse, defend, claim_role, deflect
+NUM_CLAIM_ROLES = 20  # roles that can be claimed
+TOTAL_MASK_DIM = 63   # 19 + 5 + 19 + 20
 GLOBAL_DIM = 30
 PER_PLAYER_DIM = 35
 OWN_ROLE_DIM = 25
@@ -90,13 +93,40 @@ class MafiaPolicy(nn.Module):
         )
         self.attn_norm = nn.LayerNorm(hidden)
 
-        # ── Policy head ──
+        # ── Policy heads (multi-discrete action space) ──
         combined_dim = hidden * 4  # global + attended + role + social
-        self.policy_head = nn.Sequential(
+
+        # Head 1: Target selection (night action / vote target)
+        self.target_head = nn.Sequential(
             nn.Linear(combined_dim, hidden),
             nn.ReLU(),
-            nn.Linear(hidden, NUM_ACTIONS),
+            nn.Linear(hidden, NUM_ACTIONS),  # 19: player 0-17 + no_action
         )
+
+        # Head 2: Chat type
+        CHAT_TYPES = 5  # 0=silence, 1=accuse, 2=defend, 3=claim_role, 4=deflect
+        self.chat_head = nn.Sequential(
+            nn.Linear(combined_dim, hidden // 2),
+            nn.ReLU(),
+            nn.Linear(hidden // 2, CHAT_TYPES),
+        )
+
+        # Head 3: Chat target (who to accuse/defend, independent from vote target)
+        self.chat_target_head = nn.Sequential(
+            nn.Linear(combined_dim, hidden // 2),
+            nn.ReLU(),
+            nn.Linear(hidden // 2, NUM_ACTIONS),  # 19: player 0-17 + nobody
+        )
+
+        # Head 4: Role claim (which role to claim when chat_type=3)
+        self.claim_head = nn.Sequential(
+            nn.Linear(combined_dim, hidden // 2),
+            nn.ReLU(),
+            nn.Linear(hidden // 2, NUM_ROLES),  # 20 roles
+        )
+
+        # Keep old name for backward compat (used in _init_weights)
+        self.policy_head = self.target_head
 
         # ── Value head (centralized: +ground_truth during training) ──
         self.value_head = nn.Sequential(
@@ -162,85 +192,111 @@ class MafiaPolicy(nn.Module):
 
         return global_feat, attended, role_feat, social_feat
 
+    def _masked_probs(self, logits, mask):
+        """Apply mask, clamp, softmax, clamp — safe categorical probs."""
+        logits = logits.masked_fill(mask == 0, -1e8)
+        logits = torch.clamp(logits, -50, 50)
+        probs = F.softmax(logits, dim=-1)
+        return probs.clamp(min=1e-8)
+
     def forward(self, obs, action_mask, ground_truth=None):
         """
-        Forward pass.
+        Multi-head forward pass.
 
         Args:
-            obs:          [batch, 541]
-            action_mask:  [batch, 19] — 1 for legal, 0 for illegal
-            ground_truth: [batch, 360] — true role one-hots (training only)
-
-        Returns:
-            action_probs: [batch, 19]
-            value:        [batch, 1]
-        """
-        global_feat, attended, role_feat, social_feat = self._encode(obs)
-
-        # Combine features
-        combined = torch.cat([global_feat, attended, role_feat, social_feat], dim=-1)  # [B, H*4]
-
-        # Policy
-        logits = self.policy_head(combined)                              # [B, 19]
-        logits = logits.masked_fill(action_mask == 0, -1e8)
-        logits = torch.clamp(logits, -50, 50)  # prevent overflow
-        action_probs = F.softmax(logits, dim=-1)
-        action_probs = action_probs.clamp(min=1e-8)  # prevent NaN
-
-        # Value
-        if ground_truth is not None:
-            value_input = torch.cat([combined, ground_truth], dim=-1)
-            value = self.value_head(value_input)
-        else:
-            value = self.value_head_dec(combined)
-
-        return action_probs, value
-
-    def get_action(self, obs, action_mask, ground_truth=None, deterministic=False):
-        """
-        Sample an action from the policy.
-
-        Returns:
-            action:   [batch] int tensor
-            log_prob: [batch] float tensor
-            value:    [batch] float tensor
-            entropy:  [batch] float tensor
-        """
-        action_probs, value = self.forward(obs, action_mask, ground_truth)
-
-        dist = Categorical(probs=action_probs)
-
-        if deterministic:
-            action = action_probs.argmax(dim=-1)
-        else:
-            action = dist.sample()
-
-        log_prob = dist.log_prob(action)
-        entropy = dist.entropy()
-
-        return action, log_prob, value.squeeze(-1), entropy
-
-    def evaluate_actions(self, obs, action_mask, actions, ground_truth=None):
-        """
-        Evaluate given actions under current policy.
-        Used during PPO update.
-
-        Args:
-            obs:          [batch, 541]
-            action_mask:  [batch, 19]
-            actions:      [batch] int tensor
+            obs:          [batch, 1135]
+            action_mask:  [batch, 63] — packed masks for all 4 heads:
+                          [0:19] target mask, [19:24] chat_type mask,
+                          [24:43] chat_target mask, [43:63] claim_role mask
             ground_truth: [batch, 360]
 
         Returns:
-            log_probs: [batch]
-            values:    [batch]
-            entropy:   [batch]
+            probs: dict of {target, chat_type, chat_target, claim_role} probs
+            value: [batch, 1]
         """
-        action_probs, value = self.forward(obs, action_mask, ground_truth)
-        dist = Categorical(probs=action_probs)
+        global_feat, attended, role_feat, social_feat = self._encode(obs)
+        combined = torch.cat([global_feat, attended, role_feat, social_feat], dim=-1)
 
-        log_probs = dist.log_prob(actions)
-        entropy = dist.entropy()
+        # Split action mask into per-head masks
+        target_mask = action_mask[:, :19]
+        chat_type_mask = action_mask[:, 19:24]
+        chat_target_mask = action_mask[:, 24:43]
+        claim_mask = action_mask[:, 43:63]
+
+        # 4 policy heads
+        target_probs = self._masked_probs(self.target_head(combined), target_mask)
+        chat_type_probs = self._masked_probs(self.chat_head(combined), chat_type_mask)
+        chat_target_probs = self._masked_probs(self.chat_target_head(combined), chat_target_mask)
+        claim_probs = self._masked_probs(self.claim_head(combined), claim_mask)
+
+        probs = {
+            "target": target_probs,           # [B, 19]
+            "chat_type": chat_type_probs,     # [B, 5]
+            "chat_target": chat_target_probs, # [B, 19]
+            "claim_role": claim_probs,        # [B, 20]
+        }
+
+        # Value
+        if ground_truth is not None:
+            value = self.value_head(torch.cat([combined, ground_truth], dim=-1))
+        else:
+            value = self.value_head_dec(combined)
+
+        return probs, value
+
+    def get_action(self, obs, action_mask, ground_truth=None, deterministic=False):
+        """
+        Sample actions from all 4 heads.
+
+        Returns:
+            actions:  [batch, 4] int tensor (target, chat_type, chat_target, claim_role)
+            log_prob: [batch] float tensor (sum of all heads)
+            value:    [batch] float tensor
+            entropy:  [batch] float tensor (sum of all heads)
+        """
+        probs, value = self.forward(obs, action_mask, ground_truth)
+
+        actions = []
+        total_log_prob = torch.zeros(obs.shape[0], device=obs.device)
+        total_entropy = torch.zeros(obs.shape[0], device=obs.device)
+
+        for key in ["target", "chat_type", "chat_target", "claim_role"]:
+            dist = Categorical(probs=probs[key])
+            if deterministic:
+                a = probs[key].argmax(dim=-1)
+            else:
+                a = dist.sample()
+            actions.append(a)
+            total_log_prob += dist.log_prob(a)
+            total_entropy += dist.entropy()
+
+        actions = torch.stack(actions, dim=-1)  # [B, 4]
+        return actions, total_log_prob, value.squeeze(-1), total_entropy
+
+    def evaluate_actions(self, obs, action_mask, actions, ground_truth=None):
+        """
+        Evaluate given multi-head actions under current policy.
+
+        Args:
+            actions: [batch, 4] int tensor
+
+        Returns:
+            log_probs: [batch] (sum of all heads)
+            values:    [batch]
+            entropy:   [batch] (sum of all heads)
+        """
+        probs, value = self.forward(obs, action_mask, ground_truth)
+
+        total_log_prob = torch.zeros(actions.shape[0], device=obs.device)
+        total_entropy = torch.zeros(actions.shape[0], device=obs.device)
+
+        for i, key in enumerate(["target", "chat_type", "chat_target", "claim_role"]):
+            dist = Categorical(probs=probs[key])
+            total_log_prob += dist.log_prob(actions[:, i])
+            total_entropy += dist.entropy()
+
+        log_probs = total_log_prob
+        entropy = total_entropy
 
         return log_probs, value.squeeze(-1), entropy
 
@@ -254,8 +310,8 @@ class RolloutBuffer:
         self.num_agents = num_agents
 
         self.obs = np.zeros((num_steps, num_envs, num_agents, OBS_DIM), dtype=np.float32)
-        self.masks = np.zeros((num_steps, num_envs, num_agents, NUM_ACTIONS), dtype=np.float32)
-        self.actions = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
+        self.masks = np.zeros((num_steps, num_envs, num_agents, TOTAL_MASK_DIM), dtype=np.float32)
+        self.actions = np.zeros((num_steps, num_envs, num_agents, 4), dtype=np.int64)  # 4 heads
         self.log_probs = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.rewards = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.values = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
@@ -311,8 +367,8 @@ class RolloutBuffer:
         total = self.num_steps * self.num_envs * self.num_agents
         return {
             "obs": torch.tensor(self.obs.reshape(total, OBS_DIM)),
-            "masks": torch.tensor(self.masks.reshape(total, NUM_ACTIONS)),
-            "actions": torch.tensor(self.actions.reshape(total)),
+            "masks": torch.tensor(self.masks.reshape(total, TOTAL_MASK_DIM)),
+            "actions": torch.tensor(self.actions.reshape(total, 4)),
             "log_probs": torch.tensor(self.log_probs.reshape(total)),
             "returns": torch.tensor(self.returns.reshape(total)),
             "advantages": torch.tensor(self.advantages.reshape(total)),
@@ -344,18 +400,17 @@ if __name__ == "__main__":
     # Test forward pass
     batch = 32
     obs = torch.randn(batch, OBS_DIM, device=device)
-    mask = torch.ones(batch, NUM_ACTIONS, device=device)
+    mask = torch.ones(batch, TOTAL_MASK_DIM, device=device)
     mask[:, 0] = 0  # mask out target 0
     gt = torch.randn(batch, GROUND_TRUTH_DIM, device=device)
 
     probs, value = policy(obs, mask, ground_truth=gt)
-    print(f"Action probs: {probs.shape}, Value: {value.shape}")
-    print(f"Probs sum: {probs.sum(dim=-1).mean():.4f} (should be ~1.0)")
-    print(f"Masked action 0 prob: {probs[:, 0].max():.6f} (should be ~0)")
+    print(f"Target probs: {probs['target'].shape}, Chat probs: {probs['chat_type'].shape}, Value: {value.shape}")
+    print(f"Target probs sum: {probs['target'].sum(dim=-1).mean():.4f} (should be ~1.0)")
 
     # Test action sampling
     action, log_prob, val, entropy = policy.get_action(obs, mask, ground_truth=gt)
-    print(f"Sampled actions: {action.shape}, Log probs: {log_prob.shape}")
+    print(f"Sampled actions: {action.shape} (should be [32, 4])")
     print(f"Mean entropy: {entropy.mean():.4f}")
 
     # Test evaluate
@@ -371,8 +426,8 @@ if __name__ == "__main__":
     for i in range(4):
         buf.insert(
             obs=np.random.randn(2, 18, OBS_DIM).astype(np.float32),
-            masks=np.ones((2, 18, NUM_ACTIONS), dtype=np.float32),
-            actions=np.random.randint(0, 19, (2, 18)),
+            masks=np.ones((2, 18, TOTAL_MASK_DIM), dtype=np.float32),
+            actions=np.random.randint(0, 19, (2, 18, 4)),
             log_probs=np.random.randn(2, 18).astype(np.float32),
             rewards=np.zeros((2, 18), dtype=np.float32),
             values=np.random.randn(2, 18).astype(np.float32),
