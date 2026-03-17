@@ -645,29 +645,31 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
             if target_id == executed:
                 # This voter voted for the executed player
                 if victim_faction == F_RED:
-                    # Voted out a red — good
-                    rewards[voter_id] += 0.04  # personal reward for correct vote
+                    # Voted out a red — good for any faction voter
+                    rewards[voter_id] += 0.04
 
-                    # Extra: if following a real police reveal
-                    if game.police_public_red == executed:
-                        rewards[voter_id] += 0.02  # following real intel
+                    # Non-police blue: extra reward for following real police reveal
+                    if voter.faction == F_BLUE and voter.role != R_POLICE:
+                        if game.police_public_red == executed:
+                            rewards[voter_id] += 0.02  # followed real intel correctly
                 else:
                     # Voted out a blue — bad
-                    rewards[voter_id] -= 0.03  # personal penalty for wrong vote
+                    rewards[voter_id] -= 0.03
 
-                    # Extra: if following a fake police reveal (got tricked)
-                    if game.police_public_red == executed:
-                        # Check if the "police" who revealed was actually a killer (fake claim)
-                        claimer = None
-                        for pid, role in game.role_claims.items():
-                            if role == R_POLICE or (isinstance(role, int) and role == R_POLICE):
-                                claimer = pid
-                                break
-                            if role == "POLICE":
-                                claimer = int(pid) if isinstance(pid, str) else pid
-                                break
-                        if claimer is not None and game.players[claimer].role == R_KILLER:
-                            rewards[voter_id] -= 0.02  # extra penalty: got tricked by fake police
+                    # Non-police blue: extra penalty for being tricked by fake police
+                    if voter.faction == F_BLUE and voter.role != R_POLICE:
+                        if game.police_public_red == executed:
+                            # Check if the reveal was from a fake police (killer)
+                            fake_reveal = False
+                            for pid, role in game.role_claims.items():
+                                claimed = role if isinstance(role, str) else ""
+                                pid_int = int(pid) if isinstance(pid, str) else pid
+                                if (claimed == "POLICE" or role == R_POLICE):
+                                    if game.players[pid_int].role == R_KILLER:
+                                        fake_reveal = True
+                                        break
+                            if fake_reveal:
+                                rewards[voter_id] -= 0.02  # got tricked by fake police
 
     # ── Terminal rewards (large, game end only) ──
     if game.victory is not None:
