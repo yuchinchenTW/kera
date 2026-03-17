@@ -3,6 +3,7 @@ import { Roles, Faction, roleMeta } from "../roles.js";
 import { clamp, isHard, randomChoice, shuffled, getGamePhase, rolePriorCounts, ensureAdvancedMemory } from "./utils.js";
 import { analyzeVotingPatterns, analyzeChatBehavior, factionProb, publicPoliceConfirmed } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
+import { getWeight } from "./learned_weights.js";
 
 export function pickTargetBySuspicion(state, actor, filterFn = () => true) {
   let best = null;
@@ -133,18 +134,16 @@ export function pickPoliceSmartTarget(state, actor) {
       (actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0) > 0.6;
     if (likelyBluePower && state.rng() < 0.8) continue;
 
-    let score = killerProb * 2 + redProb;
+    const P = (feat, def) => getWeight("POLICE", "night", feat, def);
+    let score = killerProb * P("killerProb", 2.0) + redProb * P("redProb", 1.0);
 
     if (hard) {
       // Phase-based information value:
-      // Early game: uncertain targets (0.3-0.6) have highest info value
-      // Late game: high-suspicion targets (>0.6) — confirm and execute immediately
       if (gamePhase === "early") {
-        if (redProb > 0.3 && redProb < 0.6) score += 0.2;
+        if (redProb > 0.3 && redProb < 0.6) score += P("infoValueEarly", 0.2);
       } else if (gamePhase === "late") {
-        if (redProb > 0.6) score += 0.2;
+        if (redProb > 0.6) score += P("infoValueLate", 0.2);
       } else {
-        // Mid: original info value range
         if (redProb > 0.4 && redProb < 0.7) score += 0.15;
       }
 
@@ -154,14 +153,14 @@ export function pickPoliceSmartTarget(state, actor) {
         for (const redId of knownReds) {
           redAllyCount += votePatterns.votedTogether[t.id]?.[redId] || 0;
         }
-        score += Math.min(redAllyCount * 0.08, 0.2);
+        score += Math.min(redAllyCount * P("redAllyVote", 0.08), 0.2);
       }
 
       // Bonus: defended a known red in chat
       const chatMem = actor.aiMemory?.chatMemory || [];
       for (const m of chatMem) {
         if (m.speakerId === t.id && knownReds.has(m.defendedId)) {
-          score += 0.12;
+          score += P("redDefended", 0.12);
           break;
         }
       }
@@ -169,61 +168,56 @@ export function pickPoliceSmartTarget(state, actor) {
       // Bonus: silent players may hide red identity
       if (chatBehavior) {
         const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
-        if (speakRatio < 0.15 && redProb > 0.35) score += 0.1;
+        if (speakRatio < 0.15 && redProb > 0.35) score += P("silentRedLean", 0.1);
       }
 
       // Sniper/kidnapper probability — also high-value red targets to expose
       const sniperProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.SNIPER?.id] ?? 0;
       const kidnapProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KIDNAPPER?.id] ?? 0;
-      score += sniperProb * 0.8 + kidnapProb * 0.5;
+      score += sniperProb * P("sniperProb", 0.8) + kidnapProb * P("kidnapProb", 0.5);
 
       // Survival analysis: active players who survive many nights are suspicious.
-      // Killers don't kill their own team, so red players survive longer on average.
       if (dayNum >= 3 && chatBehavior) {
         const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
-        // Active speakers who haven't been night-killed despite being visible
         if (speakRatio > 0.4 && blueNightDeaths >= 2) {
-          score += 0.12; // survived while blue allies died = suspicious
+          score += P("survivalSusp", 0.12);
         }
       }
 
-      // Post-reveal red ally priority: if we just found a red, investigate
-      // people who were closest allies of that red (voted together most)
+      // Post-reveal red ally priority
       if (knownReds.size > 0 && votePatterns) {
         let maxAllyScore = 0;
         for (const redId of knownReds) {
           const together = votePatterns.votedTogether[t.id]?.[redId] || 0;
           maxAllyScore = Math.max(maxAllyScore, together);
         }
-        if (maxAllyScore >= 2) score += 0.15; // strong ally pattern
+        if (maxAllyScore >= 2) score += P("postRevealAlly", 0.15);
       }
 
-      // Bonus: red execution opposers — didn't vote for executed reds = suspicious
+      // Bonus: red execution opposers
       if (redExecOpposers[t.id]) {
-        score += Math.min(redExecOpposers[t.id] * 0.1, 0.25);
+        score += Math.min(redExecOpposers[t.id] * P("redExecOpposer", 0.1), 0.25);
       }
 
-      // Bonus: vote pressure — someone almost voted out deserves investigation
-      // If red: confirms the execution. If blue: police can clear them.
+      // Bonus: vote pressure
       if (lastRound) {
         const tVotes = lastTally[t.id] || 0;
         if (tVotes > 0) {
           const voteRatio = tVotes / maxLastVotes;
-          // High vote pressure + uncertain = prioritize investigation
           if (voteRatio > 0.5 && redProb > 0.3 && redProb < 0.8) {
-            score += voteRatio * 0.2;
+            score += voteRatio * P("votePressure", 0.2);
           }
         }
       }
 
       // Saved target avoidance: doctor-saved players are confirmed blue
-      if (savedIds.has(t.id)) score -= 0.3;
+      if (savedIds.has(t.id)) score += P("savedAvoid", -0.3);
 
-      // Arson-marked avoidance: arsonist targets blues, so arson-marked = confirmed blue
-      if (arsonMarkedIds.has(t.id)) score -= 0.25;
+      // Arson-marked avoidance
+      if (arsonMarkedIds.has(t.id)) score += P("arsonAvoid", -0.25);
 
       // Accusation reversal: targets accused by known reds are likely blue
-      if (accusedByRed.has(t.id)) score -= 0.15;
+      if (accusedByRed.has(t.id)) score += P("accusedByRedAvoid", -0.15);
 
       // Kidnap risk: if someone was kidnapped this/last night, investigating the kidnapper
       // triggers hostage execution. Deprioritize high-kidnapper-probability targets.
@@ -499,43 +493,44 @@ export function pickKillerSmartTarget(state, actor) {
     const agentProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.AGENT?.id] ?? 0;
 
     // Base: prefer blue targets
-    let score = blueProb;
+    const W = (feat, def) => getWeight("KILLER", "night", feat, def);
+    let score = blueProb * W("blueProb", 1.0);
 
     // Bonus: police are high-value targets — removing police cripples blue intel
-    score += policeProb * 0.8;
+    score += policeProb * W("policeProb", 0.8);
 
     // Bonus: doctor is the #1 threat — every night save wastes a kill
-    score += doctorProb * 0.6;
+    score += doctorProb * W("doctorProb", 0.6);
 
     // Bonus: active speakers are threats (they influence votes)
     const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
-    score += speakRatio * 0.3;
+    score += speakRatio * W("speakRatio", 0.3);
 
     // Bonus: correct voters are dangerous — they identify reds successfully
-    if (correctVoters.has(t.id)) score += 0.4;
+    if (correctVoters.has(t.id)) score += W("correctVoter", 0.4);
 
     // Bonus: red accusers are threats — they call out reds in chat
-    if (redAccuserCount[t.id]) score += Math.min(redAccuserCount[t.id] * 0.15, 0.4);
+    if (redAccuserCount[t.id]) score += Math.min(redAccuserCount[t.id] * W("redAccuser", 0.15), 0.4);
 
     // Penalty: arson-marked targets will die on ignition — wasted kill
-    if (arsonMarkedIds.has(t.id) && arsonMarkedIds.size >= 2) score -= 0.4;
+    if (arsonMarkedIds.has(t.id) && arsonMarkedIds.size >= 2) score += W("arsonMarked", -0.4);
 
     // Penalty: heavily voted targets may be voted out — save the kill
-    if (heavilyVoted.has(t.id)) score -= 0.3;
+    if (heavilyVoted.has(t.id)) score += W("heavilyVoted", -0.3);
 
     // Penalty: doctor protection prediction — avoid targets doctor is likely guarding
     const dpScore = doctorProtectScore[t.id] || 0;
-    score -= dpScore * 0.6;
+    score -= dpScore * Math.abs(W("doctorProtect", 0.6));
 
     // Penalty: police-confirmed blue — doctor almost certainly protecting them
-    if (killerBlueDefended.has(t.id)) score -= 0.5;
+    if (killerBlueDefended.has(t.id)) score += W("blueDefended", -0.5);
 
     // Penalty: likely protected by agent
-    score -= agentProb * 0.3;
+    score += agentProb * W("agentProb", -0.3);
 
     // Penalty: saved last night — likely still protected (but weaker than before if dp already penalizes)
     if (savedLastNight.has(t.id)) {
-      score -= 0.4;
+      score += W("savedLastNight", -0.4);
     }
     // Skip saved+same target 80%
     if (state.killerLastTarget !== undefined && t.id === state.killerLastTarget && savedLastNight.has(t.id)) {

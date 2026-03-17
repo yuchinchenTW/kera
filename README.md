@@ -320,3 +320,112 @@ Output includes: faction win rates, game length distribution, victory reasons, p
 行為審計輸出包括：警察調查準確度、殺手友射率/分散投票率/私聊目標命中率、醫生連續同目標率、狙擊手命中率、平民跟投率/聊天-投票一致性、死人發言檢測。
 
 Behavior audit output includes: police investigation accuracy, killer friendly-fire / scatter-vote / private-chat target hit rates, doctor consecutive-target rate, sniper accuracy, civilian follow-reveal / chat-vote consistency, dead-speaker detection.
+
+## AI Training / AI 訓練系統
+
+本專案提供三種 AI 訓練方式，可獨立或組合使用。
+
+Three AI training approaches are available, usable independently or combined.
+
+### 專案結構 Training Structure
+
+| 檔案 File | 說明 Description |
+|------|-------------|
+| `training/game_server.js` | 遊戲引擎 JSON 協議伺服器（stdin/stdout），供 Python 訓練呼叫 |
+| `training/state_encoder.js` | 狀態編碼器：遊戲狀態 → 1135 維觀測向量（含投票圖譜、聊天互動、遺言信號） |
+| `training/env.py` | Gym 相容的單遊戲 Python 環境（subprocess 封裝） |
+| `training/vec_env.py` | 向量化平行環境（多進程加速） |
+| `training/model.py` | 神經網路策略模型（MAPPO，576K 參數，attention-based） |
+| `training/train.py` | MAPPO 訓練迴圈（PPO + GAE + 集中式 critic） |
+| `training/evaluate.py` | RL 策略 vs 啟發式 baseline 對戰評估 |
+| `training/distill.py` | 策略蒸餾：從 NN 提取線性權重回 JS 啟發式 |
+| `training/cma_optimize.py` | CMA-ES 進化策略：自動搜尋啟發式最優權重組合 |
+| `training/eval_weights.js` | CMA-ES 用的 JS 模擬評估器 |
+| `training/weight_params.json` | 49 個可調權重參數定義（預設值 + 範圍） |
+
+### 方式一：CMA-ES 權重優化 / CMA-ES Weight Optimization
+
+自動搜尋現有啟發式 AI 中 49 個 hand-tuned 參數的最優組合。不改變 AI 架構，只調整權重。
+
+Automatically searches for optimal values of 49 hand-tuned parameters in the existing heuristic AI.
+
+```bash
+pip install cma
+python training/cma_optimize.py                           # 預設 100 代, 12 population
+python training/cma_optimize.py --generations 200 --games 200  # 更精確
+```
+
+- 適用場景：快速提升，保證不退化
+- 預估時間：100 代 ≈ 1 小時
+- 輸出：`training/optimized_weights.json`
+- Fitness：遊戲品質導向（長度 + 平衡 + 醫生救援 + 多樣性）
+
+### 方式二：RL 自我對弈 / RL Self-Play (MAPPO)
+
+用強化學習訓練神經網路策略，透過 98 萬場自我對弈學習遊戲策略。
+
+Trains a neural network policy through ~1M games of self-play.
+
+```bash
+pip install torch numpy tensorboard
+python training/train.py --num_envs 16 --steps 10000000   # 10M steps, ~13hr GPU
+python training/train.py --resume training/checkpoints/policy_final.pt --steps 20000000  # 接續訓練
+tensorboard --logdir training/logs                         # 即時監控
+```
+
+- 觀測向量 (1135 維)：投票圖譜 (18x18)、聊天指控/辯護矩陣、遺言信號、信念分佈、角色資源
+- 模型：共享策略網路 + 角色條件化 + Multi-head Attention + 集中式 critic (CTDE)
+- TensorBoard 指標：勝率、loss、entropy、醫生打針/救援、狙擊手開槍、警察查獲紅方等
+- 輸出：`training/checkpoints/policy_final.pt`
+
+### 方式三：策略蒸餾 / Policy Distillation
+
+從訓練好的 NN 提取策略偏好，轉換為 JS 啟發式可用的線性權重。
+
+Extracts learned policy preferences from the trained NN into linear weights for the JS heuristic.
+
+```bash
+python training/distill.py --checkpoint training/checkpoints/policy_final.pt --samples 10000
+```
+
+- 輸出：`training/learned_weights.json` + `src/ai/learned_weights.js`
+- 整合方式：透過 `getWeight(role, phase, feature, default)` 注入，null 值自動 fallback 到 hand-tuned
+
+### 評估 / Evaluation
+
+```bash
+python training/evaluate.py --mode all_rl --games 200       # RL 全控 200 場
+python training/evaluate.py --mode all_heuristic --games 200 # 啟發式全控 200 場
+```
+
+### 架構圖 Architecture
+
+```
+┌─────────────┐    stdin/stdout    ┌──────────────────┐
+│  Python      │ ◄──── JSON ─────► │  JS Game Engine  │
+│  (train.py)  │                   │  (game_server.js)│
+└──────┬───────┘                   └──────────────────┘
+       │                                    ▲
+       ▼                                    │
+┌──────────────┐                   ┌────────┴─────────┐
+│  NN Policy   │                   │  state_encoder   │
+│  (model.py)  │                   │  1135d obs vector│
+└──────┬───────┘                   └──────────────────┘
+       │
+       ▼
+┌──────────────┐    distill.py     ┌──────────────────┐
+│  Trained     │ ──────────────►   │  learned_weights │
+│  Checkpoint  │                   │  .js (getWeight) │
+└──────────────┘                   └──────────────────┘
+
+┌──────────────┐    eval_weights   ┌──────────────────┐
+│  CMA-ES      │ ──── .js ──────► │  simulate games  │
+│  (cma_opt.py)│                   │  → fitness score │
+└──────┬───────┘                   └──────────────────┘
+       │
+       ▼
+┌──────────────┐
+│  optimized   │
+│  _weights.json│
+└──────────────┘
+```
