@@ -73,10 +73,6 @@ class MAPPOTrainer:
         param_count = sum(p.numel() for p in self.policy.parameters())
         print(f"Policy parameters: {param_count:,}")
 
-        # Resume from checkpoint if specified
-        if args.resume:
-            self._load_checkpoint(args.resume)
-
         # Rollout buffer
         self.buffer = RolloutBuffer(
             num_steps=args.rollout_steps,
@@ -89,7 +85,7 @@ class MAPPOTrainer:
         os.makedirs(args.log_dir, exist_ok=True)
         self.writer = SummaryWriter(args.log_dir)
 
-        # Stats
+        # Stats (initialize BEFORE resume so resume can override)
         self.total_steps = 0
         self.total_updates = 0
         self.total_games = 0
@@ -107,6 +103,10 @@ class MAPPOTrainer:
             "exorcistPetrifies": 0,
             "nightKills": 0, "voteKills": 0,
         }
+
+        # Resume from checkpoint if specified (AFTER stats init so it overrides)
+        if args.resume:
+            self._load_checkpoint(args.resume)
 
     @torch.no_grad()
     def collect_rollout(self):
