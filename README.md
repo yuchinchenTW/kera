@@ -327,110 +327,198 @@ Behavior audit output includes: police investigation accuracy, killer friendly-f
 
 Three AI training approaches are available, usable independently or combined.
 
-### 專案結構 Training Structure
+### 安裝依賴 Install Dependencies
+
+```bash
+pip install torch numpy tensorboard numba cma
+```
+
+GPU 訓練需要 CUDA 版 PyTorch：
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+### 訓練檔案結構 Training Files
 
 | 檔案 File | 說明 Description |
 |------|-------------|
-| `training/fast_engine.py` | 純 Python 精簡遊戲引擎（GOOD_VS_EVIL 主題，無 IPC） |
-| `training/fast_encode_jit.py` | Numba JIT 編譯的觀測編碼器（292x 加速） |
-| `training/game_server.js` | 完整遊戲引擎 JSON 協議伺服器（stdin/stdout，支援多場批次） |
-| `training/state_encoder.js` | JS 狀態編碼器：遊戲狀態 → 1135 維觀測向量（含投票圖譜、聊天互動、遺言信號） |
-| `training/env.py` | 批次遊戲 Python 環境（支援 JS subprocess 或純 Python 引擎） |
-| `training/vec_env.py` | 向量化平行環境（多進程，用於 JS 引擎模式） |
-| `training/model.py` | 神經網路策略模型（MAPPO，678K 參數，4 頭行動空間：目標+聊天+角色宣稱） |
-| `training/train.py` | MAPPO 訓練迴圈（PPO + GAE + 集中式 critic） |
-| `training/evaluate.py` | RL 策略 vs 啟發式 baseline 對戰評估 |
-| `training/distill.py` | 策略蒸餾：從 NN 提取線性權重回 JS 啟發式 |
-| `training/cma_optimize.py` | CMA-ES 進化策略：自動搜尋啟發式最優權重組合 |
+| `training/fast_engine.py` | 純 Python 精簡遊戲引擎（GOOD_VS_EVIL，無 IPC，搭配 Numba JIT） |
+| `training/fast_encode_jit.py` | Numba JIT 觀測編碼器（比 Python 快 292 倍） |
+| `training/model.py` | MAPPO 策略網路（678K 參數，4 頭行動空間） |
+| `training/train.py` | 訓練迴圈（PPO + GAE + 集中式 critic） |
+| `training/evaluate.py` | RL vs 啟發式對戰評估 |
+| `training/distill.py` | 策略蒸餾（NN → JS 線性權重） |
+| `training/cma_optimize.py` | CMA-ES 權重自動搜尋 |
+| `training/game_server.js` | 完整引擎 JSON 伺服器（多場批次，供 evaluate 用） |
+| `training/state_encoder.js` | JS 觀測編碼器（1135 維，供 game_server 用） |
+| `training/env.py` | 批次遊戲環境（支援 JS subprocess 或 Python 引擎） |
+| `training/vec_env.py` | 多進程向量化環境（JS 引擎模式用） |
 | `training/eval_weights.js` | CMA-ES 用的 JS 模擬評估器 |
-| `training/weight_params.json` | 49 個可調權重參數定義（預設值 + 範圍） |
+| `training/weight_params.json` | 49 個可調參數定義（預設值 + 範圍） |
 
-### 方式一：CMA-ES 權重優化 / CMA-ES Weight Optimization
+### 方式一：RL 自我對弈 / RL Self-Play (MAPPO)
 
-自動搜尋現有啟發式 AI 中 49 個 hand-tuned 參數的最優組合。不改變 AI 架構，只調整權重。
+用強化學習訓練神經網路策略。RL 可學會假冒警察、栽贓無辜、保護隊友、策略性沉默等人類策略。
 
-Automatically searches for optimal values of 49 hand-tuned parameters in the existing heuristic AI.
+RL trains a neural network through self-play. The agent can learn deception, strategic accusations, role claims, and social coordination.
 
+**快速開始 Quick Start：**
 ```bash
-pip install cma
-python training/cma_optimize.py                           # 預設 100 代, 12 population
-python training/cma_optimize.py --generations 200 --games 200  # 更精確
+# 從頭訓練 28M steps（RTX 5060 約 5 小時）
+python training/train.py --num_envs 256 --steps 28000000 --rollout_steps 128 --batch_size 8192
+
+# 即時監控訓練進度
+tensorboard --logdir training/logs
 ```
 
-- 適用場景：快速提升，保證不退化
+**接續訓練 Resume：**
+```bash
+# 從 checkpoint 繼續訓練到 50M
+python training/train.py --resume training/checkpoints/policy_final.pt --steps 50000000 --num_envs 256
+
+# TensorBoard x 軸會正確接續，不會從 0 重跑
+```
+
+**評估訓練結果 Evaluate：**
+```bash
+# RL 策略 vs 啟發式 AI 各跑 200 場
+python training/evaluate.py --checkpoint training/checkpoints/policy_final.pt --games 200 --mode all_rl
+python training/evaluate.py --games 200 --mode all_heuristic
+```
+
+**主要參數 Key Arguments：**
+
+| 參數 | 建議值 | 說明 |
+|------|--------|------|
+| `--num_envs` | 256 | 平行遊戲數（越大 GPU 利用率越高，但吃更多 RAM） |
+| `--steps` | 28000000 | 總訓練步數 |
+| `--rollout_steps` | 128 | 每次收集多少步再更新（越大越穩定） |
+| `--batch_size` | 8192 | PPO 小批次大小 |
+| `--lr` | 0.0003 | 學習率 |
+| `--resume` | 路徑 | 從 checkpoint 接續訓練 |
+| `--theme` | GOOD_VS_EVIL | 訓練主題（目前僅支援此主題） |
+| `--save_dir` | training/checkpoints | 模型儲存位置 |
+| `--log_dir` | training/logs | TensorBoard 日誌位置 |
+
+**速度參考 Performance：**
+
+| 配置 | 速度 | 24 小時產量 |
+|------|------|------------|
+| 16 envs (JS IPC 舊版) | 175 sps | 15M steps |
+| 64 envs (Python + Numba) | 750 sps | 65M steps |
+| 128 envs | 1,300 sps | 112M steps |
+| 256 envs (建議) | 1,550 sps | 134M steps |
+| 512 envs | 1,700 sps | 147M steps |
+
+**技術細節 Technical Details：**
+- **多頭行動空間 (63 維)**：目標 (19) + 聊天類型 (5: 沉默/指控/辯護/宣稱角色/轉移) + 聊天對象 (19) + 角色宣稱 (20)
+- **觀測向量 (1135 維)**：投票圖譜 (18x18)、聊天指控/辯護矩陣、遺言信號、信念分佈、角色資源
+- **模型**：共享策略網路 + Multi-head Attention + 集中式 critic (CTDE)，678K 參數
+- **加速**：純 Python 引擎 + Numba JIT 觀測編碼（292x），無 Node.js subprocess 開銷
+- **TensorBoard 指標**：勝率、loss、entropy、醫生打針/救援/overdose、狙擊手開槍、警察查獲紅方
+
+### 方式二：CMA-ES 權重優化 / CMA-ES Weight Optimization
+
+自動搜尋現有啟發式 AI 中 49 個 hand-tuned 參數的最優組合。不改變 AI 架構，只調整權重。追求雙方都變強、遊戲品質提升。
+
+Automatically searches optimal values for 49 hand-tuned heuristic parameters, optimizing for game quality (balance + length + engagement).
+
+```bash
+python training/cma_optimize.py                                    # 預設 100 代
+python training/cma_optimize.py --generations 200 --games 200      # 更精確
+python training/cma_optimize.py --population 16 --games 150        # 更大搜尋空間
+```
+
 - 預估時間：100 代 ≈ 1 小時
 - 輸出：`training/optimized_weights.json`
-- Fitness：遊戲品質導向（長度 + 平衡 + 醫生救援 + 多樣性）
-
-### 方式二：RL 自我對弈 / RL Self-Play (MAPPO)
-
-用強化學習訓練神經網路策略，透過 98 萬場自我對弈學習遊戲策略。
-
-Trains a neural network policy through ~1M games of self-play.
-
-```bash
-pip install torch numpy tensorboard numba
-python training/train.py --num_envs 64 --steps 28000000   # 28M steps, ~10hr GPU (Numba JIT)
-python training/train.py --resume training/checkpoints/policy_final.pt --steps 50000000  # 接續訓練
-tensorboard --logdir training/logs                         # 即時監控
-```
-
-- **多頭行動空間**：目標選擇 (19) + 聊天類型 (5: 沉默/指控/辯護/宣稱角色/轉移) + 聊天對象 (19) + 角色宣稱 (20)
-- RL 可學會：假冒警察、栽贓無辜、保護隊友、策略性沉默
-- 觀測向量 (1135 維)：投票圖譜 (18x18)、聊天指控/辯護矩陣、遺言信號、信念分佈、角色資源
-- 模型：共享策略網路 + 角色條件化 + Multi-head Attention + 集中式 critic (CTDE)，678K 參數
-- **Numba JIT 加速**：純 Python 引擎 + JIT 編譯觀測編碼，比 JS IPC 版快 4.3 倍（~750 sps）
-- TensorBoard 指標：勝率、loss、entropy、醫生打針/救援/overdose、狙擊手開槍、警察查獲紅方等
-- 輸出：`training/checkpoints/policy_final.pt`
+- Fitness：遊戲品質導向（遊戲長度 35% + 平衡度 25% + 醫生救援 20% + 多樣性 20%）
 
 ### 方式三：策略蒸餾 / Policy Distillation
 
-從訓練好的 NN 提取策略偏好，轉換為 JS 啟發式可用的線性權重。
+從訓練好的 NN 提取策略，轉換為 JS 啟發式可用的權重，部署到瀏覽器。
 
-Extracts learned policy preferences from the trained NN into linear weights for the JS heuristic.
+Extracts learned policy from trained NN into JS-compatible weights for browser deployment.
 
 ```bash
+# 蒸餾（從 checkpoint 提取權重）
 python training/distill.py --checkpoint training/checkpoints/policy_final.pt --samples 10000
+
+# 輸出檔案：
+#   training/learned_weights.json      — 原始權重數據
+#   src/ai/learned_weights.js          — JS 模組（自動整合到遊戲）
 ```
 
-- 輸出：`training/learned_weights.json` + `src/ai/learned_weights.js`
-- 整合方式：透過 `getWeight(role, phase, feature, default)` 注入，null 值自動 fallback 到 hand-tuned
+整合方式：透過 `getWeight(role, phase, feature, default)` 注入，缺少的權重自動 fallback 到 hand-tuned 值。
 
-### 評估 / Evaluation
+### 完整訓練流程 Full Training Pipeline
 
 ```bash
-python training/evaluate.py --mode all_rl --games 200       # RL 全控 200 場
-python training/evaluate.py --mode all_heuristic --games 200 # 啟發式全控 200 場
+# 1. 安裝依賴
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install numpy tensorboard numba cma
+
+# 2. RL 訓練（掛著跑 5-12 小時）
+python training/train.py --num_envs 256 --steps 28000000 --rollout_steps 128 --batch_size 8192
+
+# 3. 監控（另開終端）
+tensorboard --logdir training/logs
+
+# 4. 評估
+python training/evaluate.py --checkpoint training/checkpoints/policy_final.pt --games 200 --mode all_rl
+
+# 5. 蒸餾回 JS
+python training/distill.py --checkpoint training/checkpoints/policy_final.pt --samples 10000
+
+# 6. 驗證遊戲沒退步
+node tests/simulate.js 500 GOOD_VS_EVIL hard
+
+# 7. (可選) CMA-ES 進一步優化權重
+python training/cma_optimize.py --generations 100
+
+# 8. 接續訓練更多 steps
+python training/train.py --resume training/checkpoints/policy_final.pt --steps 50000000 --num_envs 256
 ```
 
 ### 架構圖 Architecture
 
 ```
-┌─────────────┐    stdin/stdout    ┌──────────────────┐
-│  Python      │ ◄──── JSON ─────► │  JS Game Engine  │
-│  (train.py)  │                   │  (game_server.js)│
-└──────┬───────┘                   └──────────────────┘
-       │                                    ▲
-       ▼                                    │
-┌──────────────┐                   ┌────────┴─────────┐
-│  NN Policy   │                   │  state_encoder   │
-│  (model.py)  │                   │  1135d obs vector│
-└──────┬───────┘                   └──────────────────┘
-       │
-       ▼
-┌──────────────┐    distill.py     ┌──────────────────┐
-│  Trained     │ ──────────────►   │  learned_weights │
-│  Checkpoint  │                   │  .js (getWeight) │
-└──────────────┘                   └──────────────────┘
-
-┌──────────────┐    eval_weights   ┌──────────────────┐
-│  CMA-ES      │ ──── .js ──────► │  simulate games  │
-│  (cma_opt.py)│                   │  → fitness score │
-└──────┬───────┘                   └──────────────────┘
-       │
-       ▼
-┌──────────────┐
-│  optimized   │
-│  _weights.json│
-└──────────────┘
+         ┌─────────────────────────────────────────────┐
+         │              Training (Python)               │
+         │                                             │
+         │  ┌─────────────┐     ┌──────────────────┐  │
+         │  │ fast_engine  │────►│ fast_encode_jit  │  │
+         │  │  (game sim)  │     │  (Numba JIT obs) │  │
+         │  └──────────────┘     └────────┬─────────┘  │
+         │                                │            │
+         │                    obs [256, 18, 1135]      │
+         │                                │            │
+         │                       ┌────────▼─────────┐  │
+         │                       │   MafiaPolicy    │  │
+         │                       │   (GPU, 678K)    │  │
+         │                       │   4-head output  │  │
+         │                       └────────┬─────────┘  │
+         │                                │            │
+         │                   actions [256, 18, 4]      │
+         │                                │            │
+         │  ┌─────────────────────────────▼──────────┐ │
+         │  │            train.py (MAPPO)             │ │
+         │  │  PPO + GAE + centralized critic         │ │
+         │  └─────────────────────────────┬──────────┘ │
+         └────────────────────────────────┼────────────┘
+                                          │
+                              policy_final.pt
+                                          │
+                    ┌─────────────────────┼──────────────────┐
+                    │                     │                  │
+              ┌─────▼─────┐       ┌──────▼──────┐   ┌──────▼──────┐
+              │ evaluate   │       │  distill    │   │  CMA-ES     │
+              │ (vs heur.) │       │  (NN→JSON)  │   │ (49 params) │
+              └────────────┘       └──────┬──────┘   └──────┬──────┘
+                                          │                  │
+                                 learned_weights.js   optimized_weights
+                                          │                  │
+                                   ┌──────▼──────────────────▼──────┐
+                                   │     src/ai/ (JS heuristic)     │
+                                   │     getWeight() fallback       │
+                                   └────────────────────────────────┘
 ```
