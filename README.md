@@ -604,17 +604,17 @@ python training/train.py --resume training/checkpoints/policy_final.pt --steps 5
                                           │
                               policy_final.pt
                                           │
-                    ┌─────────────────────┼──────────────────┐
-                    │                     │                  │
-              ┌─────▼─────┐       ┌──────▼──────┐   ┌──────▼──────┐
-              │ evaluate   │       │  distill    │   │  CMA-ES     │
-              │ (vs heur.) │       │  (NN→JSON)  │   │ (49 params) │
-              └────────────┘       └──────┬──────┘   └──────┬──────┘
-                                          │                  │
-                                 learned_weights.js   optimized_weights
-                                          │                  │
-                                   ┌──────▼──────────────────▼──────┐
-                                   │     src/ai/ (JS heuristic)     │
+                    ┌──────────────┬──────┼──────────────────┐
+                    │              │      │                  │
+              ┌─────▼─────┐ ┌─────▼────┐ ┌──────▼──────┐   ┌──────▼──────┐
+              │ evaluate   │ │ analyze  │ │  distill    │   │  CMA-ES     │
+              │ (vs heur.) │ │ behavior │ │  (NN→JSON)  │   │ (49 params) │
+              └────────────┘ └──────────┘ └──────┬──────┘   └──────┬──────┘
+                                                 │                  │
+                                        learned_weights.js   optimized_weights
+                                                 │                  │
+                                          ┌──────▼──────────────────▼──────┐
+                                          │     src/ai/ (JS heuristic)     │
                                    │     getWeight() fallback       │
                                    └────────────────────────────────┘
 ```
