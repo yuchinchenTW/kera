@@ -364,7 +364,10 @@ RL trains a neural network through self-play. The agent can learn deception, str
 
 **快速開始 Quick Start：**
 ```bash
-# 從頭訓練 28M steps（RTX 5060 約 5 小時）
+# 從頭訓練 650M steps（RTX 5060 約 5-6 天，~6500 萬場遊戲）
+python training/train.py --num_envs 256 --steps 650000000 --rollout_steps 128 --batch_size 8192 --eval_interval 14
+
+# 較短的訓練（測試用，約 5 小時）
 python training/train.py --num_envs 256 --steps 28000000 --rollout_steps 128 --batch_size 8192
 
 # 即時監控訓練進度
@@ -373,8 +376,8 @@ tensorboard --logdir training/logs
 
 **接續訓練 Resume：**
 ```bash
-# 從 checkpoint 繼續訓練到 50M
-python training/train.py --resume training/checkpoints/policy_final.pt --steps 50000000 --num_envs 256
+# 從 checkpoint 繼續訓練到目標步數
+python training/train.py --resume training/checkpoints/policy_final.pt --steps 650000000 --num_envs 256
 
 # TensorBoard x 軸會正確接續，不會從 0 重跑
 ```
@@ -384,6 +387,9 @@ python training/train.py --resume training/checkpoints/policy_final.pt --steps 5
 # RL 策略 vs 啟發式 AI 各跑 200 場
 python training/evaluate.py --checkpoint training/checkpoints/policy_final.pt --games 200 --mode all_rl
 python training/evaluate.py --games 200 --mode all_heuristic
+
+# 分析 RL 聊天/欺騙行為（殺手假冒警察、藍方跟票率等）
+python training/analyze_behavior.py --checkpoint training/checkpoints/policy_final.pt --games 500
 ```
 
 **主要參數 Key Arguments：**
@@ -391,16 +397,28 @@ python training/evaluate.py --games 200 --mode all_heuristic
 | 參數 | 建議值 | 說明 |
 |------|--------|------|
 | `--num_envs` | 256 | 平行遊戲數（越大 GPU 利用率越高，但吃更多 RAM） |
-| `--steps` | 28000000 | 總訓練步數 |
+| `--steps` | 650000000 | 總訓練步數（650M ≈ 6500 萬場，完整訓練約 5-6 天） |
 | `--rollout_steps` | 128 | 每次收集多少步再更新（越大越穩定） |
 | `--batch_size` | 8192 | PPO 小批次大小 |
+| `--eval_interval` | 14 | 每幾次 update 記錄一次 TensorBoard（14 ≈ 每 5 分鐘） |
 | `--lr` | 0.0003 | 學習率 |
 | `--resume` | 路徑 | 從 checkpoint 接續訓練 |
 | `--theme` | GOOD_VS_EVIL | 訓練主題（目前僅支援此主題） |
 | `--save_dir` | training/checkpoints | 模型儲存位置 |
 | `--log_dir` | training/logs | TensorBoard 日誌位置 |
 
-**速度參考 Performance：**
+**訓練時間預估 Training Time：**
+
+| Steps | 遊戲數 | 256 envs 耗時 | 預期效果 |
+|-------|--------|--------------|---------|
+| 28M | 280 萬 | ~5 小時 | 基礎策略，藍方 ~25% |
+| 100M | 810 萬 | ~18 小時 | 殺手學會栽贓，藍方開始跟票 |
+| 300M | 3000 萬 | ~3 天 | 聊天策略成熟，假冒警察浮現 |
+| 650M | 6500 萬 | ~5-6 天 | 策略收斂，欺騙/反欺騙模式穩定 |
+
+注意：實際速度會隨訓練推進從 ~1,550 sps 降至 ~1,100 sps，平均約 1,300 sps。
+
+**速度參考 Performance（各配置峰值）：**
 
 | 配置 | 速度 | 24 小時產量 |
 |------|------|------------|
