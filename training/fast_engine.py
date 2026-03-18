@@ -582,45 +582,42 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
     """
     rewards = np.zeros(NUM_PLAYERS, dtype=np.float32)
 
-    # ── Per-step shaping rewards (small, every phase) ──
-    # These teach roles to USE their abilities instead of learning to do nothing.
+    # ── Night event rewards ──
     if prev_alive is not None and events:
         for event_type, target_id in events:
             if event_type == "killed":
-                # Killer team gets small reward for successful kills on blue
                 victim = game.players[target_id]
                 if victim.faction == F_BLUE:
                     for p in game.players:
                         if p.role == R_KILLER and p.alive:
-                            rewards[p.id] += 0.03  # good kill
+                            rewards[p.id] += 0.03
                 elif victim.faction == F_RED:
                     for p in game.players:
                         if p.role == R_KILLER and p.alive:
-                            rewards[p.id] -= 0.02  # friendly fire
+                            rewards[p.id] -= 0.02
 
             elif event_type == "sniped":
                 victim = game.players[target_id]
                 sniper = next((p for p in game.players if p.role == R_SNIPER and p.alive), None)
                 if sniper:
                     if victim.faction == F_BLUE:
-                        rewards[sniper.id] += 0.05  # good snipe
+                        rewards[sniper.id] += 0.05
                     else:
-                        rewards[sniper.id] -= 0.05  # friendly fire
+                        rewards[sniper.id] -= 0.05
 
             elif event_type == "saved":
-                # Doctor gets reward for successful save
                 for p in game.players:
                     if p.role == R_DOCTOR and p.alive:
-                        rewards[p.id] += 0.05  # good save
+                        rewards[p.id] += 0.05
 
             elif event_type == "overdose":
                 victim = game.players[target_id]
                 for p in game.players:
                     if p.role == R_DOCTOR and p.alive:
                         if victim.faction == F_RED:
-                            rewards[p.id] += 0.06  # overdosed a red — good
+                            rewards[p.id] += 0.06
                         else:
-                            rewards[p.id] -= 0.08  # overdosed a blue — bad
+                            rewards[p.id] -= 0.08
 
         # Police: reward for finding red
         if game.police_found_red > 0:
@@ -628,12 +625,50 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
             if game.police_found_red > prev_found:
                 for p in game.players:
                     if p.role == R_POLICE and p.alive:
-                        rewards[p.id] += 0.05  # found a red
+                        rewards[p.id] += 0.05
                 game._prev_found_red = game.police_found_red
 
-    # Vote execution shaping — per-voter rewards
+    # ── Chat action rewards ──
+    last_chat = getattr(game, 'current_chat', [])
+    for (speaker_id, ctype, ctarget, crole) in last_chat:
+        speaker = game.players[speaker_id]
+
+        # --- Killer chat rewards ---
+        if speaker.role == R_KILLER:
+            if ctype == CHAT_ACCUSE and 0 <= ctarget < NUM_PLAYERS:
+                if game.players[ctarget].faction == F_BLUE:
+                    rewards[speaker_id] += 0.02  # accuse blue = good deception
+            if ctype == CHAT_DEFEND and 0 <= ctarget < NUM_PLAYERS:
+                if game.players[ctarget].faction == F_RED:
+                    rewards[speaker_id] += 0.02  # defend red ally = teamwork
+            if ctype == CHAT_CLAIM and 0 <= crole < len(ROLE_IDS_FULL):
+                if ROLE_IDS_FULL[crole] == "POLICE":
+                    rewards[speaker_id] += 0.04  # claim police = deception
+
+        # --- Police chat rewards ---
+        if speaker.role == R_POLICE:
+            if ctype == CHAT_CLAIM and 0 <= crole < len(ROLE_IDS_FULL):
+                if ROLE_IDS_FULL[crole] == "POLICE":
+                    rewards[speaker_id] += 0.04  # claim police = reveal identity
+            if ctype == CHAT_ACCUSE and 0 <= ctarget < NUM_PLAYERS:
+                if game.players[ctarget].faction == F_RED:
+                    rewards[speaker_id] += 0.03  # accuse red = share real intel
+
+    # ── Vote execution rewards (per-voter) ──
     vote_record = getattr(game, 'last_vote_record', {})
     executed = getattr(game, 'last_executed', None)
+
+    # Check if reveal is from fake police
+    fake_reveal = False
+    if game.police_public_red is not None:
+        for pid, role in game.role_claims.items():
+            claimed = role if isinstance(role, str) else ""
+            pid_int = int(pid) if isinstance(pid, str) else pid
+            if claimed == "POLICE" or role == R_POLICE:
+                if game.players[pid_int].role == R_KILLER:
+                    fake_reveal = True
+                    break
+
     if executed is not None and vote_record:
         victim_faction = game.players[executed].faction
 
@@ -643,35 +678,39 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
                 continue
 
             if target_id == executed:
-                # This voter voted for the executed player
                 if victim_faction == F_RED:
-                    # Voted out a red — good for any faction voter
-                    rewards[voter_id] += 0.04
+                    rewards[voter_id] += 0.04  # correct vote
 
-                    # Non-police blue: extra reward for following real police reveal
+                    # Non-police blue: big bonus for following real reveal
                     if voter.faction == F_BLUE and voter.role != R_POLICE:
-                        if game.police_public_red == executed:
-                            rewards[voter_id] += 0.02  # followed real intel correctly
+                        if game.police_public_red == executed and not fake_reveal:
+                            rewards[voter_id] += 0.08  # followed real intel
                 else:
-                    # Voted out a blue — bad
-                    rewards[voter_id] -= 0.03
+                    rewards[voter_id] -= 0.03  # wrong vote
 
-                    # Non-police blue: extra penalty for being tricked by fake police
+                    # Non-police blue: penalty for being tricked
                     if voter.faction == F_BLUE and voter.role != R_POLICE:
-                        if game.police_public_red == executed:
-                            # Check if the reveal was from a fake police (killer)
-                            fake_reveal = False
-                            for pid, role in game.role_claims.items():
-                                claimed = role if isinstance(role, str) else ""
-                                pid_int = int(pid) if isinstance(pid, str) else pid
-                                if (claimed == "POLICE" or role == R_POLICE):
-                                    if game.players[pid_int].role == R_KILLER:
-                                        fake_reveal = True
-                                        break
-                            if fake_reveal:
-                                rewards[voter_id] -= 0.02  # got tricked by fake police
+                        if game.police_public_red == executed and fake_reveal:
+                            rewards[voter_id] -= 0.02  # tricked by fake police
 
-    # ── Terminal rewards (large, game end only) ──
+            # Non-police blue: penalty for IGNORING real reveal
+            if voter.faction == F_BLUE and voter.role != R_POLICE:
+                if game.police_public_red is not None and not fake_reveal:
+                    revealed_alive = game.players[game.police_public_red].alive if game.police_public_red < NUM_PLAYERS else False
+                    if revealed_alive and target_id != game.police_public_red:
+                        rewards[voter_id] -= 0.04  # ignored real police intel
+
+    # ── Accusation outcome rewards ──
+    # If someone accused a player who got voted out, reward/punish based on faction
+    if executed is not None and last_chat:
+        for (speaker_id, ctype, ctarget, _) in last_chat:
+            if ctype == CHAT_ACCUSE and ctarget == executed:
+                if game.players[executed].faction == F_RED:
+                    rewards[speaker_id] += 0.03  # accused someone who was red — good call
+                elif game.players[executed].faction == F_BLUE:
+                    rewards[speaker_id] -= 0.02  # accused someone who was blue — bad call
+
+    # ── Terminal rewards ──
     if game.victory is not None:
         for i in range(NUM_PLAYERS):
             p = game.players[i]
