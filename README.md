@@ -344,7 +344,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu128
 |------|-------------|
 | `training/fast_engine.py` | 純 Python 精簡遊戲引擎（GOOD_VS_EVIL，無 IPC，搭配 Numba JIT） |
 | `training/fast_encode_jit.py` | Numba JIT 觀測編碼器（比 Python 快 292 倍） |
-| `training/model.py` | MAPPO 策略網路（678K 參數，4 頭行動空間） |
+| `training/model.py` | MAPPO 策略網路（3.95M 參數, hidden=336，4 頭行動空間） |
 | `training/train.py` | 訓練迴圈（PPO + GAE + 集中式 critic） |
 | `training/evaluate.py` | RL vs 啟發式對戰評估 |
 | `training/distill.py` | 策略蒸餾（NN → JS 線性權重） |
@@ -364,11 +364,11 @@ RL trains a neural network through self-play. The agent can learn deception, str
 
 **快速開始 Quick Start：**
 ```bash
-# 從頭訓練 650M steps（RTX 5060 約 5-6 天，~5200 萬場遊戲）
-python training/train.py --num_envs 256 --steps 650000000 --rollout_steps 128 --batch_size 8192 --eval_interval 14
+# 從頭訓練 350M steps（RTX 5060 約 5 天，3.95M 模型）
+python training/train.py --hidden 336 --num_envs 256 --steps 350000000 --rollout_steps 128 --batch_size 8192 --eval_interval 5
 
-# 較短的訓練（測試用，約 5 小時）
-python training/train.py --num_envs 256 --steps 28000000 --rollout_steps 128 --batch_size 8192
+# 較短的訓練（測試用，約 7 小時）
+python training/train.py --hidden 336 --num_envs 256 --steps 28000000 --rollout_steps 128 --batch_size 8192
 
 # 即時監控訓練進度
 tensorboard --logdir training/logs
@@ -377,7 +377,7 @@ tensorboard --logdir training/logs
 **接續訓練 Resume：**
 ```bash
 # 從 checkpoint 繼續訓練到目標步數
-python training/train.py --resume training/checkpoints/policy_final.pt --steps 650000000 --num_envs 256
+python training/train.py --resume training/checkpoints/policy_final.pt --steps 350000000 --hidden 336 --num_envs 256
 
 # TensorBoard x 軸會正確接續，不會從 0 重跑
 ```
@@ -397,10 +397,11 @@ python training/analyze_behavior.py --checkpoint training/checkpoints/policy_fin
 | 參數 | 建議值 | 說明 |
 |------|--------|------|
 | `--num_envs` | 256 | 平行遊戲數（越大 GPU 利用率越高，但吃更多 RAM） |
-| `--steps` | 650000000 | 總訓練步數（650M ≈ 6500 萬場，完整訓練約 5-6 天） |
+| `--steps` | 350000000 | 總訓練步數（350M，完整訓練約 5 天） |
+| `--hidden` | 336 | 模型隱藏層大小（336=3.95M 參數，128=678K，256=2.2M） |
 | `--rollout_steps` | 128 | 每次收集多少步再更新（越大越穩定） |
 | `--batch_size` | 8192 | PPO 小批次大小 |
-| `--eval_interval` | 14 | 每幾次 update 記錄一次 TensorBoard（14 ≈ 每 5 分鐘） |
+| `--eval_interval` | 5 | 每幾次 update 記錄一次 TensorBoard（5 ≈ 每 3 分鐘） |
 | `--lr` | 0.0003 | 學習率 |
 | `--resume` | 路徑 | 從 checkpoint 接續訓練 |
 | `--theme` | GOOD_VS_EVIL | 訓練主題（目前僅支援此主題） |
@@ -409,14 +410,14 @@ python training/analyze_behavior.py --checkpoint training/checkpoints/policy_fin
 
 **訓練時間預估 Training Time：**
 
-| Steps | 遊戲數 | 256 envs 耗時 | 預期效果 |
-|-------|--------|--------------|---------|
-| 28M | 280 萬 | ~5 小時 | 基礎策略，藍方 ~25% |
-| 100M | 810 萬 | ~18 小時 | 殺手學會栽贓，藍方開始跟票 |
-| 300M | 3000 萬 | ~3 天 | 聊天策略成熟，假冒警察浮現 |
-| 650M | ~5200 萬 | ~5-6 天 | 策略收斂，欺騙/反欺騙模式穩定 |
+| Steps | hidden | 參數量 | 耗時 (RTX 5060) | 預期效果 |
+|-------|--------|--------|----------------|---------|
+| 28M | 128 | 678K | ~5 小時 | 基礎策略測試 |
+| 100M | 128 | 678K | ~18 小時 | 殺手學會栽贓 |
+| 200M | 336 | 3.95M | ~2.8 天 | 更深策略 |
+| 350M | 336 | 3.95M | ~5 天 | 策略收斂 |
 
-注意：實際速度會隨訓練推進從 ~1,550 sps 降至 ~1,100 sps，平均約 1,300 sps。
+注意：hidden=336 (3.95M) 約 829 sps，hidden=128 (678K) 約 1,500 sps。速度會隨訓練推進下降 10-20%。
 
 **速度參考 Performance（各配置峰值）：**
 
@@ -431,7 +432,7 @@ python training/analyze_behavior.py --checkpoint training/checkpoints/policy_fin
 **技術細節 Technical Details：**
 - **多頭行動空間 (63 維)**：目標 (19) + 聊天類型 (5: 沉默/指控/辯護/宣稱角色/轉移) + 聊天對象 (19) + 角色宣稱 (20)
 - **觀測向量 (1135 維)**：投票圖譜 (18x18)、聊天指控/辯護矩陣、遺言信號、信念分佈、角色資源
-- **模型**：共享策略網路 + Multi-head Attention + 集中式 critic (CTDE)，678K 參數
+- **模型**：共享策略網路 + Multi-head Attention + 集中式 critic (CTDE)，3.95M 參數, hidden=336
 - **加速**：純 Python 引擎 + Numba JIT 觀測編碼（292x），無 Node.js subprocess 開銷
 **TensorBoard 指標說明 Metrics Guide：**
 
@@ -590,7 +591,7 @@ python training/train.py --resume training/checkpoints/policy_final.pt --steps 5
          │                                │            │
          │                       ┌────────▼─────────┐  │
          │                       │   MafiaPolicy    │  │
-         │                       │   (GPU, 678K)    │  │
+         │                       │   (GPU, 3.95M)    │  │
          │                       │   4-head output  │  │
          │                       └────────┬─────────┘  │
          │                                │            │
