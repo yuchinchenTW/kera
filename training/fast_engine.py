@@ -588,9 +588,11 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
             if event_type == "killed":
                 victim = game.players[target_id]
                 if victim.faction == F_BLUE:
+                    # Killing police is highest value
+                    kill_reward = 0.06 if victim.role == R_POLICE else 0.03
                     for p in game.players:
                         if p.role == R_KILLER and p.alive:
-                            rewards[p.id] += 0.03
+                            rewards[p.id] += kill_reward
                 elif victim.faction == F_RED:
                     for p in game.players:
                         if p.role == R_KILLER and p.alive:
@@ -652,7 +654,10 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
                     rewards[speaker_id] += 0.04  # claim police = reveal identity
             if ctype == CHAT_ACCUSE and 0 <= ctarget < NUM_PLAYERS:
                 if game.players[ctarget].faction == F_RED:
-                    rewards[speaker_id] += 0.03  # accuse red = share real intel
+                    rewards[speaker_id] += 0.05  # accuse red = share real intel
+            if ctype == CHAT_DEFEND and 0 <= ctarget < NUM_PLAYERS:
+                if game.players[ctarget].faction == F_BLUE:
+                    rewards[speaker_id] += 0.02  # tell others who is blue = share info
 
     # ── Vote execution rewards (per-voter) ──
     vote_record = getattr(game, 'last_vote_record', {})
@@ -686,7 +691,14 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
                         if game.police_public_red == executed and not fake_reveal:
                             rewards[voter_id] += 0.08  # followed real intel
                 else:
-                    rewards[voter_id] -= 0.03  # wrong vote
+                    # Voted out a blue — penalty depends on victim's role
+                    victim = game.players[executed]
+                    if victim.role == R_POLICE or victim.role == R_DOCTOR:
+                        rewards[voter_id] -= 0.05  # killed key role = big mistake
+                    elif victim.role == R_CIVILIAN:
+                        pass  # civilian death = acceptable loss, no penalty
+                    else:
+                        rewards[voter_id] -= 0.02  # other blue roles = small penalty
 
                     # Non-police blue: penalty for being tricked
                     if voter.faction == F_BLUE and voter.role != R_POLICE:
