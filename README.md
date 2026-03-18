@@ -364,7 +364,7 @@ RL trains a neural network through self-play. The agent can learn deception, str
 
 **快速開始 Quick Start：**
 ```bash
-# 從頭訓練 650M steps（RTX 5060 約 5-6 天，~6500 萬場遊戲）
+# 從頭訓練 650M steps（RTX 5060 約 5-6 天，~5200 萬場遊戲）
 python training/train.py --num_envs 256 --steps 650000000 --rollout_steps 128 --batch_size 8192 --eval_interval 14
 
 # 較短的訓練（測試用，約 5 小時）
@@ -414,7 +414,7 @@ python training/analyze_behavior.py --checkpoint training/checkpoints/policy_fin
 | 28M | 280 萬 | ~5 小時 | 基礎策略，藍方 ~25% |
 | 100M | 810 萬 | ~18 小時 | 殺手學會栽贓，藍方開始跟票 |
 | 300M | 3000 萬 | ~3 天 | 聊天策略成熟，假冒警察浮現 |
-| 650M | 6500 萬 | ~5-6 天 | 策略收斂，欺騙/反欺騙模式穩定 |
+| 650M | ~5200 萬 | ~5-6 天 | 策略收斂，欺騙/反欺騙模式穩定 |
 
 注意：實際速度會隨訓練推進從 ~1,550 sps 降至 ~1,100 sps，平均約 1,300 sps。
 
