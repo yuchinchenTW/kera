@@ -35,6 +35,7 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=4, help="PPO epochs per update")
     p.add_argument("--batch_size", type=int, default=512, help="Minibatch size")
     p.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    p.add_argument("--lr_min", type=float, default=1e-5, help="Minimum learning rate for cosine decay")
     p.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     p.add_argument("--gae_lambda", type=float, default=0.95, help="GAE lambda")
     p.add_argument("--clip_eps", type=float, default=0.2, help="PPO clip epsilon")
@@ -68,6 +69,12 @@ class MAPPOTrainer:
         # Policy
         self.policy = MafiaPolicy(hidden=args.hidden).to(self.device)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=args.lr, eps=1e-5)
+
+        # LR cosine decay scheduler
+        total_updates_est = args.steps // (args.rollout_steps * args.num_envs)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=total_updates_est, eta_min=args.lr_min
+        )
 
         param_count = sum(p.numel() for p in self.policy.parameters())
         print(f"Policy parameters: {param_count:,}")
@@ -264,6 +271,7 @@ class MAPPOTrainer:
                 num_updates += 1
 
         self.total_updates += 1
+        self.scheduler.step()
 
         # Log
         if num_updates > 0:
@@ -274,6 +282,7 @@ class MAPPOTrainer:
             self.writer.add_scalar("loss/policy", avg_pl, self.total_steps)
             self.writer.add_scalar("loss/value", avg_vl, self.total_steps)
             self.writer.add_scalar("loss/entropy", avg_ent, self.total_steps)
+            self.writer.add_scalar("lr", self.optimizer.param_groups[0]["lr"], self.total_steps)
 
         return {
             "policy_loss": total_policy_loss / max(num_updates, 1),
@@ -327,8 +336,11 @@ class MAPPOTrainer:
         self.total_steps = ckpt.get("total_steps", 0)
         self.total_updates = ckpt.get("total_updates", 0)
         self.total_games = ckpt.get("total_games", 0)
+        # Fast-forward LR scheduler to match resumed update count
+        self.scheduler.last_epoch = self.total_updates
         print(f"Resumed from: {path}")
         print(f"  Steps: {self.total_steps:,} | Updates: {self.total_updates} | Games: {self.total_games:,}")
+        print(f"  LR: {self.optimizer.param_groups[0]['lr']:.6f}")
 
     def save(self, path=None):
         """Save model checkpoint."""
@@ -379,7 +391,7 @@ class MAPPOTrainer:
             print(
                 f"[{pct:5.1f}%] Step {self.total_steps:>8,} | "
                 f"PL: {stats['policy_loss']:.4f} | VL: {stats['value_loss']:.4f} | "
-                f"Ent: {stats['entropy']:.3f} | {sps:.0f} sps | {elapsed:.1f}s"
+                f"Ent: {stats['entropy']:.3f} | LR: {self.optimizer.param_groups[0]['lr']:.2e} | {sps:.0f} sps | {elapsed:.1f}s"
             )
 
             # Log game stats
