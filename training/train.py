@@ -333,6 +333,9 @@ class MAPPOTrainer:
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.policy.load_state_dict(ckpt["policy_state_dict"])
         self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        # Override LR with command-line value (optimizer state restores old LR)
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = self.args.lr
         self.total_steps = ckpt.get("total_steps", 0)
         self.total_updates = ckpt.get("total_updates", 0)
         self.total_games = ckpt.get("total_games", 0)
