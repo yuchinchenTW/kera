@@ -70,11 +70,8 @@ class MAPPOTrainer:
         self.policy = MafiaPolicy(hidden=args.hidden).to(self.device)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=args.lr, eps=1e-5)
 
-        # LR cosine decay scheduler
-        total_updates_est = args.steps // (args.rollout_steps * args.num_envs)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=total_updates_est, eta_min=args.lr_min
-        )
+        # LR cosine decay scheduler (T_max set after possible resume)
+        self._lr_scheduler_initialized = False
 
         param_count = sum(p.numel() for p in self.policy.parameters())
         print(f"Policy parameters: {param_count:,}")
@@ -113,6 +110,21 @@ class MAPPOTrainer:
         # Resume from checkpoint if specified (AFTER stats init so it overrides)
         if args.resume:
             self._load_checkpoint(args.resume)
+
+        # Init scheduler based on remaining updates (after possible resume)
+        if not self._lr_scheduler_initialized:
+            self._init_scheduler()
+
+    def _init_scheduler(self):
+        """Create LR scheduler for remaining updates from current position."""
+        args = self.args
+        remaining_steps = args.steps - self.total_steps
+        remaining_updates = max(remaining_steps // (args.rollout_steps * args.num_envs), 1)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=remaining_updates, eta_min=args.lr_min
+        )
+        self._lr_scheduler_initialized = True
+        print(f"  LR scheduler: {args.lr:.2e} -> {args.lr_min:.2e} over {remaining_updates} updates")
 
     @torch.no_grad()
     def collect_rollout(self):
@@ -339,8 +351,8 @@ class MAPPOTrainer:
         self.total_steps = ckpt.get("total_steps", 0)
         self.total_updates = ckpt.get("total_updates", 0)
         self.total_games = ckpt.get("total_games", 0)
-        # Fast-forward LR scheduler to match resumed update count
-        self.scheduler.last_epoch = self.total_updates
+        # Rebuild scheduler for remaining updates (no fast-forward needed)
+        self._init_scheduler()
         print(f"Resumed from: {path}")
         print(f"  Steps: {self.total_steps:,} | Updates: {self.total_updates} | Games: {self.total_games:,}")
         print(f"  LR: {self.optimizer.param_groups[0]['lr']:.6f}")
