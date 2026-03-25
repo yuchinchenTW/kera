@@ -102,10 +102,10 @@ def run_analysis(policy, device, num_games=500):
         game = env.games[0]
         done = False
 
-        # Track killer current role claim (can change each round, mirrors engine's role_claims)
+        # Track killer current role claim (mirrors engine's role_claims overwrite)
         killer_current_claim = {}  # pid -> latest claimed role string
-        # Fake reveal targets this round (reset each round)
-        round_fake_reveal_targets = set()
+        # Fake reveal targets persisted from NIGHT chat to VOTE analysis
+        pending_fake_reveal_targets = set()
 
         while not done:
             obs_t = torch.tensor(obs_np.reshape(-1, OBS_DIM), device=device)
@@ -117,30 +117,29 @@ def run_analysis(policy, device, num_games=500):
             actions_np = actions_t.cpu().numpy().reshape(1, NUM_PLAYERS, 4)
             act = actions_np[0]  # [18, 4]
 
-            # ── Chat analysis: during NIGHT phase ──
-            # Must analyze AFTER stepping (not before), because engine does:
-            #   resolve_night() -> kills happen -> process_chat() -> skip dead players
-            # So we save the action, step, then analyze using post-step alive state.
-            pending_chat_act = None
-            if game.phase == "NIGHT":
-                pending_chat_act = act.copy()
+            # Save pre-step state for correct analysis timing
+            pre_step_phase = game.phase
+            pre_step_alive = [p.alive for p in game.players]
+            pre_step_reveal = game.police_public_red
 
-            # Step first
+            # Step
             obs_np, masks_np, rewards, dones, infos = env.step(actions_np)
 
-            # Now analyze chat using the NIGHT action that was just executed
-            # After step, dead players from resolve_night are already marked dead
-            round_fake_reveal_targets = set()  # reset each round
-            if pending_chat_act is not None:
+            # ── NIGHT step analysis ──
+            # Engine order: resolve_night() -> process_chat() -> phase=VOTE
+            # Chat heads from this action were used. Analyze using post-night alive state.
+            if pre_step_phase == "NIGHT":
+                pending_fake_reveal_targets = set()  # reset for new round
+
                 for pid in range(NUM_PLAYERS):
                     p = game.players[pid]
-                    # Only count players who were alive AFTER resolve_night (same as process_chat)
+                    # process_chat skips dead players — use current alive (post-night)
                     if not p.alive:
                         continue
 
-                    chat_type = int(pending_chat_act[pid, 1])
-                    chat_target = int(pending_chat_act[pid, 2])
-                    claim_role = int(pending_chat_act[pid, 3])
+                    chat_type = int(act[pid, 1])
+                    chat_target = int(act[pid, 2])
+                    claim_role = int(act[pid, 3])
 
                     target_faction = None
                     if 0 <= chat_target < NUM_PLAYERS:
@@ -158,9 +157,8 @@ def run_analysis(policy, device, num_games=500):
                                 stats["killer_accuse_blue"] += 1
                             elif target_faction == F_RED:
                                 stats["killer_accuse_red"] += 1
-                            # Track fake reveal: killer currently claims police AND accusing someone
                             if killer_current_claim.get(pid) == "POLICE" and 0 <= chat_target < NUM_PLAYERS:
-                                round_fake_reveal_targets.add(chat_target)
+                                pending_fake_reveal_targets.add(chat_target)
                         elif chat_type == CHAT_DEFEND:
                             stats["killer_defend"] += 1
                             if target_faction == F_BLUE:
@@ -171,7 +169,6 @@ def run_analysis(policy, device, num_games=500):
                             stats["killer_claim_role"] += 1
                             if 0 <= claim_role < len(FULL_ROLE_IDS):
                                 claimed = FULL_ROLE_IDS[claim_role]
-                                # Update current claim (overwrites previous, mirrors engine)
                                 killer_current_claim[pid] = claimed
                                 if claimed == "POLICE":
                                     stats["killer_claim_police"] += 1
@@ -195,34 +192,28 @@ def run_analysis(policy, device, num_games=500):
                             if 0 <= claim_role < len(FULL_ROLE_IDS) and FULL_ROLE_IDS[claim_role] == "POLICE":
                                 stats["police_claim_police"] += 1
 
-            # ── Blue voting analysis: during VOTE phase (when votes are executed) ──
-            # Note: after NIGHT step, game.phase is now VOTE. The vote action is the NEXT step.
-            # But we already stepped above. We need to analyze vote on the VOTE step.
-            # The current game.phase after step tells us what phase we just completed.
-            # If we just completed a VOTE step (game.phase is now NIGHT for next round),
-            # we should have analyzed. But the flow is tricky.
-            #
-            # Actually: after NIGHT step -> phase becomes VOTE.
-            # After VOTE step -> phase becomes NIGHT (or END).
-            # So vote analysis should happen when pending_chat_act is None (we were in VOTE phase).
-            if pending_chat_act is None:
-                # We just executed a VOTE step
+            # ── VOTE step analysis ──
+            # Use PRE-STEP alive state (before vote execution kills someone)
+            # This way we count all voters including the one who gets executed
+            if pre_step_phase == "VOTE":
+                # Real reveal: use pre-step reveal target
+                # Follow = voted for reveal target (even if that vote killed them)
+                # Ignore = reveal target was alive pre-vote but voter didn't vote for them
+                real_reveal = pre_step_reveal
+                real_reveal_valid = (real_reveal is not None and pre_step_alive[real_reveal])
 
-                # Real police reveal: only counts if target is still alive
-                real_reveal_target = game.police_public_red
-                if real_reveal_target is not None:
-                    if not game.players[real_reveal_target].alive:
-                        real_reveal_target = None
-
-                # Fake reveal targets from this round (set during chat analysis)
-                alive_fake_targets = set()
-                for ft in round_fake_reveal_targets:
-                    if game.players[ft].alive:
-                        alive_fake_targets.add(ft)
+                # Fake reveal targets from previous NIGHT chat (persisted in pending_fake_reveal_targets)
+                fake_targets_valid = set()
+                for ft in pending_fake_reveal_targets:
+                    if pre_step_alive[ft]:
+                        fake_targets_valid.add(ft)
 
                 for pid in range(NUM_PLAYERS):
                     p = game.players[pid]
-                    if not p.alive or p.faction != F_BLUE or p.role == R_POLICE:
+                    # Use PRE-STEP alive: voter was alive when voting
+                    if not pre_step_alive[pid]:
+                        continue
+                    if p.faction != F_BLUE or p.role == R_POLICE:
                         continue
 
                     vote_target = int(act[pid, 0])
@@ -237,15 +228,15 @@ def run_analysis(policy, device, num_games=500):
                     elif target_p.faction == F_BLUE:
                         stats["blue_vote_wrong_blue"] += 1
 
-                    # Check follow/ignore REAL police reveal
-                    if real_reveal_target is not None:
-                        if vote_target == real_reveal_target:
+                    # Follow/ignore REAL police reveal
+                    if real_reveal_valid:
+                        if vote_target == real_reveal:
                             stats["blue_follow_reveal"] += 1
                         else:
                             stats["blue_ignore_reveal"] += 1
 
-                    # Check follow/ignore FAKE reveals (can be multiple targets)
-                    for ft in alive_fake_targets:
+                    # Follow/ignore FAKE reveals
+                    for ft in fake_targets_valid:
                         if vote_target == ft:
                             stats["blue_follow_fake_reveal"] += 1
                         else:
