@@ -505,11 +505,9 @@ export function buildActionMask(state, playerId, phase) {
 
   // ── Chat type mask [19:24] ──
   // 0=silence, 1=accuse, 2=defend, 3=claim_role, 4=deflect
-  if (phase === "NIGHT") {
-    // Night: silence only (no public chat during night)
-    mask[19 + 0] = 1; // silence
-  } else {
-    // Day/Vote: all chat types available
+  // Chat is processed during NIGHT step (after resolve_night, before vote).
+  // All phases allow chat so the RL agent can provide chat actions with the night action.
+  {
     mask[19 + 0] = 1; // silence
     if (aliveOthers.length > 0) {
       mask[19 + 1] = 1; // accuse
@@ -520,15 +518,13 @@ export function buildActionMask(state, playerId, phase) {
   }
 
   // ── Chat target mask [24:43] ──
-  if (phase !== "NIGHT") {
-    for (const p of aliveOthers) {
-      mask[24 + p.id] = 1;
-    }
+  for (const p of aliveOthers) {
+    mask[24 + p.id] = 1;
   }
   mask[24 + 18] = 1; // nobody (for silence/deflect/claim)
 
   // ── Claim role mask [43:63] ──
-  if (phase !== "NIGHT") {
+  {
     // Can claim any role (including lying)
     for (let r = 0; r < ROLE_IDS.length; r++) {
       mask[43 + r] = 1;

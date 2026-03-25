@@ -193,11 +193,15 @@ class MafiaPolicy(nn.Module):
         return global_feat, attended, role_feat, social_feat
 
     def _masked_probs(self, logits, mask):
-        """Apply mask, clamp, softmax, clamp — safe categorical probs."""
+        """Apply mask, softmax, then zero out masked entries."""
         logits = logits.masked_fill(mask == 0, -1e8)
-        logits = torch.clamp(logits, -50, 50)
         probs = F.softmax(logits, dim=-1)
-        return probs.clamp(min=1e-8)
+        # Hard-zero masked actions (softmax residual is ~1e-22 but clamp made it 1e-8)
+        probs = probs * mask
+        # Re-normalize to sum to 1, add tiny eps to avoid all-zero
+        probs = probs + 1e-10
+        probs = probs / probs.sum(dim=-1, keepdim=True)
+        return probs
 
     def forward(self, obs, action_mask, ground_truth=None):
         """

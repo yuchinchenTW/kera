@@ -29,28 +29,5 @@
   "POLICE.night.votePressure":     [0.2,  0.0, 0.5],
   "POLICE.night.savedAvoid":       [-0.3, -1.0, 0.0],
   "POLICE.night.arsonAvoid":       [-0.25,-1.0, 0.0],
-  "POLICE.night.accusedByRedAvoid":[-0.15,-0.5, 0.0],
-
-  "VOTE.chaosChanceHard":         [0.2,  0.05, 0.5],
-  "VOTE.savedPenalty":            [0.25, 0.05, 0.6],
-  "VOTE.correctVoterReward":     [0.12, 0.0, 0.4],
-  "VOTE.wrongVoterPenalty":      [0.08, 0.0, 0.3],
-  "VOTE.arsonMarkedPenalty":     [0.15, 0.0, 0.4],
-  "VOTE.accusedByRedPenalty":    [0.1,  0.0, 0.3],
-  "VOTE.redExecOpposerBonus":   [0.1,  0.0, 0.4],
-  "VOTE.redDefenderBonus":      [0.1,  0.0, 0.3],
-  "VOTE.blueDefendedPenalty":   [0.3,  0.05, 0.6],
-  "VOTE.grudgeBoostHigh":       [0.35, 0.1, 0.8],
-  "VOTE.grudgeBoostLow":        [0.15, 0.0, 0.4],
-  "VOTE.bandwagonRate":         [0.4,  0.1, 0.8],
-  "VOTE.sellOutRateEarly":      [0.6,  0.2, 0.9],
-  "VOTE.sellOutRateLate":       [0.85, 0.5, 1.0],
-
-  "BELIEF.mentionRedBoost":      [0.05, 0.0, 0.2],
-  "BELIEF.flipRedBoost":         [0.15, 0.0, 0.4],
-  "BELIEF.lastVoterRedBoost":    [0.15, 0.0, 0.4],
-  "BELIEF.bandwagonRedBoost":    [0.08, 0.0, 0.3],
-  "BELIEF.policeRevealRedBoost": [0.6,  0.2, 1.0],
-  "BELIEF.silenceRedBoost":      [0.04, 0.0, 0.15],
-  "BELIEF.contradictionRedBoost":[0.08, 0.0, 0.3]
+  "POLICE.night.accusedByRedAvoid":[-0.15,-0.5, 0.0]
 }

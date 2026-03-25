@@ -89,6 +89,9 @@ def _encode_all(
     def_col = np.zeros(N, dtype=np.float32)
     speak_t = np.zeros(N, dtype=np.float32)
     mention_t = np.zeros(N, dtype=np.float32)
+    # Raw row sums for chat matrix output (before normalization)
+    acc_row_raw = np.zeros(N, dtype=np.float32)
+    def_row_raw = np.zeros(N, dtype=np.float32)
 
     for i in range(N):
         for j in range(N):
@@ -96,9 +99,12 @@ def _encode_all(
             def_row[i] += defend_count[i, j]
             acc_col[j] += accuse_count[i, j]
             def_col[j] += defend_count[i, j]
+        acc_row_raw[i] = acc_row[i]
+        def_row_raw[i] = def_row[i]
         speak_t[i] = acc_row[i] + def_row[i]
     for i in range(N):
         mention_t[i] = acc_col[i] + def_col[i]
+        # Normalize for per-player division (avoid div-by-zero)
         if acc_row[i] == 0: acc_row[i] = 1
         if def_row[i] == 0: def_row[i] = 1
 
@@ -172,10 +178,10 @@ def _encode_all(
             for qid in range(N):
                 obs[pid, o] = vote_graph[r, qid]; o += 1
 
-        # Chat matrix (72)
+        # Chat matrix (72) — use raw counts, not normalized
         for qid in range(N):
-            obs[pid, o] = acc_row[qid]; o += 1
-            obs[pid, o] = def_row[qid]; o += 1
+            obs[pid, o] = acc_row_raw[qid]; o += 1
+            obs[pid, o] = def_row_raw[qid]; o += 1
             obs[pid, o] = acc_col[qid]; o += 1
             obs[pid, o] = def_col[qid]; o += 1
 

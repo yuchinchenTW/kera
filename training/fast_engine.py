@@ -242,7 +242,11 @@ class FastGame:
         # Update beliefs based on night results
         self._update_beliefs_night(events)
 
-        self.phase = "DAY"
+        # Check victory after night kills
+        if self.check_victory():
+            self.phase = "END"
+        else:
+            self.phase = "DAY"
         return events
 
     def resolve_vote(self, votes):
@@ -663,24 +667,38 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
     vote_record = getattr(game, 'last_vote_record', {})
     executed = getattr(game, 'last_executed', None)
 
-    # Check if reveal is from fake police
+    # Check if the public reveal was caused by a fake police.
+    # police_public_red is only set by real police investigation (line 192),
+    # so it's ALWAYS a real reveal. A "fake reveal" is when a killer claims
+    # police AND accuses someone — but that doesn't set police_public_red.
+    # So we never mark police_public_red as fake.
+    # Instead, fake reveal penalties only apply when a killer's accusation
+    # (via chat) matches the executed target AND no real reveal exists.
     fake_reveal = False
-    if game.police_public_red is not None:
-        for pid, role in game.role_claims.items():
-            claimed = role if isinstance(role, str) else ""
-            pid_int = int(pid) if isinstance(pid, str) else pid
-            if claimed == "POLICE" or role == R_POLICE:
-                if game.players[pid_int].role == R_KILLER:
-                    fake_reveal = True
-                    break
+    if game.police_public_red is None:
+        # No real reveal — check if a killer who claimed police accused the executed target
+        if executed is not None:
+            for pid, role in game.role_claims.items():
+                claimed = role if isinstance(role, str) else ""
+                pid_int = int(pid) if isinstance(pid, str) else pid
+                if (claimed == "POLICE" or role == R_POLICE):
+                    if game.players[pid_int].role == R_KILLER:
+                        # Check if this killer accused the executed target in chat
+                        for (speaker, ctype, ctarget, _) in getattr(game, 'current_chat', []):
+                            if speaker == pid_int and ctype == 1 and ctarget == executed:
+                                fake_reveal = True
+                                break
+                    if fake_reveal:
+                        break
 
     if executed is not None and vote_record:
         victim_faction = game.players[executed].faction
 
+        # Track who was alive when voting (before execution)
+        pre_vote_alive = {vid for vid in vote_record.keys()}
         for voter_id, target_id in vote_record.items():
             voter = game.players[voter_id]
-            if not voter.alive:
-                continue
+            # Don't skip executed voters — they cast a valid vote
 
             if target_id == executed:
                 if victim_faction == F_RED:
@@ -762,8 +780,10 @@ class FastBatchEnv:
     Compatible interface with VecMafiaEnv.
     """
 
-    def __init__(self, num_envs=16, **kwargs):
+    def __init__(self, num_envs=16, theme=None, difficulty=None, **kwargs):
         self.num_envs = num_envs
+        # Note: fast_engine only implements GOOD_VS_EVIL. theme/difficulty
+        # are accepted for API compatibility but not used.
         self.games = [None] * num_envs
         self._seed = 0
         self._use_jit = _USE_JIT
