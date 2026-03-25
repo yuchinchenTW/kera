@@ -113,7 +113,7 @@ def run_analysis(policy, device, num_games=500):
             masks_t = torch.tensor(masks_np.reshape(-1, TOTAL_MASK_DIM), device=device)
 
             with torch.no_grad():
-                actions_t, _, _, _ = policy.get_action(obs_t, masks_t, deterministic=True)
+                actions_t, _, _, _ = policy.get_action(obs_t, masks_t, deterministic=False)
 
             actions_np = actions_t.cpu().numpy().reshape(1, NUM_PLAYERS, 4)
             act = actions_np[0]  # [18, 4]
@@ -126,16 +126,16 @@ def run_analysis(policy, device, num_games=500):
             # Step
             obs_np, masks_np, rewards, dones, infos = env.step(actions_np)
 
-            # ── NIGHT step analysis ──
-            # Engine order: resolve_night() -> process_chat() -> phase=VOTE
-            # Chat heads from this action were used. Analyze using post-night alive state.
-            if pre_step_phase == "NIGHT":
+            # ── VOTE step analysis: chat + vote ──
+            # Engine order at VOTE step: process_chat() -> resolve_vote()
+            # Chat heads from this VOTE action were used. Analyze using pre-step alive state.
+            if pre_step_phase == "VOTE":
                 pending_fake_reveal_targets = set()  # reset for new round
 
                 for pid in range(NUM_PLAYERS):
                     p = game.players[pid]
-                    # process_chat skips dead players — use current alive (post-night)
-                    if not p.alive:
+                    # process_chat skips dead players — use pre-step alive
+                    if not pre_step_alive[pid]:
                         continue
 
                     chat_type = int(act[pid, 1])
