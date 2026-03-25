@@ -400,39 +400,36 @@ class RolloutBuffer:
     def flatten(self):
         """
         Flatten [steps, envs, agents, ...] into [total, ...] for minibatch sampling.
-        Filters out dead/forced agents (target mask has <=1 valid action).
 
-        Returns dict of flattened tensors.
+        Returns dict with:
+        - All data (for critic/value loss — all samples including dead agents)
+        - actor_mask: boolean tensor marking samples with meaningful decisions
+          (for actor loss — only samples where agent has a real choice)
         """
         total = self.num_steps * self.num_envs * self.num_agents
 
-        # Compute validity: keep sample if ANY head has >1 valid action
+        # Actor validity: keep sample if ANY head has >1 valid action
         flat_masks = self.masks.reshape(total, TOTAL_MASK_DIM)
         target_valid = flat_masks[:, :19].sum(axis=1) > 1
         chat_valid = flat_masks[:, 19:24].sum(axis=1) > 1
-        claim_valid = flat_masks[:, 43:63].sum(axis=1) > 0  # any claim option
-        any_valid = target_valid | chat_valid | claim_valid
-        valid_idx = np.where(any_valid)[0]
+        claim_valid = flat_masks[:, 43:63].sum(axis=1) > 0
+        actor_valid = target_valid | chat_valid | claim_valid
 
-        all_data = {
+        gt_broadcast = np.broadcast_to(
+            self.ground_truths[:, :, np.newaxis, :],
+            (self.num_steps, self.num_envs, self.num_agents, GROUND_TRUTH_DIM)
+        ).reshape(total, GROUND_TRUTH_DIM)
+
+        return {
             "obs": torch.tensor(self.obs.reshape(total, OBS_DIM)),
             "masks": torch.tensor(self.masks.reshape(total, TOTAL_MASK_DIM)),
             "actions": torch.tensor(self.actions.reshape(total, 4)),
             "log_probs": torch.tensor(self.log_probs.reshape(total)),
             "returns": torch.tensor(self.returns.reshape(total)),
             "advantages": torch.tensor(self.advantages.reshape(total)),
-            "ground_truths": torch.tensor(
-                # Broadcast ground_truth from [steps, envs, 360] to [steps, envs, agents, 360]
-                np.broadcast_to(
-                    self.ground_truths[:, :, np.newaxis, :],
-                    (self.num_steps, self.num_envs, self.num_agents, GROUND_TRUTH_DIM)
-                ).reshape(total, GROUND_TRUTH_DIM)
-            ),
+            "ground_truths": torch.tensor(gt_broadcast),
+            "actor_valid": torch.tensor(actor_valid),  # [total] bool
         }
-
-        # Filter to only meaningful decisions (target head has >1 valid action)
-        filtered = {k: v[valid_idx] for k, v in all_data.items()}
-        return filtered
 
     def reset(self):
         self.step = 0

@@ -251,23 +251,26 @@ class MAPPOTrainer:
                 mb_returns = data["returns"][idx].to(self.device)
                 mb_advantages = data["advantages"][idx].to(self.device)
                 mb_gt = data["ground_truths"][idx].to(self.device)
+                mb_actor_valid = data["actor_valid"][idx].to(self.device).float()
 
                 # Evaluate actions under current policy
                 new_log_probs, new_values, entropy = self.policy.evaluate_actions(
                     mb_obs, mb_masks, mb_actions, ground_truth=mb_gt
                 )
 
-                # PPO clipped objective
+                # PPO clipped objective — only for samples with meaningful decisions
                 ratio = torch.exp(new_log_probs - mb_old_log_probs)
                 surr1 = ratio * mb_advantages
                 surr2 = torch.clamp(ratio, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * mb_advantages
-                policy_loss = -torch.min(surr1, surr2).mean()
+                clipped_obj = torch.min(surr1, surr2) * mb_actor_valid
+                n_actor = mb_actor_valid.sum().clamp(min=1)
+                policy_loss = -clipped_obj.sum() / n_actor
 
-                # Value loss (clipped)
+                # Value loss — ALL samples (critic learns from every state)
                 value_loss = F.mse_loss(new_values, mb_returns)
 
-                # Entropy bonus
-                entropy_loss = -entropy.mean()
+                # Entropy bonus — only for valid actors
+                entropy_loss = -(entropy * mb_actor_valid).sum() / n_actor
 
                 # Total loss
                 loss = (
