@@ -269,23 +269,36 @@ class MafiaPolicy(nn.Module):
         probs, value = self.forward(obs, action_mask, ground_truth)
         head_valid = self._head_valid
 
-        actions = []
+        # Sample all heads
+        sampled = {}
+        dists = {}
+        for key in ["target", "chat_type", "chat_target", "claim_role"]:
+            dists[key] = Categorical(probs=probs[key])
+            if deterministic:
+                sampled[key] = probs[key].argmax(dim=-1)
+            else:
+                sampled[key] = dists[key].sample()
+
+        # Conditional validity: chat_target only matters for accuse/defend,
+        # claim_role only matters for claim. Matches engine's process_chat.
+        chat_type_val = sampled["chat_type"]  # [B]
+        ct_relevant = ((chat_type_val == 1) | (chat_type_val == 2)).float()  # accuse or defend
+        cr_relevant = (chat_type_val == 3).float()  # claim
+
         total_log_prob = torch.zeros(obs.shape[0], device=obs.device)
         total_entropy = torch.zeros(obs.shape[0], device=obs.device)
 
         for key in ["target", "chat_type", "chat_target", "claim_role"]:
-            dist = Categorical(probs=probs[key])
-            if deterministic:
-                a = probs[key].argmax(dim=-1)
-            else:
-                a = dist.sample()
-            actions.append(a)
-            # Only count log_prob/entropy for valid heads (skip dead players, VOTE chat, etc.)
-            valid = head_valid[key].float()  # [B] 0 or 1
-            total_log_prob += dist.log_prob(a) * valid
-            total_entropy += dist.entropy() * valid
+            valid = head_valid[key].float()
+            # Apply conditional relevance for sub-heads
+            if key == "chat_target":
+                valid = valid * ct_relevant
+            elif key == "claim_role":
+                valid = valid * cr_relevant
+            total_log_prob += dists[key].log_prob(sampled[key]) * valid
+            total_entropy += dists[key].entropy() * valid
 
-        actions = torch.stack(actions, dim=-1)  # [B, 4]
+        actions = torch.stack([sampled[k] for k in ["target", "chat_type", "chat_target", "claim_role"]], dim=-1)
         return actions, total_log_prob, value.squeeze(-1), total_entropy
 
     def evaluate_actions(self, obs, action_mask, actions, ground_truth=None):
@@ -303,12 +316,21 @@ class MafiaPolicy(nn.Module):
         probs, value = self.forward(obs, action_mask, ground_truth)
         head_valid = self._head_valid
 
+        # Conditional validity based on the GIVEN chat_type action
+        chat_type_val = actions[:, 1]  # [B]
+        ct_relevant = ((chat_type_val == 1) | (chat_type_val == 2)).float()
+        cr_relevant = (chat_type_val == 3).float()
+
         total_log_prob = torch.zeros(actions.shape[0], device=obs.device)
         total_entropy = torch.zeros(actions.shape[0], device=obs.device)
 
         for i, key in enumerate(["target", "chat_type", "chat_target", "claim_role"]):
             dist = Categorical(probs=probs[key])
             valid = head_valid[key].float()
+            if key == "chat_target":
+                valid = valid * ct_relevant
+            elif key == "claim_role":
+                valid = valid * cr_relevant
             total_log_prob += dist.log_prob(actions[:, i]) * valid
             total_entropy += dist.entropy() * valid
 
