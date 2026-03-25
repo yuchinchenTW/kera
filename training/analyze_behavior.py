@@ -102,9 +102,10 @@ def run_analysis(policy, device, num_games=500):
         game = env.games[0]
         done = False
 
-        # Track killer fake claims: killer_id -> latest accused target (None if not yet accused)
-        killer_has_claimed_police = set()  # killers who claimed police this game
-        current_fake_reveal_target = None  # most recent killer accusation after claiming police
+        # Track killer current role claim (can change each round, mirrors engine's role_claims)
+        killer_current_claim = {}  # pid -> latest claimed role string
+        # Fake reveal targets this round (reset each round)
+        round_fake_reveal_targets = set()
 
         while not done:
             obs_t = torch.tensor(obs_np.reshape(-1, OBS_DIM), device=device)
@@ -116,18 +117,30 @@ def run_analysis(policy, device, num_games=500):
             actions_np = actions_t.cpu().numpy().reshape(1, NUM_PLAYERS, 4)
             act = actions_np[0]  # [18, 4]
 
-            # ── Chat analysis: during NIGHT phase (when chat is actually executed) ──
-            # In fast_engine, NIGHT step processes night actions + chat, then flips to VOTE.
-            # So the chat heads from the NIGHT action are the ones that actually get used.
+            # ── Chat analysis: during NIGHT phase ──
+            # Must analyze AFTER stepping (not before), because engine does:
+            #   resolve_night() -> kills happen -> process_chat() -> skip dead players
+            # So we save the action, step, then analyze using post-step alive state.
+            pending_chat_act = None
             if game.phase == "NIGHT":
+                pending_chat_act = act.copy()
+
+            # Step first
+            obs_np, masks_np, rewards, dones, infos = env.step(actions_np)
+
+            # Now analyze chat using the NIGHT action that was just executed
+            # After step, dead players from resolve_night are already marked dead
+            round_fake_reveal_targets = set()  # reset each round
+            if pending_chat_act is not None:
                 for pid in range(NUM_PLAYERS):
                     p = game.players[pid]
+                    # Only count players who were alive AFTER resolve_night (same as process_chat)
                     if not p.alive:
                         continue
 
-                    chat_type = int(act[pid, 1])
-                    chat_target = int(act[pid, 2])
-                    claim_role = int(act[pid, 3])
+                    chat_type = int(pending_chat_act[pid, 1])
+                    chat_target = int(pending_chat_act[pid, 2])
+                    claim_role = int(pending_chat_act[pid, 3])
 
                     target_faction = None
                     if 0 <= chat_target < NUM_PLAYERS:
@@ -145,9 +158,9 @@ def run_analysis(policy, device, num_games=500):
                                 stats["killer_accuse_blue"] += 1
                             elif target_faction == F_RED:
                                 stats["killer_accuse_red"] += 1
-                            # Track if this killer already claimed police and is now accusing
-                            if pid in killer_has_claimed_police and 0 <= chat_target < NUM_PLAYERS:
-                                current_fake_reveal_target = chat_target
+                            # Track fake reveal: killer currently claims police AND accusing someone
+                            if killer_current_claim.get(pid) == "POLICE" and 0 <= chat_target < NUM_PLAYERS:
+                                round_fake_reveal_targets.add(chat_target)
                         elif chat_type == CHAT_DEFEND:
                             stats["killer_defend"] += 1
                             if target_faction == F_BLUE:
@@ -158,9 +171,10 @@ def run_analysis(policy, device, num_games=500):
                             stats["killer_claim_role"] += 1
                             if 0 <= claim_role < len(FULL_ROLE_IDS):
                                 claimed = FULL_ROLE_IDS[claim_role]
+                                # Update current claim (overwrites previous, mirrors engine)
+                                killer_current_claim[pid] = claimed
                                 if claimed == "POLICE":
                                     stats["killer_claim_police"] += 1
-                                    killer_has_claimed_police.add(pid)
                                 elif claimed == "DOCTOR":
                                     stats["killer_claim_doctor"] += 1
                                 elif claimed == "CIVILIAN":
@@ -182,19 +196,29 @@ def run_analysis(policy, device, num_games=500):
                                 stats["police_claim_police"] += 1
 
             # ── Blue voting analysis: during VOTE phase (when votes are executed) ──
-            if game.phase == "VOTE":
+            # Note: after NIGHT step, game.phase is now VOTE. The vote action is the NEXT step.
+            # But we already stepped above. We need to analyze vote on the VOTE step.
+            # The current game.phase after step tells us what phase we just completed.
+            # If we just completed a VOTE step (game.phase is now NIGHT for next round),
+            # we should have analyzed. But the flow is tricky.
+            #
+            # Actually: after NIGHT step -> phase becomes VOTE.
+            # After VOTE step -> phase becomes NIGHT (or END).
+            # So vote analysis should happen when pending_chat_act is None (we were in VOTE phase).
+            if pending_chat_act is None:
+                # We just executed a VOTE step
+
                 # Real police reveal: only counts if target is still alive
                 real_reveal_target = game.police_public_red
                 if real_reveal_target is not None:
                     if not game.players[real_reveal_target].alive:
-                        real_reveal_target = None  # target already dead, no longer relevant
+                        real_reveal_target = None
 
-                # Fake reveal: current_fake_reveal_target (set this round by killer accuse after claiming police)
-                # Only valid if target is alive
-                fake_target = current_fake_reveal_target
-                if fake_target is not None:
-                    if not game.players[fake_target].alive:
-                        fake_target = None
+                # Fake reveal targets from this round (set during chat analysis)
+                alive_fake_targets = set()
+                for ft in round_fake_reveal_targets:
+                    if game.players[ft].alive:
+                        alive_fake_targets.add(ft)
 
                 for pid in range(NUM_PLAYERS):
                     p = game.players[pid]
@@ -213,25 +237,19 @@ def run_analysis(policy, device, num_games=500):
                     elif target_p.faction == F_BLUE:
                         stats["blue_vote_wrong_blue"] += 1
 
-                    # Check follow/ignore REAL police reveal (only when alive target exists)
+                    # Check follow/ignore REAL police reveal
                     if real_reveal_target is not None:
                         if vote_target == real_reveal_target:
                             stats["blue_follow_reveal"] += 1
                         else:
                             stats["blue_ignore_reveal"] += 1
 
-                    # Check follow/ignore FAKE reveal (only when alive target exists)
-                    if fake_target is not None:
-                        if vote_target == fake_target:
+                    # Check follow/ignore FAKE reveals (can be multiple targets)
+                    for ft in alive_fake_targets:
+                        if vote_target == ft:
                             stats["blue_follow_fake_reveal"] += 1
                         else:
                             stats["blue_ignore_fake_reveal"] += 1
-
-                # Reset fake reveal after this vote round (don't carry over to next round)
-                current_fake_reveal_target = None
-
-            # Step
-            obs_np, masks_np, rewards, dones, infos = env.step(actions_np)
 
             if dones[0]:
                 done = True
