@@ -207,7 +207,7 @@ def _encode_all(
             masks[pid, 18] = 1; masks[pid, 19] = 1; masks[pid, 42] = 1
             continue
 
-        if phase_idx == 0:  # NIGHT
+        if phase_idx == 0:  # NIGHT: only target (chat at VOTE step)
             if role_arr[pid] == R_CIVILIAN:
                 masks[pid, 18] = 1
             else:
@@ -216,22 +216,19 @@ def _encode_all(
                     if role_arr[pid] == R_KILLER and role_arr[qid] == R_KILLER: continue
                     masks[pid, qid] = 1
                 masks[pid, 18] = 1
-            # Chat enabled during NIGHT
-            masks[pid, 19] = 1; masks[pid, 20] = 1; masks[pid, 21] = 1
-            masks[pid, 22] = 1; masks[pid, 23] = 1
-            for qid in range(N):
-                if qid == pid or alive_arr[qid] == 0: continue
-                masks[pid, 24 + qid] = 1
-            masks[pid, 42] = 1
-            for r in range(NUM_ROLES_FULL):
-                masks[pid, 43 + r] = 1
-        else:  # VOTE: only target, chat forced silence
+            masks[pid, 19] = 1  # silence only
+            masks[pid, 42] = 1  # nobody
+        else:  # VOTE: target + chat + claim (model has seen night results)
             for qid in range(N):
                 if qid == pid or alive_arr[qid] == 0: continue
                 masks[pid, qid] = 1
+                masks[pid, 24 + qid] = 1  # chat target
             masks[pid, 18] = 1
-            masks[pid, 19] = 1  # silence only
-            masks[pid, 42] = 1  # nobody
+            masks[pid, 19] = 1; masks[pid, 20] = 1; masks[pid, 21] = 1
+            masks[pid, 22] = 1; masks[pid, 23] = 1
+            masks[pid, 42] = 1
+            for r in range(NUM_ROLES_FULL):
+                masks[pid, 43 + r] = 1
 
     return obs, masks
 

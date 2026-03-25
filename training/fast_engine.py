@@ -569,7 +569,7 @@ def encode_all_fast(game):
         alive_others = [q for q in alive_set if q != pid]
 
         if phase == "NIGHT":
-            # Target: night action
+            # NIGHT: only target head (chat decided at VOTE after seeing results)
             if p.role == R_CIVILIAN:
                 masks[pid, 18] = 1
             else:
@@ -577,19 +577,18 @@ def encode_all_fast(game):
                     if p.role == R_KILLER and role_arr[qid] == R_KILLER: continue
                     masks[pid, qid] = 1
                 masks[pid, 18] = 1
-            # Chat: enabled during NIGHT (executed after resolve_night)
+            masks[pid, 19] = 1  # silence only
+            masks[pid, 42] = 1  # nobody
+        else:
+            # VOTE: target (vote) + chat + claim (model has seen night results)
+            for qid in alive_others:
+                masks[pid, qid] = 1
+            masks[pid, 18] = 1  # abstain
             masks[pid, 19:24] = 1  # all chat types
             for qid in alive_others:
                 masks[pid, 24 + qid] = 1
             masks[pid, 42] = 1  # nobody
             masks[pid, 43:63] = 1  # claim roles
-        else:
-            # VOTE: only target head active, chat/claim forced to silence/none
-            for qid in alive_others:
-                masks[pid, qid] = 1
-            masks[pid, 18] = 1  # abstain
-            masks[pid, 19] = 1  # silence only
-            masks[pid, 42] = 1  # chat target nobody
 
     return obs, masks
 
@@ -853,7 +852,7 @@ class FastBatchEnv:
             events = []
 
             if game.phase == "NIGHT":
-                # Night actions
+                # NIGHT step: only target head (night action), no chat
                 night_actions = {}
                 for pid in range(NUM_PLAYERS):
                     t = int(act[pid, 0])
@@ -861,8 +860,14 @@ class FastBatchEnv:
                         night_actions[pid] = t
                 events = game.resolve_night(night_actions)
 
-                # Process chat actions for day phase
+                # Auto-advance to VOTE (chat will happen at VOTE step)
                 if game.phase == "DAY" and game.victory is None:
+                    game.phase = "VOTE"
+
+            else:
+                # VOTE step: first process chat (model has seen night results),
+                # then process vote. Both use this step's action.
+                if game.victory is None:
                     chat_actions = {}
                     for pid in range(NUM_PLAYERS):
                         ct = int(act[pid, 1])
@@ -870,10 +875,7 @@ class FastBatchEnv:
                         cr = int(act[pid, 3])
                         chat_actions[pid] = (ct, ct_target, cr)
                     game.process_chat(chat_actions)
-                    game.phase = "VOTE"  # auto-advance to vote
 
-            else:
-                # Vote actions
                 vote_actions = {}
                 for pid in range(NUM_PLAYERS):
                     t = int(act[pid, 0])

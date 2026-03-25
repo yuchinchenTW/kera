@@ -504,8 +504,13 @@ export function buildActionMask(state, playerId, phase) {
   }
 
   // ── Chat type mask [19:24] ──
-  // Chat is processed during NIGHT step only. VOTE step ignores chat.
+  // Chat processed at VOTE step (after night results are visible).
   if (phase === "NIGHT") {
+    // NIGHT: silence only (chat deferred to VOTE)
+    mask[19 + 0] = 1; // silence
+    mask[24 + 18] = 1; // nobody
+  } else {
+    // VOTE: target + chat + claim (model has seen night results)
     mask[19 + 0] = 1; // silence
     if (aliveOthers.length > 0) {
       mask[19 + 1] = 1; // accuse
@@ -514,20 +519,14 @@ export function buildActionMask(state, playerId, phase) {
     mask[19 + 3] = 1; // claim_role
     mask[19 + 4] = 1; // deflect
 
-    // ── Chat target mask [24:43] ──
     for (const p of aliveOthers) {
       mask[24 + p.id] = 1;
     }
     mask[24 + 18] = 1; // nobody
 
-    // ── Claim role mask [43:63] ──
     for (let r = 0; r < ROLE_IDS.length; r++) {
       mask[43 + r] = 1;
     }
-  } else {
-    // VOTE/DAY: silence only, no chat targets, no claims
-    mask[19 + 0] = 1; // silence
-    mask[24 + 18] = 1; // nobody
   }
 
   return mask;
