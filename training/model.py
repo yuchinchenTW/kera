@@ -193,14 +193,19 @@ class MafiaPolicy(nn.Module):
         return global_feat, attended, role_feat, social_feat
 
     def _masked_probs(self, logits, mask):
-        """Apply mask, softmax, then zero out masked entries."""
-        logits = logits.masked_fill(mask == 0, -1e8)
+        """Apply mask, softmax, hard-zero masked entries, re-normalize."""
+        # If entire mask is 0 (e.g., dead player's claim head), force uniform
+        # over all actions to avoid NaN. The action won't matter anyway.
+        has_valid = mask.sum(dim=-1, keepdim=True) > 0  # [B, 1]
+        # Fallback mask: if no valid action, allow all (prevents div-by-zero)
+        safe_mask = torch.where(has_valid, mask, torch.ones_like(mask))
+
+        logits = logits.masked_fill(safe_mask == 0, -1e8)
         probs = F.softmax(logits, dim=-1)
-        # Hard-zero masked actions (softmax residual is ~1e-22 but clamp made it 1e-8)
-        probs = probs * mask
-        # Re-normalize to sum to 1, add tiny eps to avoid all-zero
-        probs = probs + 1e-10
-        probs = probs / probs.sum(dim=-1, keepdim=True)
+        probs = probs * safe_mask
+        # Re-normalize
+        prob_sum = probs.sum(dim=-1, keepdim=True).clamp(min=1e-10)
+        probs = probs / prob_sum
         return probs
 
     def forward(self, obs, action_mask, ground_truth=None):

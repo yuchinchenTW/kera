@@ -216,18 +216,21 @@ def _encode_all(
                     if role_arr[pid] == R_KILLER and role_arr[qid] == R_KILLER: continue
                     masks[pid, qid] = 1
                 masks[pid, 18] = 1
-            masks[pid, 19] = 1
         else:
             for qid in range(N):
                 if qid == pid or alive_arr[qid] == 0: continue
                 masks[pid, qid] = 1
-                masks[pid, 24 + qid] = 1
             masks[pid, 18] = 1
-            masks[pid, 19] = 1; masks[pid, 20] = 1; masks[pid, 21] = 1
-            masks[pid, 22] = 1; masks[pid, 23] = 1
-            for r in range(NUM_ROLES_FULL):
-                masks[pid, 43 + r] = 1
+
+        # Chat masks — all phases (chat executes during NIGHT step)
+        masks[pid, 19] = 1; masks[pid, 20] = 1; masks[pid, 21] = 1
+        masks[pid, 22] = 1; masks[pid, 23] = 1
+        for qid in range(N):
+            if qid == pid or alive_arr[qid] == 0: continue
+            masks[pid, 24 + qid] = 1
         masks[pid, 42] = 1
+        for r in range(NUM_ROLES_FULL):
+            masks[pid, 43 + r] = 1
 
     return obs, masks
 

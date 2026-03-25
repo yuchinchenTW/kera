@@ -564,17 +564,17 @@ def encode_all_fast(game):
                     if p.role == R_KILLER and role_arr[qid] == R_KILLER: continue
                     masks[pid, qid] = 1
                 masks[pid, 18] = 1
-            masks[pid, 19] = 1  # silence
         else:
             for qid in alive_others:
                 masks[pid, qid] = 1
             masks[pid, 18] = 1
-            masks[pid, 19:24] = 1  # all chat types
-            for qid in alive_others:
-                masks[pid, 24 + qid] = 1
-            masks[pid, 43:63] = 1  # claim roles
 
+        # Chat masks — all phases (chat executes during NIGHT step)
+        masks[pid, 19:24] = 1  # all chat types including silence
+        for qid in alive_others:
+            masks[pid, 24 + qid] = 1
         masks[pid, 42] = 1  # chat target nobody
+        masks[pid, 43:63] = 1  # claim roles
 
     return obs, masks
 
@@ -667,29 +667,22 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
     vote_record = getattr(game, 'last_vote_record', {})
     executed = getattr(game, 'last_executed', None)
 
-    # Check if the public reveal was caused by a fake police.
-    # police_public_red is only set by real police investigation (line 192),
-    # so it's ALWAYS a real reveal. A "fake reveal" is when a killer claims
-    # police AND accuses someone — but that doesn't set police_public_red.
-    # So we never mark police_public_red as fake.
-    # Instead, fake reveal penalties only apply when a killer's accusation
-    # (via chat) matches the executed target AND no real reveal exists.
-    fake_reveal = False
-    if game.police_public_red is None:
-        # No real reveal — check if a killer who claimed police accused the executed target
-        if executed is not None:
-            for pid, role in game.role_claims.items():
-                claimed = role if isinstance(role, str) else ""
-                pid_int = int(pid) if isinstance(pid, str) else pid
-                if (claimed == "POLICE" or role == R_POLICE):
-                    if game.players[pid_int].role == R_KILLER:
-                        # Check if this killer accused the executed target in chat
-                        for (speaker, ctype, ctarget, _) in getattr(game, 'current_chat', []):
-                            if speaker == pid_int and ctype == 1 and ctarget == executed:
-                                fake_reveal = True
-                                break
-                    if fake_reveal:
-                        break
+    # Detect fake police reveal: a killer who claimed police accused someone in chat.
+    # This is tracked INDEPENDENTLY from real reveal (police_public_red).
+    # A game can have both a real reveal AND a fake reveal at the same time.
+    fake_reveal_target = None  # player ID that killer-as-fake-police accused
+    if executed is not None:
+        for pid, role in game.role_claims.items():
+            claimed = role if isinstance(role, str) else ""
+            pid_int = int(pid) if isinstance(pid, str) else pid
+            if (claimed == "POLICE" or role == R_POLICE):
+                if game.players[pid_int].role == R_KILLER:
+                    for (speaker, ctype, ctarget, _) in getattr(game, 'current_chat', []):
+                        if speaker == pid_int and ctype == 1 and ctarget == executed:
+                            fake_reveal_target = executed
+                            break
+            if fake_reveal_target is not None:
+                break
 
     if executed is not None and vote_record:
         victim_faction = game.players[executed].faction
@@ -706,7 +699,7 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
 
                     # Non-police blue: big bonus for following real reveal
                     if voter.faction == F_BLUE and voter.role != R_POLICE:
-                        if game.police_public_red == executed and not fake_reveal:
+                        if game.police_public_red == executed:
                             rewards[voter_id] += 0.08  # followed real intel
                 else:
                     # Voted out a blue — penalty depends on victim's role
@@ -718,14 +711,14 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
                     else:
                         rewards[voter_id] -= 0.02  # other blue roles = small penalty
 
-                    # Non-police blue: penalty for being tricked
+                    # Non-police blue: penalty for being tricked by fake police
                     if voter.faction == F_BLUE and voter.role != R_POLICE:
-                        if game.police_public_red == executed and fake_reveal:
+                        if fake_reveal_target == executed:
                             rewards[voter_id] -= 0.02  # tricked by fake police
 
             # Non-police blue: penalty for IGNORING real reveal
             if voter.faction == F_BLUE and voter.role != R_POLICE:
-                if game.police_public_red is not None and not fake_reveal:
+                if game.police_public_red is not None:
                     revealed_alive = game.players[game.police_public_red].alive if game.police_public_red < NUM_PLAYERS else False
                     if revealed_alive and target_id != game.police_public_red:
                         rewards[voter_id] -= 0.04  # ignored real police intel

@@ -59,7 +59,9 @@ class MAPPOTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Device: {self.device}")
 
-        # Environment (N parallel processes, 1 game each)
+        # Environment — fast Python engine (GOOD_VS_EVIL only)
+        if args.theme != "GOOD_VS_EVIL":
+            print(f"  WARNING: --theme={args.theme} ignored. Python engine only supports GOOD_VS_EVIL.")
         self.env = VecMafiaEnv(
             num_envs=args.num_envs,
             theme=args.theme,
