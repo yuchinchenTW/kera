@@ -238,9 +238,9 @@ def run_analysis(policy, device, num_games=500):
                         else:
                             stats["blue_ignore_reveal"] += 1
 
-                    # Follow/ignore FAKE reveals
-                    for ft in fake_targets_valid:
-                        if vote_target == ft:
+                    # Follow/ignore FAKE reveals (per-voter, not per-target)
+                    if fake_targets_valid:
+                        if vote_target in fake_targets_valid:
                             stats["blue_follow_fake_reveal"] += 1
                         else:
                             stats["blue_ignore_fake_reveal"] += 1
