@@ -557,6 +557,7 @@ def encode_all_fast(game):
         alive_others = [q for q in alive_set if q != pid]
 
         if phase == "NIGHT":
+            # Target: night action
             if p.role == R_CIVILIAN:
                 masks[pid, 18] = 1
             else:
@@ -564,17 +565,19 @@ def encode_all_fast(game):
                     if p.role == R_KILLER and role_arr[qid] == R_KILLER: continue
                     masks[pid, qid] = 1
                 masks[pid, 18] = 1
+            # Chat: enabled during NIGHT (executed after resolve_night)
+            masks[pid, 19:24] = 1  # all chat types
+            for qid in alive_others:
+                masks[pid, 24 + qid] = 1
+            masks[pid, 42] = 1  # nobody
+            masks[pid, 43:63] = 1  # claim roles
         else:
+            # VOTE: only target head active, chat/claim forced to silence/none
             for qid in alive_others:
                 masks[pid, qid] = 1
-            masks[pid, 18] = 1
-
-        # Chat masks — all phases (chat executes during NIGHT step)
-        masks[pid, 19:24] = 1  # all chat types including silence
-        for qid in alive_others:
-            masks[pid, 24 + qid] = 1
-        masks[pid, 42] = 1  # chat target nobody
-        masks[pid, 43:63] = 1  # claim roles
+            masks[pid, 18] = 1  # abstain
+            masks[pid, 19] = 1  # silence only
+            masks[pid, 42] = 1  # chat target nobody
 
     return obs, masks
 

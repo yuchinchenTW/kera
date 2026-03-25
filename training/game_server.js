@@ -214,7 +214,7 @@ function stepNightOne(engine, actions) {
 
 function stepVoteOne(engine, actions) {
   const state = engine.state;
-  injectRlChat(state, actions);
+  // Don't inject chat during vote — chat only happens once per day (in stepNightOne)
   const externalVotes = [];
   for (const a of actions) {
     if (typeof a.actorId !== "number") continue;

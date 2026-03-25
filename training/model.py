@@ -194,19 +194,15 @@ class MafiaPolicy(nn.Module):
 
     def _masked_probs(self, logits, mask):
         """Apply mask, softmax, hard-zero masked entries, re-normalize."""
-        # If entire mask is 0 (e.g., dead player's claim head), force uniform
-        # over all actions to avoid NaN. The action won't matter anyway.
         has_valid = mask.sum(dim=-1, keepdim=True) > 0  # [B, 1]
-        # Fallback mask: if no valid action, allow all (prevents div-by-zero)
         safe_mask = torch.where(has_valid, mask, torch.ones_like(mask))
 
         logits = logits.masked_fill(safe_mask == 0, -1e8)
         probs = F.softmax(logits, dim=-1)
         probs = probs * safe_mask
-        # Re-normalize
         prob_sum = probs.sum(dim=-1, keepdim=True).clamp(min=1e-10)
         probs = probs / prob_sum
-        return probs
+        return probs, has_valid.squeeze(-1)  # also return validity flag
 
     def forward(self, obs, action_mask, ground_truth=None):
         """
@@ -232,17 +228,24 @@ class MafiaPolicy(nn.Module):
         chat_target_mask = action_mask[:, 24:43]
         claim_mask = action_mask[:, 43:63]
 
-        # 4 policy heads
-        target_probs = self._masked_probs(self.target_head(combined), target_mask)
-        chat_type_probs = self._masked_probs(self.chat_head(combined), chat_type_mask)
-        chat_target_probs = self._masked_probs(self.chat_target_head(combined), chat_target_mask)
-        claim_probs = self._masked_probs(self.claim_head(combined), claim_mask)
+        # 4 policy heads (each returns probs + validity flag)
+        target_probs, target_valid = self._masked_probs(self.target_head(combined), target_mask)
+        chat_type_probs, chat_valid = self._masked_probs(self.chat_head(combined), chat_type_mask)
+        chat_target_probs, ct_valid = self._masked_probs(self.chat_target_head(combined), chat_target_mask)
+        claim_probs, claim_valid = self._masked_probs(self.claim_head(combined), claim_mask)
 
         probs = {
             "target": target_probs,           # [B, 19]
             "chat_type": chat_type_probs,     # [B, 5]
             "chat_target": chat_target_probs, # [B, 19]
             "claim_role": claim_probs,        # [B, 20]
+        }
+        # Per-head validity: True if head has at least one valid action
+        self._head_valid = {
+            "target": target_valid,       # [B]
+            "chat_type": chat_valid,
+            "chat_target": ct_valid,
+            "claim_role": claim_valid,
         }
 
         # Value
@@ -264,6 +267,7 @@ class MafiaPolicy(nn.Module):
             entropy:  [batch] float tensor (sum of all heads)
         """
         probs, value = self.forward(obs, action_mask, ground_truth)
+        head_valid = self._head_valid
 
         actions = []
         total_log_prob = torch.zeros(obs.shape[0], device=obs.device)
@@ -276,8 +280,10 @@ class MafiaPolicy(nn.Module):
             else:
                 a = dist.sample()
             actions.append(a)
-            total_log_prob += dist.log_prob(a)
-            total_entropy += dist.entropy()
+            # Only count log_prob/entropy for valid heads (skip dead players, VOTE chat, etc.)
+            valid = head_valid[key].float()  # [B] 0 or 1
+            total_log_prob += dist.log_prob(a) * valid
+            total_entropy += dist.entropy() * valid
 
         actions = torch.stack(actions, dim=-1)  # [B, 4]
         return actions, total_log_prob, value.squeeze(-1), total_entropy
@@ -290,19 +296,21 @@ class MafiaPolicy(nn.Module):
             actions: [batch, 4] int tensor
 
         Returns:
-            log_probs: [batch] (sum of all heads)
+            log_probs: [batch] (sum of valid heads only)
             values:    [batch]
-            entropy:   [batch] (sum of all heads)
+            entropy:   [batch] (sum of valid heads only)
         """
         probs, value = self.forward(obs, action_mask, ground_truth)
+        head_valid = self._head_valid
 
         total_log_prob = torch.zeros(actions.shape[0], device=obs.device)
         total_entropy = torch.zeros(actions.shape[0], device=obs.device)
 
         for i, key in enumerate(["target", "chat_type", "chat_target", "claim_role"]):
             dist = Categorical(probs=probs[key])
-            total_log_prob += dist.log_prob(actions[:, i])
-            total_entropy += dist.entropy()
+            valid = head_valid[key].float()
+            total_log_prob += dist.log_prob(actions[:, i]) * valid
+            total_entropy += dist.entropy() * valid
 
         log_probs = total_log_prob
         entropy = total_entropy

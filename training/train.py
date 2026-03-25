@@ -62,6 +62,8 @@ class MAPPOTrainer:
         # Environment — fast Python engine (GOOD_VS_EVIL only)
         if args.theme != "GOOD_VS_EVIL":
             print(f"  WARNING: --theme={args.theme} ignored. Python engine only supports GOOD_VS_EVIL.")
+        if args.difficulty != "hard":
+            print(f"  WARNING: --difficulty={args.difficulty} ignored. Python engine has no difficulty setting.")
         self.env = VecMafiaEnv(
             num_envs=args.num_envs,
             theme=args.theme,
