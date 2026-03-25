@@ -302,6 +302,8 @@ class FastGame:
     def process_chat(self, chat_actions):
         """
         Process chat actions during day phase.
+        Called AFTER resolve_night, so some players may have died.
+        Filters out: dead speakers, accuse/defend targeting dead players.
 
         chat_actions: dict of player_id -> (chat_type, chat_target, claim_role)
         """
@@ -312,11 +314,18 @@ class FastGame:
                 continue
             if ctype == CHAT_SILENCE:
                 continue
+
+            # Skip accuse/defend targeting dead players (killed this night).
+            # In real game, players see who died before chatting.
+            # Since actions are decided simultaneously, we filter post-hoc.
+            if ctype in (CHAT_ACCUSE, CHAT_DEFEND):
+                if 0 <= ctarget < NUM_PLAYERS and not self.players[ctarget].alive:
+                    continue  # can't accuse/defend a dead person
+
             round_chat.append((pid, ctype, ctarget, crole))
 
             # Update beliefs based on chat
             if ctype == CHAT_ACCUSE and 0 <= ctarget < NUM_PLAYERS:
-                # Someone accused ctarget — slightly increase suspicion
                 for obs_pid in self.alive_ids():
                     if obs_pid == pid:
                         continue
