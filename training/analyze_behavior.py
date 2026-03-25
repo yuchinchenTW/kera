@@ -91,6 +91,7 @@ def run_analysis(policy, device, num_games=500):
         "games": 0,
         "blue_wins": 0,
         "red_wins": 0,
+        "draws": 0,
     }
 
     env = FastBatchEnv(num_envs=1)
@@ -250,10 +251,13 @@ def run_analysis(policy, device, num_games=500):
                 games_done += 1
                 victory = infos[0].get("victory")
                 stats["games"] += 1
-                if victory and victory.get("winner") == "BLUE":
+                winner = victory.get("winner") if victory else "NONE"
+                if winner == "BLUE":
                     stats["blue_wins"] += 1
-                elif victory and victory.get("winner") == "RED":
+                elif winner == "RED":
                     stats["red_wins"] += 1
+                else:
+                    stats["draws"] += 1
 
                 if games_done % 100 == 0:
                     elapsed = time.time() - t0
@@ -272,6 +276,7 @@ def print_report(stats):
     print(f"  BEHAVIOR ANALYSIS — {n} games")
     print(f"  BLUE wins: {stats['blue_wins']} ({stats['blue_wins']/n*100:.1f}%)")
     print(f"  RED wins:  {stats['red_wins']} ({stats['red_wins']/n*100:.1f}%)")
+    print(f"  Draws:     {stats['draws']} ({stats['draws']/n*100:.1f}%)")
     print(f"{'='*70}")
 
     # ── Killer Chat ──
