@@ -529,7 +529,16 @@ def encode_all_fast(game):
             obs[pid, o] = vote_together[pid, qid] / max_together; o += 1
             obs[pid, o] = game.last_words_accused[qid]; o += 1
             obs[pid, o] = game.last_words_defended[qid]; o += 1
-            obs[pid, o] = 0; o += 1
+            # Claimed role: normalized index (0 = no claim, 1-20 = role)
+            claimed = game.role_claims.get(qid)
+            if claimed is not None and isinstance(claimed, int) and 0 <= claimed < NUM_ROLES_FULL:
+                obs[pid, o] = (claimed + 1) / NUM_ROLES_FULL
+            elif claimed is not None and isinstance(claimed, str):
+                ridx = FULL_ROLE_IDX.get(claimed, -1)
+                obs[pid, o] = (ridx + 1) / NUM_ROLES_FULL if ridx >= 0 else 0
+            else:
+                obs[pid, o] = 0
+            o += 1
 
         # Vote graph (324)
         obs[pid, o:o + VOTE_GRAPH_DIM] = vote_graph_norm.ravel()
@@ -545,7 +554,16 @@ def encode_all_fast(game):
         # Last words (54)
         obs[pid, o:o+N] = game.last_words_accused; o += N
         obs[pid, o:o+N] = game.last_words_defended; o += N
-        o += N  # claimed roles = 0
+        # Last words claimed roles (per dead player)
+        for qid in range(N):
+            claimed = game.role_claims.get(qid)
+            if not game.players[qid].alive and claimed is not None:
+                if isinstance(claimed, int) and 0 <= claimed < NUM_ROLES_FULL:
+                    obs[pid, o] = (claimed + 1) / NUM_ROLES_FULL
+                elif isinstance(claimed, str):
+                    ridx = FULL_ROLE_IDX.get(claimed, -1)
+                    obs[pid, o] = (ridx + 1) / NUM_ROLES_FULL if ridx >= 0 else 0
+            o += 1
 
         # Own role (25)
         obs[pid, o + role_full_idx[pid]] = 1; o += NUM_ROLES_FULL

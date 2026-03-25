@@ -46,6 +46,7 @@ def _encode_all(
     accuse_count,    # float32[18, 18]
     defend_count,    # float32[18, 18]
     last_tally,      # float32[18]
+    claimed_roles,   # float32[18] — normalized role index (0=no claim)
     lw_accused,      # float32[18]
     lw_defended,     # float32[18]
     day,             # int
@@ -171,7 +172,7 @@ def _encode_all(
             obs[pid, o] = vote_together[pid, qid] / max_together; o += 1
             obs[pid, o] = lw_accused[qid]; o += 1
             obs[pid, o] = lw_defended[qid]; o += 1
-            obs[pid, o] = 0; o += 1
+            obs[pid, o] = claimed_roles[qid]; o += 1
 
         # Vote graph (324)
         for r in range(N):
@@ -190,7 +191,11 @@ def _encode_all(
             obs[pid, o] = lw_accused[qid]; o += 1
         for qid in range(N):
             obs[pid, o] = lw_defended[qid]; o += 1
-        o += N
+        for qid in range(N):
+            # Dead players' claimed roles
+            if alive_arr[qid] == 0:
+                obs[pid, o] = claimed_roles[qid]
+            o += 1
 
         # Own role (25)
         fi = role_to_full[role_arr[pid]]
@@ -273,10 +278,22 @@ def encode_game_jit(game):
 
     phase_idx = 0 if game.phase == "NIGHT" else 1 if game.phase == "DAY" else 2
 
+    # Build claimed_roles array
+    claimed_roles = np.zeros(N, dtype=np.float32)
+    for pid, claimed in game.role_claims.items():
+        pid_int = int(pid) if isinstance(pid, str) else pid
+        if isinstance(claimed, int) and 0 <= claimed < 20:
+            claimed_roles[pid_int] = (claimed + 1) / 20.0
+        elif isinstance(claimed, str):
+            from fast_engine import FULL_ROLE_IDX
+            ridx = FULL_ROLE_IDX.get(claimed, -1)
+            if ridx >= 0:
+                claimed_roles[pid_int] = (ridx + 1) / 20.0
+
     return _encode_all(
         role_arr, faction_arr, alive_arr, game.suspicion,
         vote_graph, vote_together, accuse_count, defend_count,
-        last_tally, game.last_words_accused, game.last_words_defended,
+        last_tally, claimed_roles, game.last_words_accused, game.last_words_defended,
         game.day, phase_idx,
         float(game.doctor_injections), float(game.doctor_saves), float(game.sniper_shots),
         ROLE_TO_FULL,
