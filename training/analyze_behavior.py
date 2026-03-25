@@ -219,6 +219,9 @@ def run_analysis(policy, device, num_games=500):
                     vote_target = int(act[pid, 0])
                     if vote_target < 0 or vote_target >= NUM_PLAYERS:
                         continue
+                    # Engine only accepts votes for alive targets (pre-step)
+                    if not pre_step_alive[vote_target]:
+                        continue
 
                     stats["blue_vote_total"] += 1
                     target_p = game.players[vote_target]
