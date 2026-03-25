@@ -102,6 +102,9 @@ def run_analysis(policy, device, num_games=500):
         game = env.games[0]
         done = False
 
+        # Track killer fake claims per game for accurate fake reveal detection
+        killer_fake_claim_targets = {}  # killer_id -> set of accused targets after claiming police
+
         while not done:
             obs_t = torch.tensor(obs_np.reshape(-1, OBS_DIM), device=device)
             masks_t = torch.tensor(masks_np.reshape(-1, TOTAL_MASK_DIM), device=device)
@@ -112,8 +115,10 @@ def run_analysis(policy, device, num_games=500):
             actions_np = actions_t.cpu().numpy().reshape(1, NUM_PLAYERS, 4)
             act = actions_np[0]  # [18, 4]
 
-            # Analyze chat actions BEFORE stepping (during DAY/VOTE phase)
-            if game.phase != "NIGHT":
+            # ── Chat analysis: during NIGHT phase (when chat is actually executed) ──
+            # In fast_engine, NIGHT step processes night actions + chat, then flips to VOTE.
+            # So the chat heads from the NIGHT action are the ones that actually get used.
+            if game.phase == "NIGHT":
                 for pid in range(NUM_PLAYERS):
                     p = game.players[pid]
                     if not p.alive:
@@ -139,6 +144,9 @@ def run_analysis(policy, device, num_games=500):
                                 stats["killer_accuse_blue"] += 1
                             elif target_faction == F_RED:
                                 stats["killer_accuse_red"] += 1
+                            # Track if this killer already claimed police and is now accusing
+                            if pid in killer_fake_claim_targets and 0 <= chat_target < NUM_PLAYERS:
+                                killer_fake_claim_targets[pid].add(chat_target)
                         elif chat_type == CHAT_DEFEND:
                             stats["killer_defend"] += 1
                             if target_faction == F_BLUE:
@@ -151,6 +159,7 @@ def run_analysis(policy, device, num_games=500):
                                 claimed = FULL_ROLE_IDS[claim_role]
                                 if claimed == "POLICE":
                                     stats["killer_claim_police"] += 1
+                                    killer_fake_claim_targets[pid] = set()
                                 elif claimed == "DOCTOR":
                                     stats["killer_claim_doctor"] += 1
                                 elif claimed == "CIVILIAN":
@@ -171,46 +180,49 @@ def run_analysis(policy, device, num_games=500):
                             if 0 <= claim_role < len(FULL_ROLE_IDS) and FULL_ROLE_IDS[claim_role] == "POLICE":
                                 stats["police_claim_police"] += 1
 
-                # ── Blue voting analysis (during VOTE phase) ──
-                if game.phase == "VOTE":
-                    # Check if there's a public reveal
-                    revealed_target = game.police_public_red
+            # ── Blue voting analysis: during VOTE phase (when votes are executed) ──
+            if game.phase == "VOTE":
+                # Real police reveal: police_public_red is set by actual police investigation
+                real_reveal_target = game.police_public_red
 
-                    for pid in range(NUM_PLAYERS):
-                        p = game.players[pid]
-                        if not p.alive or p.faction != F_BLUE or p.role == R_POLICE:
-                            continue
+                # Fake reveal: a killer claimed police AND accused someone
+                fake_reveal_target = None
+                for kid, accused_set in killer_fake_claim_targets.items():
+                    if accused_set:
+                        # The killer's most recent accusation target is the "fake reveal"
+                        fake_reveal_target = max(accused_set)  # last added
+                        break
 
-                        vote_target = int(act[pid, 0])
-                        if vote_target < 0 or vote_target >= NUM_PLAYERS:
-                            continue
+                for pid in range(NUM_PLAYERS):
+                    p = game.players[pid]
+                    if not p.alive or p.faction != F_BLUE or p.role == R_POLICE:
+                        continue
 
-                        stats["blue_vote_total"] += 1
-                        target_p = game.players[vote_target]
+                    vote_target = int(act[pid, 0])
+                    if vote_target < 0 or vote_target >= NUM_PLAYERS:
+                        continue
 
-                        if target_p.faction == F_RED:
-                            stats["blue_vote_correct_red"] += 1
-                        elif target_p.faction == F_BLUE:
-                            stats["blue_vote_wrong_blue"] += 1
+                    stats["blue_vote_total"] += 1
+                    target_p = game.players[vote_target]
 
-                        # Check follow/ignore reveal
-                        if revealed_target is not None:
-                            revealed_is_fake = any(
-                                game.players[int(pid2)].role == R_KILLER
-                                for pid2, role in game.role_claims.items()
-                                if (role == "POLICE" or role == R_POLICE)
-                            )
+                    if target_p.faction == F_RED:
+                        stats["blue_vote_correct_red"] += 1
+                    elif target_p.faction == F_BLUE:
+                        stats["blue_vote_wrong_blue"] += 1
 
-                            if vote_target == revealed_target:
-                                if revealed_is_fake:
-                                    stats["blue_follow_fake_reveal"] += 1
-                                else:
-                                    stats["blue_follow_reveal"] += 1
-                            else:
-                                if revealed_is_fake:
-                                    stats["blue_ignore_fake_reveal"] += 1
-                                else:
-                                    stats["blue_ignore_reveal"] += 1
+                    # Check follow/ignore REAL police reveal
+                    if real_reveal_target is not None:
+                        if vote_target == real_reveal_target:
+                            stats["blue_follow_reveal"] += 1
+                        else:
+                            stats["blue_ignore_reveal"] += 1
+
+                    # Check follow/ignore FAKE reveal (separate from real)
+                    if fake_reveal_target is not None:
+                        if vote_target == fake_reveal_target:
+                            stats["blue_follow_fake_reveal"] += 1
+                        else:
+                            stats["blue_ignore_fake_reveal"] += 1
 
             # Step
             obs_np, masks_np, rewards, dones, infos = env.step(actions_np)
