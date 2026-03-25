@@ -378,11 +378,19 @@ class RolloutBuffer:
     def flatten(self):
         """
         Flatten [steps, envs, agents, ...] into [total, ...] for minibatch sampling.
+        Filters out dead/forced agents (target mask has <=1 valid action).
 
         Returns dict of flattened tensors.
         """
         total = self.num_steps * self.num_envs * self.num_agents
-        return {
+
+        # Compute validity: target head (mask[:19]) has >1 valid action
+        target_masks = self.masks[:, :, :, :19]  # [steps, envs, agents, 19]
+        valid_counts = target_masks.reshape(total, 19).sum(axis=1)  # [total]
+        valid_mask = valid_counts > 1  # at least 2 choices = meaningful decision
+        valid_idx = np.where(valid_mask)[0]
+
+        all_data = {
             "obs": torch.tensor(self.obs.reshape(total, OBS_DIM)),
             "masks": torch.tensor(self.masks.reshape(total, TOTAL_MASK_DIM)),
             "actions": torch.tensor(self.actions.reshape(total, 4)),
@@ -397,6 +405,10 @@ class RolloutBuffer:
                 ).reshape(total, GROUND_TRUTH_DIM)
             ),
         }
+
+        # Filter to only meaningful decisions (target head has >1 valid action)
+        filtered = {k: v[valid_idx] for k, v in all_data.items()}
+        return filtered
 
     def reset(self):
         self.step = 0

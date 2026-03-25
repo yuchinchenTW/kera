@@ -133,7 +133,7 @@ class MAPPOTrainer:
     @torch.no_grad()
     def collect_rollout(self):
         """Collect experience from vectorized environments."""
-        obs, masks, infos = self.env.reset() if self.total_steps == 0 else (self._last_obs, self._last_masks, self._last_infos)
+        obs, masks, infos = self._last_obs, self._last_masks, self._last_infos
 
         self.buffer.reset()
 
