@@ -286,8 +286,11 @@ class FastGame:
         # Update beliefs based on votes
         self._update_beliefs_vote(vote_record, executed)
 
-        # Check victory
+        # Check victory or forced draw at day 30
         if self.check_victory():
+            self.phase = "END"
+        elif self.day >= 30:
+            self.victory = "NONE"
             self.phase = "END"
         else:
             self.day += 1
@@ -744,6 +747,8 @@ def compute_rewards_fast(game, prev_alive=None, events=None):
                 rewards[i] += 1.0 if p.faction == F_BLUE else -1.0
             elif game.victory == "RED":
                 rewards[i] += 1.0 if p.faction == F_RED else -1.0
+            elif game.victory == "NONE":
+                rewards[i] -= 0.5  # draw penalty — both sides failed
             if p.alive:
                 rewards[i] += 0.05
 
