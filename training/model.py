@@ -384,11 +384,13 @@ class RolloutBuffer:
         """
         total = self.num_steps * self.num_envs * self.num_agents
 
-        # Compute validity: target head (mask[:19]) has >1 valid action
-        target_masks = self.masks[:, :, :, :19]  # [steps, envs, agents, 19]
-        valid_counts = target_masks.reshape(total, 19).sum(axis=1)  # [total]
-        valid_mask = valid_counts > 1  # at least 2 choices = meaningful decision
-        valid_idx = np.where(valid_mask)[0]
+        # Compute validity: keep sample if ANY head has >1 valid action
+        flat_masks = self.masks.reshape(total, TOTAL_MASK_DIM)
+        target_valid = flat_masks[:, :19].sum(axis=1) > 1
+        chat_valid = flat_masks[:, 19:24].sum(axis=1) > 1
+        claim_valid = flat_masks[:, 43:63].sum(axis=1) > 0  # any claim option
+        any_valid = target_valid | chat_valid | claim_valid
+        valid_idx = np.where(any_valid)[0]
 
         all_data = {
             "obs": torch.tensor(self.obs.reshape(total, OBS_DIM)),
