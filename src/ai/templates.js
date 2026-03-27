@@ -122,7 +122,7 @@ export const CHAT_TEMPLATES = {
   ],
   // Improvement 14: Trust building chat
   trustBuild: [
-    (s, t) => `${s}: I've been thinking about it — ${t} voted against the killer last round.||${s}：我想了一下，${t} 上回合投了殺手的票。`,
+    (s, t) => `${s}: I've been thinking about it — ${t} has been on our side so far.||${s}：我想了一下，${t} 到目前為止一直有在幫忙。`,
     (s, t) => `${s}: ${t} can't be the killer, their behavior is too consistent.||${s}：${t} 不可能是殺手，他行為太一致了。`,
     (s, t) => `${s}: I just want to help the team find the truth.||${s}：我只是想幫大家找出真相。`,
     (s, t) => `${s}: Let me share my analysis — ${t} has been helpful, probably blue.||${s}：讓我分享我的分析，${t} 一直在幫忙，應該是藍方。`,
@@ -148,8 +148,8 @@ export const CHAT_TEMPLATES = {
   },
   // Advanced: Self-defense when accused
   selfDefense: [
-    (s, accuser) => `${s}: ${accuser}, you're wrong about me. Check my voting record.||${s}：${accuser}，你搞錯了，看看我的投票紀錄。`,
-    (s, accuser) => `${s}: ${accuser}, I voted against the killer last round — did you?||${s}：${accuser}，我上回合投了殺手，你呢？`,
+    (s, accuser) => `${s}: ${accuser}, you're wrong about me. I've been helping the team.||${s}：${accuser}，你搞錯了，我一直在幫大家。`,
+    (s, accuser) => `${s}: ${accuser}, look at my actions — I've been helping the team.||${s}：${accuser}，看看我的行為，我一直在幫大家。`,
     (s, accuser) => `${s}: ${accuser}, if I was the killer, why would I speak up?||${s}：${accuser}，如果我是殺手，我為什麼要發言？`,
     (s, accuser) => `${s}: ${accuser}, stop pointing fingers without evidence!||${s}：${accuser}，沒證據別亂指！`,
     (s, accuser) => `${s}: ${accuser}, you're deflecting — maybe YOU should be investigated.||${s}：${accuser}，你在轉移焦點吧？也許該查的是你。`,
@@ -393,7 +393,7 @@ export const LAST_WORDS_TEMPLATES = {
   ],
   blueGeneral: [
     (name) => `Don't trust the quiet ones...||別相信那些沉默的人⋯`,
-    (name) => `Think about who voted for me.||想想誰投了我。`,
+    (name) => `Think carefully about who you trust.||想清楚你們該信任誰。`,
     (name) => `The truth will come out.||真相會大白的。`,
     (name) => `I did my best for the team.||我為大家盡力了。`,
   ],
