@@ -676,10 +676,7 @@ wss.on("connection", (ws, req) => {
           }
           // Role-specific targeting rules (mirror single-player restrictions).
           const tid = msg.action.targetId;
-          if (actor.role === "KILLER" && t.faction === "RED") {
-            send(ws, { type: "error", message: "Cannot target your own faction." });
-            return;
-          }
+          // Killers can target anyone including red allies (game design allows friendly fire)
           if (actor.role === "POLICE" && t.role === "POLICE") {
             send(ws, { type: "error", message: "Cannot investigate fellow police." });
             return;
