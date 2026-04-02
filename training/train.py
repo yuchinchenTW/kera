@@ -352,14 +352,26 @@ class MAPPOTrainer:
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.policy.load_state_dict(ckpt["policy_state_dict"])
         self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-        # Override LR with command-line value (optimizer state restores old LR)
-        for pg in self.optimizer.param_groups:
-            pg["lr"] = self.args.lr
         self.total_steps = ckpt.get("total_steps", 0)
         self.total_updates = ckpt.get("total_updates", 0)
         self.total_games = ckpt.get("total_games", 0)
-        # Rebuild scheduler for remaining updates (no fast-forward needed)
-        self._init_scheduler()
+        # Compute where cosine schedule should be and set LR accordingly
+        args = self.args
+        total_updates = args.steps // (args.rollout_steps * args.num_envs)
+        remaining_updates = max(total_updates - self.total_updates, 1)
+        elapsed_updates = total_updates - remaining_updates
+        # Cosine annealing: lr = lr_min + 0.5*(lr_max - lr_min)*(1 + cos(pi * t / T))
+        import math
+        cosine_lr = args.lr_min + 0.5 * (args.lr - args.lr_min) * (
+            1 + math.cos(math.pi * elapsed_updates / total_updates)
+        )
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = cosine_lr
+        # Build scheduler for remaining updates from current LR
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=remaining_updates, eta_min=args.lr_min
+        )
+        self._lr_scheduler_initialized = True
         print(f"Resumed from: {path}")
         print(f"  Steps: {self.total_steps:,} | Updates: {self.total_updates} | Games: {self.total_games:,}")
         print(f"  LR: {self.optimizer.param_groups[0]['lr']:.6f}")
