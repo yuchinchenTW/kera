@@ -355,19 +355,13 @@ class MAPPOTrainer:
         self.total_steps = ckpt.get("total_steps", 0)
         self.total_updates = ckpt.get("total_updates", 0)
         self.total_games = ckpt.get("total_games", 0)
-        # Compute where cosine schedule should be and set LR accordingly
+        # Resume LR: use args.lr as starting point, cosine decay over remaining updates
         args = self.args
-        total_updates = args.steps // (args.rollout_steps * args.num_envs)
-        remaining_updates = max(total_updates - self.total_updates, 1)
-        elapsed_updates = total_updates - remaining_updates
-        # Cosine annealing: lr = lr_min + 0.5*(lr_max - lr_min)*(1 + cos(pi * t / T))
-        import math
-        cosine_lr = args.lr_min + 0.5 * (args.lr - args.lr_min) * (
-            1 + math.cos(math.pi * elapsed_updates / total_updates)
+        remaining_updates = max(
+            args.steps // (args.rollout_steps * args.num_envs) - self.total_updates, 1
         )
         for pg in self.optimizer.param_groups:
-            pg["lr"] = cosine_lr
-        # Build scheduler for remaining updates from current LR
+            pg["lr"] = args.lr
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=remaining_updates, eta_min=args.lr_min
         )
