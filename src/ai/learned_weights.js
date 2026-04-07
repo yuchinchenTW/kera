@@ -7,42 +7,42 @@
 export const LEARNED_WEIGHTS = {
   "SNIPER": {
     "night": {
-      "inverseSusp": 0.58416,
-      "policeProb": 0.584546,
+      "inverseSusp": 0.552736,
+      "policeProb": 0.664105,
       "speakRatio": 0.0,
-      "protectedPenalty": 0.165094,
-      "grudgeAvoid": 0.135054
+      "protectedPenalty": 0.123592,
+      "grudgeAvoid": 0.116921
     }
   },
   "DOCTOR": {
     "night": {
-      "policeProb": 0.063435,
-      "blueProb": 0.35101,
+      "policeProb": -0.491551,
+      "blueProb": -0.823509,
       "speakRatio": 0.0,
-      "votePressure": -0.002846
+      "votePressure": -0.002132
     }
   },
   "POLICE": {
     "night": {
-      "killerProb": -0.211908,
-      "sniperProb": -0.229884,
-      "kidnapProb": -0.355916,
-      "redProb": 0.028702,
+      "killerProb": 0.098899,
+      "sniperProb": -0.014834,
+      "kidnapProb": -0.054691,
+      "redProb": 0.035761,
       "silentRedLean": 0.0,
-      "votePressure": 0.002232,
-      "voteTogether": 0.005607
+      "votePressure": -0.005125,
+      "voteTogether": 0.008024
     }
   },
   "KILLER": {
     "night": {
-      "policeProb": 0.130013,
-      "doctorProb": 1.638513,
-      "agentProb": 0.083712,
+      "policeProb": 0.351471,
+      "doctorProb": -0.86688,
+      "agentProb": 0.123465,
       "speakRatio": 0.0,
-      "suspicion": 0.612114,
-      "votePressure": -0.006528,
+      "suspicion": 0.417544,
+      "votePressure": -0.004951,
       "theyAccusedMe": 0.0,
-      "voteTogether": -0.00199
+      "voteTogether": -0.005675
     }
   }
 };
