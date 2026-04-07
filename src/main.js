@@ -428,16 +428,16 @@ function actionChoicesForHuman(human) {
   }
 }
 
-function resolveNightAction() {
+async function resolveNightAction() {
   const human = engine.human();
   if (!human?.alive) {
-    engine.resolveNight(null);
+    await engine.resolveNight(null);
     render();
     return;
   }
   const actionType = el.nightActionType.value;
   if (!actionType) {
-    engine.resolveNight(null);
+    await engine.resolveNight(null);
     render();
     return;
   }
@@ -448,18 +448,18 @@ function resolveNightAction() {
   const targetId = needsTarget && targetVal ? Number(targetVal) : null;
   const action = { type: actionType };
   if (targetId !== null) action.targetId = targetId;
-  engine.resolveNight(action);
+  await engine.resolveNight(action);
   render();
 }
 
-function resolveVoteAction() {
+async function resolveVoteAction() {
   const val = el.voteTarget.value;
   const human = engine.human();
   let targetId = val ? Number(val) : null;
   if (human.role === Roles.BRAT.id && human.status.bratRevived) {
     targetId = null;
   }
-  engine.resolveVote(targetId, el.lastWordsInput.value);
+  await engine.resolveVote(targetId, el.lastWordsInput.value);
   el.lastWordsInput.value = "";
   render();
 }

@@ -191,7 +191,7 @@ function handleResetAll(msg) {
   return { ok: true, games };
 }
 
-function stepNightOne(engine, actions) {
+async function stepNightOne(engine, actions) {
   const state = engine.state;
   const externalActions = [];
   for (const a of actions) {
@@ -199,7 +199,7 @@ function stepNightOne(engine, actions) {
     const action = rlActionToNightAction(state, a.actorId, a.targetId);
     if (action) externalActions.push(action);
   }
-  engine.resolveNight(null, { includeHuman: true, humanActions: externalActions });
+  await engine.resolveNight(null, { includeHuman: true, humanActions: externalActions });
 
   if (!state.victory && state.phase === Phase.DAY) {
     injectRlChat(state, actions);
@@ -212,7 +212,7 @@ function stepNightOne(engine, actions) {
   }
 }
 
-function stepVoteOne(engine, actions) {
+async function stepVoteOne(engine, actions) {
   const state = engine.state;
   // Don't inject chat during vote — chat only happens once per day (in stepNightOne)
   const externalVotes = [];
@@ -222,10 +222,10 @@ function stepVoteOne(engine, actions) {
       externalVotes.push({ actorId: a.actorId, targetId: a.targetId });
     }
   }
-  engine.resolveVote(null, "", { includeHuman: true, humanVotes: externalVotes });
+  await engine.resolveVote(null, "", { includeHuman: true, humanVotes: externalVotes });
 }
 
-function handleStepRound(msg) {
+async function handleStepRound(msg) {
   // Night + Vote in one IPC call
   const gameInputs = msg.games || [];
   const results = [];
@@ -238,20 +238,20 @@ function handleStepRound(msg) {
     const input = gameInputs[g] || {};
 
     // Night
-    stepNightOne(engine, input.nightActions || []);
+    await stepNightOne(engine, input.nightActions || []);
     if (engine.state.victory) {
       results.push(buildGameResponse(engine));
       continue;
     }
 
     // Vote
-    stepVoteOne(engine, input.voteActions || []);
+    await stepVoteOne(engine, input.voteActions || []);
     results.push(buildGameResponse(engine));
   }
   return { ok: true, games: results };
 }
 
-function handleStepNight(msg) {
+async function handleStepNight(msg) {
   const gameInputs = msg.games || [];
   const results = [];
   for (let g = 0; g < engines.length; g++) {
@@ -260,13 +260,13 @@ function handleStepNight(msg) {
       results.push(engine ? buildGameResponse(engine) : { done: true });
       continue;
     }
-    stepNightOne(engine, (gameInputs[g] || {}).actions || []);
+    await stepNightOne(engine, (gameInputs[g] || {}).actions || []);
     results.push(buildGameResponse(engine));
   }
   return { ok: true, games: results };
 }
 
-function handleStepVote(msg) {
+async function handleStepVote(msg) {
   const gameInputs = msg.games || [];
   const results = [];
   for (let g = 0; g < engines.length; g++) {
@@ -275,7 +275,7 @@ function handleStepVote(msg) {
       results.push(engine ? buildGameResponse(engine) : { done: true });
       continue;
     }
-    stepVoteOne(engine, (gameInputs[g] || {}).actions || []);
+    await stepVoteOne(engine, (gameInputs[g] || {}).actions || []);
     results.push(buildGameResponse(engine));
   }
   return { ok: true, games: results };
@@ -289,15 +289,15 @@ function handleLegacyReset(msg) {
   return { ok: true, ...resp, roles: state.players.map(p => p.role), factions: state.players.map(p => p.faction), seed: msg.seed };
 }
 
-function handleLegacyStepNight(msg) {
+async function handleLegacyStepNight(msg) {
   if (!engines[0]) return { ok: false, error: "No game" };
-  stepNightOne(engines[0], msg.actions || []);
+  await stepNightOne(engines[0], msg.actions || []);
   return { ok: true, ...buildGameResponse(engines[0]) };
 }
 
-function handleLegacyStepVote(msg) {
+async function handleLegacyStepVote(msg) {
   if (!engines[0]) return { ok: false, error: "No game" };
-  stepVoteOne(engines[0], msg.actions || []);
+  await stepVoteOne(engines[0], msg.actions || []);
   return { ok: true, ...buildGameResponse(engines[0]) };
 }
 
@@ -305,7 +305,7 @@ function handleLegacyStepVote(msg) {
 
 const rl = createInterface({ input: process.stdin });
 
-rl.on("line", (line) => {
+rl.on("line", async (line) => {
   let msg;
   try { msg = JSON.parse(line.trim()); } catch (e) {
     process.stdout.write(JSON.stringify({ ok: false, error: "Invalid JSON" }) + "\n");
@@ -317,13 +317,13 @@ rl.on("line", (line) => {
     switch (msg.cmd) {
       case "init":       response = handleInit(msg); break;
       case "reset_all":  response = handleResetAll(msg); break;
-      case "step_round": response = handleStepRound(msg); break;
-      case "step_night_batch": response = handleStepNight(msg); break;
-      case "step_vote_batch":  response = handleStepVote(msg); break;
+      case "step_round": response = await handleStepRound(msg); break;
+      case "step_night_batch": response = await handleStepNight(msg); break;
+      case "step_vote_batch":  response = await handleStepVote(msg); break;
       // Legacy single-game commands
       case "reset":      response = handleLegacyReset(msg); break;
-      case "step_night": response = handleLegacyStepNight(msg); break;
-      case "step_vote":  response = handleLegacyStepVote(msg); break;
+      case "step_night": response = await handleLegacyStepNight(msg); break;
+      case "step_vote":  response = await handleLegacyStepVote(msg); break;
       case "get_info":   response = { ok: true, numGames: engines.length }; break;
       case "quit":       process.exit(0); break;
       default:           response = { ok: false, error: `Unknown: ${msg.cmd}` };

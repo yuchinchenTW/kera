@@ -17,28 +17,16 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
 
   // ── Neural AI path: use trained ONNX model for vote decisions ──
   if (hard && isNeuralModelLoaded()) {
+    // Only run neural inference for AI players (not human)
     const aiPlayerIds = alivePlayers(state)
-      .filter((p) => !p.isHuman || includeHuman)
+      .filter((p) => !p.isHuman)
       .map((p) => p.id);
 
     const neuralResults = await neuralInfer(state, aiPlayerIds, "VOTE");
     neuralInjectChat(state, neuralResults);
-    const neuralVotes = neuralToVoteActions(state, neuralResults);
 
-    // Merge human votes
-    const humanActorIds = new Set();
-    for (const [actorIdStr, targetId] of Object.entries(humanVoteDist)) {
-      const actorId = Number(actorIdStr);
-      if (typeof targetId === "number") {
-        neuralVotes.push({ actorId, targetId });
-        humanActorIds.add(actorId);
-      }
-    }
-    return neuralVotes.filter((v, i, arr) =>
-      humanActorIds.has(v.actorId)
-        ? arr.findIndex((x) => x.actorId === v.actorId) === i
-        : true
-    );
+    // Return only AI votes — engine.resolveVote adds human votes separately
+    return neuralToVoteActions(state, neuralResults);
   }
 
   const chatMentions = {};

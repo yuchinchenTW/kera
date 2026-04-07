@@ -5,21 +5,30 @@
  * Falls back to heuristic AI if model is not loaded.
  */
 
-import * as ort from "onnxruntime-node";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
 import { alivePlayers, getPlayer } from "../state.js";
 import { encodeObservation, buildActionMask, ROLE_IDS } from "../../training/state_encoder.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_MODEL_PATH = join(__dirname, "../../training/mafia_policy.onnx");
-
 // ─── Singleton session ──────────────────────────────────────────────────────
 
+let ort = null;
 let session = null;
 
 export async function loadNeuralModel(path) {
-  path = path || DEFAULT_MODEL_PATH;
+  // Dynamic import: onnxruntime-node is Node.js-only, unavailable in browser
+  try {
+    ort = await import("onnxruntime-node");
+  } catch {
+    console.warn("[Neural AI] onnxruntime-node not available (browser environment?)");
+    return false;
+  }
+
+  if (!path) {
+    const { fileURLToPath } = await import("url");
+    const { dirname, join } = await import("path");
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    path = join(__dirname, "../../training/mafia_policy.onnx");
+  }
+
   try {
     session = await ort.InferenceSession.create(path, {
       executionProviders: ["cpu"],

@@ -201,7 +201,7 @@ const RED_KILL_CAUSES = new Set([
 
 // ─── Single Game Runner ─────────────────────────────────────────────────────
 
-function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
+async function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   const engine = new GameEngine(seed, theme, difficulty, { allAi: true });
 
   let safety = 200;
@@ -225,7 +225,7 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   let roundNum = 0;
   while (!engine.state.victory && safety-- > 0) {
     roundNum++;
-    engine.resolveNight(null, { includeHuman: true });
+    await engine.resolveNight(null, { includeHuman: true });
 
     // All event counts are read from engine structural counters (state.usage)
     // — no string parsing needed.
@@ -253,7 +253,7 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
     aliveCurve.push(engine.state.players.filter((p) => p.alive).length);
 
     const aliveBefore = engine.state.players.filter((p) => p.alive).length;
-    engine.resolveVote(null, "", { includeHuman: true });
+    await engine.resolveVote(null, "", { includeHuman: true });
     const aliveAfter = engine.state.players.filter((p) => p.alive).length;
     totalVoteRounds++;
     if (aliveBefore === aliveAfter) {
@@ -354,6 +354,7 @@ function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
 // ─── Worker Thread Logic ────────────────────────────────────────────────────
 
 if (!isMainThread) {
+  (async () => {
   // Worker: run assigned game range and return aggregated stats
   const { startIdx, endIdx, baseSeed, theme, difficulty } = workerData;
 
@@ -394,7 +395,7 @@ if (!isMainThread) {
 
   for (let i = startIdx; i < endIdx; i++) {
     const seed = baseSeed + hashSeed(i);
-    const result = runOne(seed, theme, difficulty);
+    const result = await runOne(seed, theme, difficulty);
     const { victory, dayNumber, playerResults, timedOut } = result;
 
     completed++;
@@ -481,6 +482,7 @@ if (!isMainThread) {
     },
   });
   process.exit(0);
+  })();
 }
 
 // ─── Multi-threaded Batch Simulator ─────────────────────────────────────────
@@ -521,18 +523,17 @@ function emptyStats() {
   return s;
 }
 
-function simulateGames(count, theme, difficulty, { L }) {
+async function simulateGames(count, theme, difficulty, { L }) {
   const numThreads = Math.min(cpus().length, count);
 
-  return new Promise((resolve) => {
-    if (numThreads <= 1) {
-      // Fallback to single-threaded for very small counts
-      const baseSeed = cliSeed ?? Date.now();
-      let acc = emptyStats();
+  if (numThreads <= 1) {
+    // Fallback to single-threaded for very small counts
+    const baseSeed = cliSeed ?? Date.now();
+    let acc = emptyStats();
 
-      for (let i = 0; i < count; i++) {
-        const seed = baseSeed + hashSeed(i);
-        const result = runOne(seed, theme, difficulty);
+    for (let i = 0; i < count; i++) {
+      const seed = baseSeed + hashSeed(i);
+      const result = await runOne(seed, theme, difficulty);
         const { victory, dayNumber, playerResults, timedOut } = result;
 
         if (timedOut) { acc.timeouts++; continue; }
@@ -598,11 +599,11 @@ function simulateGames(count, theme, difficulty, { L }) {
         }
       }
 
-      resolve(acc);
-      return;
-    }
+    return acc;
+  }
 
-    // Multi-threaded
+  // Multi-threaded
+  return new Promise((resolve) => {
     const baseSeed = cliSeed ?? Date.now();
     const chunkSize = Math.ceil(count / numThreads);
     let completedGames = 0;

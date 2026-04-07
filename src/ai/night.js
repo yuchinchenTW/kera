@@ -18,34 +18,16 @@ export async function buildAiNightActions(state, opts = {}) {
 
   // ── Neural AI path: use trained ONNX model for all AI decisions ──
   if (hard && isNeuralModelLoaded()) {
+    // Only run neural inference for AI players (not human)
     const aiPlayerIds = alivePlayers(state)
-      .filter((p) => !p.isHuman || includeHuman)
+      .filter((p) => !p.isHuman)
       .map((p) => p.id);
-
-    // Collect human actions to pass through
-    const humanActionList = [];
-    if (Array.isArray(humanActionsRaw)) {
-      for (const a of humanActionsRaw) {
-        if (a && typeof a.actorId === "number") humanActionList.push(a);
-      }
-    } else if (humanActionsRaw && typeof humanActionsRaw === "object") {
-      for (const [actorIdStr, a] of Object.entries(humanActionsRaw)) {
-        if (!a) continue;
-        const actorId = a.actorId ?? Number(actorIdStr);
-        humanActionList.push({ ...a, actorId });
-      }
-    }
 
     const neuralResults = await neuralInfer(state, aiPlayerIds, "NIGHT");
     const neuralActions = neuralToNightActions(state, neuralResults);
 
-    // Merge human actions with neural actions
-    const humanActorIds = new Set(humanActionList.map((a) => a.actorId));
-    const merged = [
-      ...humanActionList,
-      ...neuralActions.filter((a) => !humanActorIds.has(a.actorId)),
-    ];
-    return merged;
+    // Return only AI actions — engine.resolveNight adds human actions separately
+    return neuralActions;
   }
 
   const actions = [];

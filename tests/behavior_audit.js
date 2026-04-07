@@ -55,6 +55,7 @@ const stats = {
   nonKillerRedDefendedKillerByRole: 0,
 };
 
+(async () => {
 for (let seed = 1; seed <= GAMES; seed++) {
   const e = new GameEngine(seed, "GOOD_VS_EVIL", "hard");
   let lastDoctorTarget = {};
@@ -67,7 +68,7 @@ for (let seed = 1; seed <= GAMES; seed++) {
     // Capture state before night
     const aliveBeforeNight = e.state.players.filter((p) => p.alive).map((p) => p.id);
 
-    e.resolveNight({});
+    await e.resolveNight({});
     if (e.state.phase === "END") break;
 
     // ─ Analyze night actions from publicLog + state ─
@@ -146,7 +147,7 @@ for (let seed = 1; seed <= GAMES; seed++) {
     const revealedRedBefore = e.state.policeRevealedRed;
     const revealedRedPlayer = revealedRedBefore !== null ? e.state.players[revealedRedBefore] : null;
 
-    e.resolveVote(null);
+    await e.resolveVote(null);
     if (e.state.phase === "END") break;
 
     // Analyze votes from history
@@ -341,3 +342,4 @@ if (issues.length === 0) {
   }
   if (issues.length > 30) console.log(`  ... and ${issues.length - 30} more`);
 }
+})();

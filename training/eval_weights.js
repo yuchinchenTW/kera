@@ -61,14 +61,14 @@ async function injectWeights(flatWeights) {
 
 // ─── Run Simulation ───────────────────────────────────────────────────────────
 
-function runOne(seed) {
+async function runOne(seed) {
   const engine = new GameEngine(seed, theme, difficulty, { allAi: true });
   let safety = 200;
 
   while (!engine.state.victory && safety-- > 0) {
-    engine.resolveNight(null, { includeHuman: true });
+    await engine.resolveNight(null, { includeHuman: true });
     if (engine.state.victory) break;
-    engine.resolveVote(null, "", { includeHuman: true });
+    await engine.resolveVote(null, "", { includeHuman: true });
   }
 
   const v = engine.state.victory;
@@ -104,7 +104,7 @@ async function main() {
 
   for (let i = 0; i < numGames; i++) {
     const seed = 50000 + i; // fixed seeds for reproducibility
-    const result = runOne(seed);
+    const result = await runOne(seed);
     wins[result.winner] = (wins[result.winner] || 0) + 1;
     days.push(result.day);
     totalDoctorSaves += result.usage?.doctorSaves || 0;
