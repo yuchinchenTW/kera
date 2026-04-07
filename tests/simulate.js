@@ -60,11 +60,15 @@ Arguments:
   difficulty  easy | normal | hard | nightmare (default: normal)
 
 Flags:
-  --compare   Run all 4 difficulties side-by-side
-  --json      Output raw stats as JSON (no formatting)
-  --zh        Output in Chinese
-  --seed=N    Fixed seed for reproducible results (default: Date.now())
-  --help      Show this help
+  --compare        Run all 4 difficulties side-by-side
+  --json           Output raw stats as JSON (no formatting)
+  --zh             Output in Chinese
+  --seed=N         Fixed seed for reproducible results (default: Date.now())
+  --neural         All AI uses ONNX neural network (single-threaded)
+  --neural-red     Only RED faction uses neural network, BLUE uses heuristic
+  --neural-blue    Only BLUE faction uses neural network, RED uses heuristic
+  --neural=PATH    Specify custom ONNX model path (also works with -red/-blue)
+  --help           Show this help
 
 Examples:
   node tests/simulate.js 500 GOOD_VS_EVIL hard
@@ -72,6 +76,8 @@ Examples:
   node tests/simulate.js 100 GOOD_VS_EVIL hard --json
   node tests/simulate.js 200 GOOD_VS_EVIL hard --zh
   node tests/simulate.js 100 GOOD_VS_EVIL hard --seed=12345
+  node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-red
+  node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-red=training/mafia_policy.onnx
 `,
   },
   zh: {
@@ -149,11 +155,15 @@ Examples:
   難度        easy | normal | hard | nightmare（預設：normal）
 
 選項：
-  --compare   比較所有 4 種難度
-  --json      輸出 JSON 格式
-  --zh        中文輸出
-  --seed=N    固定種子以重現結果（預設：Date.now()）
-  --help      顯示說明
+  --compare        比較所有 4 種難度
+  --json           輸出 JSON 格式
+  --zh             中文輸出
+  --seed=N         固定種子以重現結果（預設：Date.now()）
+  --neural         全部 AI 使用 ONNX 神經網路（單線程）
+  --neural-red     僅紅方使用神經網路，藍方使用啟發式
+  --neural-blue    僅藍方使用神經網路，紅方使用啟發式
+  --neural=路徑    指定 ONNX 模型路徑（也可搭配 -red/-blue）
+  --help           顯示說明
 
 範例：
   node tests/simulate.js 500 GOOD_VS_EVIL hard
@@ -161,6 +171,8 @@ Examples:
   node tests/simulate.js 100 GOOD_VS_EVIL hard --json
   node tests/simulate.js 200 GOOD_VS_EVIL hard --zh
   node tests/simulate.js 100 GOOD_VS_EVIL hard --seed=12345
+  node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-red
+  node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-red=training/mafia_policy.onnx
 `,
   },
 };
@@ -221,7 +233,6 @@ async function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal"
   let greenVotedBlue = 0; // green voter voted to kill blue
   let greenVotedGreen = 0; // green voter voted to kill green
   let zombieConversions = 0;
-  let kidnaps = 0;
   const deathCauseCounts = {}; // deathCause -> count
   const aliveCurve = [];  // alive count at start of each day
   const firstNightKills = []; // roles killed on night 1
@@ -343,7 +354,7 @@ async function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal"
     agentBlocks: u.agentBlocks || 0,
     totalVoteRounds, noExecutionRounds,
     correctVoteKills, totalVoteKills, zombieConversions,
-    kidnaps,
+    kidnaps: deathCauseCounts["KIDNAP_EXECUTION"] || 0,
     arsonMarks: u.arsonMarks || 0,
     cowboyShots: u.cowboyShots || 0,
     cowboyHits: u.cowboyHits || 0,
