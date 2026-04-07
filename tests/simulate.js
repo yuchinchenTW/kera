@@ -204,6 +204,10 @@ const RED_KILL_CAUSES = new Set([
 async function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
   const engine = new GameEngine(seed, theme, difficulty, { allAi: true });
 
+  // Set which factions use neural AI (null = all, array = specific factions)
+  if (neuralRedOnly) engine.state.neuralFactions = ["RED"];
+  else if (neuralBlueOnly) engine.state.neuralFactions = ["BLUE"];
+
   let safety = 200;
   let totalVoteRounds = 0;
   let noExecutionRounds = 0;
@@ -686,8 +690,10 @@ if (args.includes("--help") || args.includes("-h")) {
 const zhMode = args.includes("--zh");
 const jsonMode = args.includes("--json");
 const compareMode = args.includes("--compare");
-const neuralMode = args.includes("--neural");
-const neuralArg = args.find((a) => a.startsWith("--neural="));
+const neuralRedOnly = args.some((a) => a === "--neural-red" || a.startsWith("--neural-red="));
+const neuralBlueOnly = args.some((a) => a === "--neural-blue" || a.startsWith("--neural-blue="));
+const neuralMode = args.some((a) => a === "--neural" || a.startsWith("--neural=")) || neuralRedOnly || neuralBlueOnly;
+const neuralArg = args.find((a) => a.startsWith("--neural=") || a.startsWith("--neural-red=") || a.startsWith("--neural-blue="));
 const neuralPath = neuralArg ? neuralArg.split("=")[1] : null;
 const seedArg = args.find((a) => a.startsWith("--seed="));
 const cliSeed = seedArg ? Number(seedArg.split("=")[1]) : null;
@@ -701,11 +707,15 @@ const { id: theme, matched: themeMatched } = themeArg
   : { id: Theme.GOOD_VS_EVIL.id, matched: false };
 const difficulty = positional[2] || (!themeArg || themeMatched ? "normal" : themeArg);
 
-const numThreads = Math.min(cpus().length, count);
+const numThreads = neuralMode ? 1 : Math.min(cpus().length, count);
 
 if (!jsonMode) {
   console.log(`\n${"═".repeat(60)}`);
   console.log(`  ${L.simulating(count, theme, L.diffName[difficulty] || difficulty)}`);
+  if (neuralMode) {
+    const mode = neuralRedOnly ? "RED only" : neuralBlueOnly ? "BLUE only" : "all factions";
+    console.log(`  [Neural AI] ${mode}${neuralPath ? ` (${neuralPath})` : ""}`);
+  }
   console.log(`  ${L.threads(numThreads)}`);
   console.log(`${"═".repeat(60)}\n`);
 }

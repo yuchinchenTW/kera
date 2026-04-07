@@ -16,17 +16,28 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
   ensureBeliefs(state);
 
   // ── Neural AI path: use trained ONNX model (GOOD_VS_EVIL only) ──
-  if (hard && isNeuralModelLoaded() && state.theme === "GOOD_VS_EVIL") {
-    // Only run neural inference for AI players (not human)
-    const aiPlayerIds = alivePlayers(state)
-      .filter((p) => !p.isHuman)
+  const neuralFactions = state.neuralFactions || null;
+  const useNeural = hard && isNeuralModelLoaded() && state.theme === "GOOD_VS_EVIL";
+  let neuralActorIds = new Set();
+  const neuralVoteResults = [];
+
+  if (useNeural) {
+    const neuralPlayerIds = alivePlayers(state)
+      .filter((p) => !p.isHuman && (!neuralFactions || neuralFactions.includes(p.faction)))
       .map((p) => p.id);
 
-    const neuralResults = await neuralInfer(state, aiPlayerIds, "VOTE");
-    neuralInjectChat(state, neuralResults);
+    if (neuralPlayerIds.length > 0) {
+      const neuralResults = await neuralInfer(state, neuralPlayerIds, "VOTE");
+      neuralInjectChat(state, neuralResults);
+      const neuralVotes = neuralToVoteActions(state, neuralResults);
+      // Mark ALL neural players as handled (including those who chose abstain)
+      neuralActorIds = new Set(neuralPlayerIds);
 
-    // Return only AI votes — engine.resolveVote adds human votes separately
-    return neuralToVoteActions(state, neuralResults);
+      if (!neuralFactions) {
+        return neuralVotes;
+      }
+      neuralVoteResults.push(...neuralVotes);
+    }
   }
 
   const chatMentions = {};
@@ -57,9 +68,10 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
   // Hard+: behavioral analysis for vote scoring
   const votePatterns = hard ? analyzeVotingPatterns(state) : null;
 
-  const votes = [];
+  const votes = [...neuralVoteResults];
   const aiVoters = alivePlayers(state).filter(
     (p) => (includeHuman || !p.isHuman) && !(p.role === Roles.BRAT.id && p.status.bratRevived)
+      && !neuralActorIds.has(p.id) // skip players already handled by neural
   );
   const randomVoteChance = { easy: 0.8, normal: 0.6, hard: 0.2, nightmare: 0.05 };
   const chaosVoteChance = randomVoteChance[state.difficulty || "normal"] ?? 0.6;
