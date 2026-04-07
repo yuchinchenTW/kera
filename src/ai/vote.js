@@ -15,8 +15,8 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
   const hard = isHard(state);
   ensureBeliefs(state);
 
-  // ── Neural AI path: use trained ONNX model for vote decisions ──
-  if (hard && isNeuralModelLoaded()) {
+  // ── Neural AI path: use trained ONNX model (GOOD_VS_EVIL only) ──
+  if (hard && isNeuralModelLoaded() && state.theme === "GOOD_VS_EVIL") {
     // Only run neural inference for AI players (not human)
     const aiPlayerIds = alivePlayers(state)
       .filter((p) => !p.isHuman)
