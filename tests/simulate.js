@@ -213,12 +213,11 @@ const RED_KILL_CAUSES = new Set([
 
 // ─── Single Game Runner ─────────────────────────────────────────────────────
 
-async function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal") {
+async function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal", opts = {}) {
   const engine = new GameEngine(seed, theme, difficulty, { allAi: true });
 
   // Set which factions use neural AI (null = all, array = specific factions)
-  if (neuralRedOnly) engine.state.neuralFactions = ["RED"];
-  else if (neuralBlueOnly) engine.state.neuralFactions = ["BLUE"];
+  if (opts.neuralFactions) engine.state.neuralFactions = opts.neuralFactions;
 
   let safety = 200;
   let totalVoteRounds = 0;
@@ -371,7 +370,7 @@ async function runOne(seed, theme = Theme.GOOD_VS_EVIL.id, difficulty = "normal"
 if (!isMainThread) {
   (async () => {
   // Worker: run assigned game range and return aggregated stats
-  const { startIdx, endIdx, baseSeed, theme, difficulty } = workerData;
+  const { startIdx, endIdx, baseSeed, theme, difficulty, neuralFactions } = workerData;
 
   const tally = {};
   const roleSeen = {};
@@ -410,7 +409,7 @@ if (!isMainThread) {
 
   for (let i = startIdx; i < endIdx; i++) {
     const seed = baseSeed + hashSeed(i);
-    const result = await runOne(seed, theme, difficulty);
+    const result = await runOne(seed, theme, difficulty, { neuralFactions });
     const { victory, dayNumber, playerResults, timedOut } = result;
 
     completed++;
@@ -538,17 +537,18 @@ function emptyStats() {
   return s;
 }
 
-async function simulateGames(count, theme, difficulty, { L }) {
-  const numThreads = (neuralMode || neuralArg) ? 1 : Math.min(cpus().length, count);
+async function simulateGames(count, theme, difficulty, { L, neuralMode: _neuralMode, neuralRedOnly: _neuralRedOnly, neuralBlueOnly: _neuralBlueOnly, cliSeed: _cliSeed }) {
+  const numThreads = _neuralMode ? 1 : Math.min(cpus().length, count);
 
   if (numThreads <= 1) {
     // Fallback to single-threaded for very small counts
-    const baseSeed = cliSeed ?? Date.now();
+    const baseSeed = _cliSeed ?? Date.now();
     let acc = emptyStats();
 
+    const neuralFactions = _neuralRedOnly ? ["RED"] : _neuralBlueOnly ? ["BLUE"] : null;
     for (let i = 0; i < count; i++) {
       const seed = baseSeed + hashSeed(i);
-      const result = await runOne(seed, theme, difficulty);
+      const result = await runOne(seed, theme, difficulty, { neuralFactions });
         const { victory, dayNumber, playerResults, timedOut } = result;
 
         if (timedOut) { acc.timeouts++; continue; }
@@ -619,7 +619,7 @@ async function simulateGames(count, theme, difficulty, { L }) {
 
   // Multi-threaded
   return new Promise((resolve) => {
-    const baseSeed = cliSeed ?? Date.now();
+    const baseSeed = _cliSeed ?? Date.now();
     const chunkSize = Math.ceil(count / numThreads);
     let completedGames = 0;
     let finishedWorkers = 0;
@@ -631,8 +631,9 @@ async function simulateGames(count, theme, difficulty, { L }) {
       const endIdx = Math.min(startIdx + chunkSize, count);
       if (startIdx >= count) break;
 
+      const neuralFactions = _neuralRedOnly ? ["RED"] : _neuralBlueOnly ? ["BLUE"] : null;
       const worker = new Worker(workerFile, {
-        workerData: { startIdx, endIdx, baseSeed, theme, difficulty },
+        workerData: { startIdx, endIdx, baseSeed, theme, difficulty, neuralFactions },
       });
 
       worker.on("message", (msg) => {
@@ -688,7 +689,9 @@ function bar(ratio, width = 20) {
   return "█".repeat(filled) + "░".repeat(width - filled);
 }
 
-// ─── Main ───────────────────────────────────────────────────────────────────
+// ─── Main (only runs on main thread) ────────────────────────────────────────
+
+if (!isMainThread) { /* worker logic handled above */ } else {
 
 const args = process.argv.slice(2);
 if (args.includes("--help") || args.includes("-h")) {
@@ -742,7 +745,7 @@ async function main() {
       process.exit(1);
     }
   }
-  const stats = await simulateGames(count, theme, difficulty, { L });
+  const stats = await simulateGames(count, theme, difficulty, { L, neuralMode, neuralRedOnly, neuralBlueOnly, cliSeed });
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   const total = Object.values(stats.tally).reduce((a, b) => a + b, 0);
   const days = stats.dayLengths;
@@ -939,7 +942,7 @@ async function main() {
     for (const diff of difficulties) {
       if (diff === difficulty) continue;
       const t1 = Date.now();
-      const s = await simulateGames(count, theme, diff, { L });
+      const s = await simulateGames(count, theme, diff, { L, neuralMode, neuralRedOnly, neuralBlueOnly, cliSeed });
       const dt = ((Date.now() - t1) / 1000).toFixed(1);
       const t = Object.values(s.tally).reduce((a, b) => a + b, 0);
       const avgD = s.dayLengths.length > 0 ? (s.dayLengths.reduce((a, b) => a + b, 0) / s.dayLengths.length).toFixed(1) : "0";
@@ -974,3 +977,5 @@ async function main() {
 }
 
 main();
+
+} // end isMainThread else
