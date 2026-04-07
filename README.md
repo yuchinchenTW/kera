@@ -19,14 +19,14 @@ npm start          # serves http://localhost:3001
 - Single-player (1 human + 17 AI) and WebSocket multiplayer (multiple humans, AI fills remaining seats and takes over on disconnect).
 - Fixed night/day cadence, majority/plurality daytime votes, private faction chats (day + night) with real-time ally action visibility.
 - Four AI difficulty levels with behavioral analysis, deception strategies, Bayesian belief systems, personality, role claiming, and emotional responses.
-- **Hard AI powered by trained neural network** — 650M-step MAPPO self-play policy served via ONNX Runtime, with automatic fallback to heuristic AI.
+- **Hard AI powered by trained neural network** — 650M-step MAPPO self-play policy served via ONNX Runtime (GOOD_VS_EVIL theme only), with automatic fallback to heuristic AI for other themes.
 
 ## 摘要（中文）
 - 18 人社交推理遊戲，多種主題角色組合。
 - 單人模式（1 人類 + 17 AI）與 WebSocket 多人模式（多名真人，AI 填補空位並在斷線時接管）。
 - 夜/日節奏固定，白天多數/最高票處決，陣營私聊（日夜皆有）即時同步隊友夜間行動。
 - 四種 AI 難度，含行為分析、欺騙策略、貝氏信念系統、個性系統、角色宣告、情緒反應。
-- **困難 AI 由訓練神經網路驅動** — 650M 步 MAPPO 自我對弈策略，透過 ONNX Runtime 推理，模型不存在時自動退回啟發式 AI。
+- **困難 AI 由訓練神經網路驅動** — 650M 步 MAPPO 自我對弈策略，透過 ONNX Runtime 推理（僅限正邪對決主題），其他主題或模型不存在時自動退回啟發式 AI。
 
 ## Project Structure / 專案結構
 
@@ -114,20 +114,22 @@ npm install && npm start
 
 所有 AI 決策皆為純演算法（不使用外部 LLM）。種子亂數確保可重現的遊戲結果。
 
-**困難模式（Hard）** 啟用時，若偵測到 ONNX 模型檔案（`training/mafia_policy.onnx`），會使用 **650M 步自我對弈訓練的神經網路**做所有 AI 決策（夜間行動 + 投票 + 聊天），100% 保留訓練成果。模型不存在時自動退回啟發式 AI，無需任何設定。
+**困難模式（Hard）** 啟用時，若偵測到 ONNX 模型檔案（`training/mafia_policy.onnx`）且遊戲主題為 **GOOD_VS_EVIL（正邪對決）**，會使用 **650M 步自我對弈訓練的神經網路**做所有 AI 決策（夜間行動 + 投票 + 聊天），100% 保留訓練成果。其他主題或模型不存在時自動退回啟發式 AI，無需任何設定。
 
 ### 難度等級 Difficulty Levels
 
 | 參數 Parameter | 簡單 Easy | 普通 Normal | 困難 Hard | 惡夢 Nightmare |
 |-----------|------|--------|------|-----------|
-| 決策引擎 Decision engine | 啟發式 | 啟發式 | **神經網路 (ONNX)** | **神經網路 (ONNX)** |
+| 決策引擎 Decision engine | 啟發式 | 啟發式 | **神經網路 (ONNX)** ¹ | **神經網路 (ONNX)** ¹ |
 | 嫌疑倍率 Suspicion scaling | 0.6x | 1.0x | 1.3x (fallback) | 1.6x (fallback) |
 | 隨機投票 Random voting | 80% | 60% | 20% (fallback) | 5% (fallback) |
 | 跟隨警察揭露 Follow police reveal | 50% | 70% | 95% (fallback) | 98% (fallback) |
 | 紅方欺騙 Red team deception | - | - | 有 Yes | 有 Yes |
 | 行為分析 Behavioral analysis | - | - | 有 Yes | 有 Yes |
 
-> 注意：當神經網路模型載入時，Hard/Nightmare 的所有 AI 決策由神經網路處理，上述啟發式參數僅在 fallback 模式生效。
+> ¹ 神經網路目前僅支援 GOOD_VS_EVIL（正邪對決）主題。其他主題的 Hard/Nightmare 使用啟發式 AI。
+> 
+> 注意：當神經網路模型載入且主題為 GOOD_VS_EVIL 時，Hard/Nightmare 的所有 AI 決策由神經網路處理，上述啟發式參數僅在 fallback 模式生效。
 
 ### 信念系統 Belief System
 每個 AI 維護一組貝氏機率分佈，涵蓋所有其他玩家可能的角色（`aiMemory.roleProbs`）。每回合根據可觀察的訊號更新：
@@ -318,6 +320,10 @@ node tests/simulate.js 100 --zh                      # 中文版結果輸出
 node tests/simulate.js 100 --zh --compare            # 中文版難度比較
 node tests/simulate.js 100 GOOD_VS_EVIL hard --seed=12345  # 固定種子重現結果
 node tests/simulate.js --help                        # 顯示所有選項及可用主題
+node tests/simulate.js 200 GOOD_VS_EVIL hard --neural      # 全部 AI 使用 ONNX 神經網路
+node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-red  # 紅方用神經網路，藍方用啟發式
+node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-blue # 藍方用神經網路，紅方用啟發式
+node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-red=training/mafia_policy.onnx  # 指定模型路徑
 node tests/behavior_audit.js                         # 250 場行為審計（行動/聊天/投票邏輯）
 ```
 
@@ -653,7 +659,8 @@ python training/train.py --resume training/checkpoints/policy_final.pt --steps 8
                            │
                     ┌──────▼───────────────────────┐
                     │  src/ai/neural.js (ONNX RT)  │
-                    │  Hard AI: 100% neural network │
+                    │  Hard AI: neural network      │
+                    │  (GOOD_VS_EVIL only)          │
                     │  Fallback: heuristic AI       │
                     └──────────────────────────────┘
 ```
