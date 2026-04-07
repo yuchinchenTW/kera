@@ -57,6 +57,7 @@ export function isNeuralModelLoaded() {
  */
 export async function neuralInfer(state, playerIds, phase) {
   if (!session || playerIds.length === 0) return [];
+  console.log(`[Neural AI] Inference: ${phase}, ${playerIds.length} players, day ${state.dayNumber || 1}`);
 
   const N = playerIds.length;
   const OBS_DIM = 1135;
