@@ -524,7 +524,7 @@ function emptyStats() {
 }
 
 async function simulateGames(count, theme, difficulty, { L }) {
-  const numThreads = Math.min(cpus().length, count);
+  const numThreads = (neuralMode || neuralArg) ? 1 : Math.min(cpus().length, count);
 
   if (numThreads <= 1) {
     // Fallback to single-threaded for very small counts
@@ -686,6 +686,9 @@ if (args.includes("--help") || args.includes("-h")) {
 const zhMode = args.includes("--zh");
 const jsonMode = args.includes("--json");
 const compareMode = args.includes("--compare");
+const neuralMode = args.includes("--neural");
+const neuralArg = args.find((a) => a.startsWith("--neural="));
+const neuralPath = neuralArg ? neuralArg.split("=")[1] : null;
 const seedArg = args.find((a) => a.startsWith("--seed="));
 const cliSeed = seedArg ? Number(seedArg.split("=")[1]) : null;
 const L = zhMode ? LANG.zh : LANG.en;
@@ -710,6 +713,14 @@ if (!jsonMode) {
 const t0 = Date.now();
 
 async function main() {
+  if (neuralMode || neuralArg) {
+    const { loadNeuralModel } = await import("../src/ai/neural.js");
+    const loaded = await loadNeuralModel(neuralPath);
+    if (!loaded) {
+      console.error("Failed to load neural model. Exiting.");
+      process.exit(1);
+    }
+  }
   const stats = await simulateGames(count, theme, difficulty, { L });
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   const total = Object.values(stats.tally).reduce((a, b) => a + b, 0);
