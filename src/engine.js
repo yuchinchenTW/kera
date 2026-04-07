@@ -112,7 +112,7 @@ export class GameEngine {
     }
   }
 
-  resolveNight(humanAction = null, opts = {}) {
+  async resolveNight(humanAction = null, opts = {}) {
     this.startNight();
     // Share grudge team info each night to their private channel.
     const grudgeTeam = alivePlayers(this.state).filter((p) => p.role === Roles.GRUDGE_BEAST.id);
@@ -132,7 +132,7 @@ export class GameEngine {
       }
     }
 
-    const actions = buildAiNightActions(this.state, {
+    const actions = await buildAiNightActions(this.state, {
       includeHuman: opts.includeHuman === true,
       humanChoice: humanAction,
       humanActions: opts.humanActions,
@@ -968,7 +968,7 @@ export class GameEngine {
     if (victory) this.state.phase = Phase.END;
   }
 
-  resolveVote(humanVoteTargetId = null, humanLastWords = "", opts = {}) {
+  async resolveVote(humanVoteTargetId = null, humanLastWords = "", opts = {}) {
     this.state.phase = Phase.VOTE;
     const votes = {};
     const votePairs = [];
@@ -1033,7 +1033,7 @@ export class GameEngine {
         humanVoteDist[hv.targetId] = (humanVoteDist[hv.targetId] || 0) + 1;
       }
     }
-    const aiVotes = buildAiVoteActions(this.state, null, { includeHuman: opts.includeHuman === true, humanVoteDist });
+    const aiVotes = await buildAiVoteActions(this.state, null, { includeHuman: opts.includeHuman === true, humanVoteDist });
     for (const v of aiVotes) {
       const actor = getPlayer(this.state, v.actorId);
       const target = getPlayer(this.state, v.targetId);

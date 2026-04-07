@@ -7,6 +7,7 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "onnxruntime-node": "^1.24.3",
     "ws": "^8.15.1"
   }
 }

@@ -7,6 +7,7 @@ import { GameEngine } from "./src/engine.js";
 import { buildPlayerView, buildSpectatorView } from "./src/view.js";
 import { Theme, Phase } from "./src/roles.js";
 import { generateNightFactionChat } from "./src/ai/index.js";
+import { loadNeuralModel } from "./src/ai/neural.js";
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 18;
@@ -188,10 +189,10 @@ function scheduleNightTimer() {
     }
     broadcastViews();
   }
-  startTimer("NIGHT", DURATIONS.night, () => {
+  startTimer("NIGHT", DURATIONS.night, async () => {
     try {
       const humanActions = Object.fromEntries(room.nightActions.entries());
-      room.engine.resolveNight(null, { humanActions, includeHuman: false });
+      await room.engine.resolveNight(null, { humanActions, includeHuman: false });
       room.nightActions.clear();
       broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
       broadcastViews();
@@ -234,12 +235,12 @@ function scheduleDayToVote() {
 }
 
 function scheduleVoteTimer() {
-  startTimer("VOTE", DURATIONS.vote, () => {
+  startTimer("VOTE", DURATIONS.vote, async () => {
     try {
       checkAfkPlayers(); // must run before voteActions.clear()
       const humanVotes = Object.fromEntries(room.voteActions.entries());
       const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
-      room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
+      await room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
       room.voteActions.clear();
       room.lastWords.clear();
       broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
@@ -539,7 +540,7 @@ wss.on("connection", (ws, req) => {
     }
   }
   ws.rateLimiter = makeRateLimiter();
-  ws.on("message", (data) => {
+  ws.on("message", async (data) => {
     if (!consumeToken(ws.rateLimiter)) {
       const record = ipPenalties.get(ws.ip) || { violations: 0, lastViolationTime: 0 };
       record.violations += 1;
@@ -784,7 +785,7 @@ wss.on("connection", (ws, req) => {
         if (!room.started || !room.engine) return;
         try {
           const humanActions = Object.fromEntries(room.nightActions.entries());
-          room.engine.resolveNight(null, { humanActions, includeHuman: false });
+          await room.engine.resolveNight(null, { humanActions, includeHuman: false });
           room.nightActions.clear();
           clearTimer();
           broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
@@ -853,7 +854,7 @@ wss.on("connection", (ws, req) => {
           checkAfkPlayers(); // must run before voteActions.clear()
           const humanVotes = Object.fromEntries(room.voteActions.entries());
           const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
-          room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
+          await room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
           room.voteActions.clear();
           room.lastWords.clear();
           clearTimer();
@@ -1045,6 +1046,7 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   log(`Server listening on ${PORT}`);
+  await loadNeuralModel();
 });

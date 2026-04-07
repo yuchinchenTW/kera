@@ -5,14 +5,42 @@ import { analyzeVotingPatterns, analyzeChatBehavior, factionProb, publicPoliceCo
 import { ensureBeliefs } from "./memory.js";
 import { pickTargetBySuspicion } from "./targeting.js";
 import { CHAT_TEMPLATES } from "./templates.js";
+import { isNeuralModelLoaded, neuralInfer, neuralToVoteActions, neuralInjectChat } from "./neural.js";
 
 // ─── Voting ────────────────────────────────────────────────────────────────
 
-export function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
+export async function buildAiVoteActions(state, humanVoteTargetId = null, opts = {}) {
   const includeHuman = opts.includeHuman === true;
   const humanVoteDist = opts.humanVoteDist || {};
   const hard = isHard(state);
   ensureBeliefs(state);
+
+  // ── Neural AI path: use trained ONNX model for vote decisions ──
+  if (hard && isNeuralModelLoaded()) {
+    const aiPlayerIds = alivePlayers(state)
+      .filter((p) => !p.isHuman || includeHuman)
+      .map((p) => p.id);
+
+    const neuralResults = await neuralInfer(state, aiPlayerIds, "VOTE");
+    neuralInjectChat(state, neuralResults);
+    const neuralVotes = neuralToVoteActions(state, neuralResults);
+
+    // Merge human votes
+    const humanActorIds = new Set();
+    for (const [actorIdStr, targetId] of Object.entries(humanVoteDist)) {
+      const actorId = Number(actorIdStr);
+      if (typeof targetId === "number") {
+        neuralVotes.push({ actorId, targetId });
+        humanActorIds.add(actorId);
+      }
+    }
+    return neuralVotes.filter((v, i, arr) =>
+      humanActorIds.has(v.actorId)
+        ? arr.findIndex((x) => x.actorId === v.actorId) === i
+        : true
+    );
+  }
+
   const chatMentions = {};
   const chats = state.dayChat || [];
   for (const line of chats) {

@@ -4,16 +4,50 @@ import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemo
 import { analyzeChatBehavior, analyzeVotingPatterns, factionProb, publicPoliceConfirmed } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
 import { pickTargetBySuspicion, pickGroupTarget, pickKillerSmartTarget, pickPoliceSmartTarget, pickCowboySmartTarget, pickSniperSmartTarget, pickTerroristSmartTarget, pickZombieTarget } from "./targeting.js";
+import { isNeuralModelLoaded, neuralInfer, neuralToNightActions } from "./neural.js";
 
 // ─── Night Actions ─────────────────────────────────────────────────────────
 
-export function buildAiNightActions(state, opts = {}) {
+export async function buildAiNightActions(state, opts = {}) {
   const includeHuman = opts.includeHuman === true;
   const humanChoice = opts.humanChoice || null;
   const humanActionsRaw = opts.humanActions || null;
   const human = state.players.find((p) => p.isHuman);
   const hard = isHard(state);
   ensureBeliefs(state);
+
+  // ── Neural AI path: use trained ONNX model for all AI decisions ──
+  if (hard && isNeuralModelLoaded()) {
+    const aiPlayerIds = alivePlayers(state)
+      .filter((p) => !p.isHuman || includeHuman)
+      .map((p) => p.id);
+
+    // Collect human actions to pass through
+    const humanActionList = [];
+    if (Array.isArray(humanActionsRaw)) {
+      for (const a of humanActionsRaw) {
+        if (a && typeof a.actorId === "number") humanActionList.push(a);
+      }
+    } else if (humanActionsRaw && typeof humanActionsRaw === "object") {
+      for (const [actorIdStr, a] of Object.entries(humanActionsRaw)) {
+        if (!a) continue;
+        const actorId = a.actorId ?? Number(actorIdStr);
+        humanActionList.push({ ...a, actorId });
+      }
+    }
+
+    const neuralResults = await neuralInfer(state, aiPlayerIds, "NIGHT");
+    const neuralActions = neuralToNightActions(state, neuralResults);
+
+    // Merge human actions with neural actions
+    const humanActorIds = new Set(humanActionList.map((a) => a.actorId));
+    const merged = [
+      ...humanActionList,
+      ...neuralActions.filter((a) => !humanActorIds.has(a.actorId)),
+    ];
+    return merged;
+  }
+
   const actions = [];
 
   const humanActionList = [];
