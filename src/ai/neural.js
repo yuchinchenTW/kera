@@ -123,9 +123,16 @@ function argmax(data, offset, size) {
 export function neuralToNightActions(state, neuralActions) {
   const actions = [];
   for (const a of neuralActions) {
-    if (a.targetId === null) continue;
     const actor = getPlayer(state, a.actorId);
     if (!actor?.alive) continue;
+
+    // Arsonist: targetId === null means ignite (no target needed)
+    if (actor.role === "ARSONIST" && a.targetId === null) {
+      actions.push({ actorId: a.actorId, type: "ARSON_IGNITE" });
+      continue;
+    }
+
+    if (a.targetId === null) continue;
     const target = getPlayer(state, a.targetId);
     if (!target?.alive) continue;
 

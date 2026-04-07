@@ -49,9 +49,15 @@ function f32ToArray(f32) {
 }
 
 function rlActionToNightAction(state, actorId, targetIdx) {
-  if (targetIdx === 18 || targetIdx === null || targetIdx === undefined) return null;
   const actor = getPlayer(state, actorId);
   if (!actor?.alive) return null;
+
+  // Arsonist: targetIdx === 18 (no_action) means ignite
+  if (actor.role === "ARSONIST" && (targetIdx === 18 || targetIdx === null || targetIdx === undefined)) {
+    return { actorId, type: "ARSON_IGNITE" };
+  }
+
+  if (targetIdx === 18 || targetIdx === null || targetIdx === undefined) return null;
   const target = getPlayer(state, targetIdx);
   if (!target?.alive) return null;
 
