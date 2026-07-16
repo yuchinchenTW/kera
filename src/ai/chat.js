@@ -14,6 +14,8 @@ export function generateChatLines(state, maxLines = 6) {
   const voteHist = state.history?.votes || [];
   const lastRound = voteHist[voteHist.length - 1];
   const recentDeaths = state.players.filter((p) => !p.alive && p.deathCause);
+  const publicClearedBlueIds = new Set(hard ? (state.policePublicClearedBlueIds || []) : []);
+  const recentlySavedIds = new Set(hard ? (state.lastNightSavedIds || []) : []);
 
   // Shuffle speakers for natural order variety
   const speakers = shuffled(living, state.rng);
@@ -75,6 +77,34 @@ export function generateChatLines(state, maxLines = 6) {
 
     const allCandidates = alivePlayers(state).filter((t) => t.id !== speaker.id);
     const isRedSpeaker = speaker.faction === Faction.RED;
+
+    if (hard && speaker.faction === Faction.BLUE && speaker.role === Roles.CIVILIAN.id && state.rng() < 0.45) {
+      const publicSafeTargets = allCandidates.filter((t) =>
+        publicClearedBlueIds.has(t.id) ||
+        recentlySavedIds.has(t.id)
+      );
+      let safeTarget = null;
+      let safePressure = -Infinity;
+      for (const t of publicSafeTargets) {
+        const priorVotes = lastRound?.tally?.[t.id] || 0;
+        const priorMentions = lastRound?.mentions?.[t.id] || 0;
+        const suspicion = speaker.aiMemory?.suspicion?.[t.id] ?? 0.5;
+        const pressure = suspicion + priorVotes * 0.35 + priorMentions * 0.12;
+        if (pressure > safePressure) {
+          safePressure = pressure;
+          safeTarget = t;
+        }
+      }
+      if (safeTarget && (safePressure >= 0.65 || state.rng() < 0.2)) {
+        if (publicClearedBlueIds.has(safeTarget.id)) {
+          lines.push(`${speaker.name}: ${safeTarget.name} was publicly cleared blue, don't waste votes there.||${speaker.name}：${safeTarget.name} 已公開查藍，別浪費票在他身上。`);
+        } else if (recentlySavedIds.has(safeTarget.id)) {
+          lines.push(`${speaker.name}: ${safeTarget.name} was protected last night, don't rush that vote.||${speaker.name}：${safeTarget.name} 昨晚被救過，先別急著投他。`);
+        }
+        spokenSpeakers.add(speaker.id);
+        continue;
+      }
+    }
 
     // ── Improvement 7: Red silence strategy ──
     if (hard && isRedSpeaker) {

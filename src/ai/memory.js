@@ -10,6 +10,8 @@ export function ensureBeliefs(state) {
   const diffScaleMap = { easy: 0.6, normal: 1, hard: 1.3, nightmare: 1.6 };
   const diffScale = diffScaleMap[state.difficulty || "normal"] ?? 1;
   const hard = isHard(state);
+  const publicClearedBlueIds = new Set(hard ? (state.policePublicClearedBlueIds || []) : []);
+  const publicSavedIds = new Set(hard ? (state.lastNightSavedIds || []) : []);
   // revealedRed is set per-player inside the loop via publicRevealedRed()
   const lastVoteHist = state.history?.votes?.[state.history.votes.length - 1] || null;
   const mentionMax = lastVoteHist?.mentions ? Math.max(1, ...Object.values(lastVoteHist.mentions)) : 1;
@@ -289,6 +291,28 @@ export function ensureBeliefs(state) {
         0
       );
       p.aiMemory.suspicion[targetId] = clamp(redProb, 0.01, 0.99);
+
+      if (hard && (publicClearedBlueIds.has(targetId) || publicSavedIds.has(targetId))) {
+        const clearStrength = publicClearedBlueIds.has(targetId) ? 0.08 : 0.45;
+        const blueStrength = publicClearedBlueIds.has(targetId) ? 1.35 : 1.15;
+        for (const role of allRoles) {
+          const meta = roleMeta(role);
+          if (meta.faction === Faction.RED) {
+            p.aiMemory.roleProbs[targetId][role] *= clearStrength;
+          } else if (meta.faction === Faction.BLUE) {
+            p.aiMemory.roleProbs[targetId][role] *= blueStrength;
+          }
+        }
+        const publicSum = Object.values(p.aiMemory.roleProbs[targetId]).reduce((a, b) => a + b, 0) || 1;
+        for (const role of allRoles) {
+          p.aiMemory.roleProbs[targetId][role] = p.aiMemory.roleProbs[targetId][role] / publicSum;
+        }
+        const publicRedProb = Object.entries(p.aiMemory.roleProbs[targetId]).reduce(
+          (acc, [r, prob]) => acc + (roleMeta(r).faction === Faction.RED ? prob : 0),
+          0
+        );
+        p.aiMemory.suspicion[targetId] = clamp(publicRedProb, 0.01, 0.99);
+      }
     }
 
     // ── Advanced: Night result inference ──

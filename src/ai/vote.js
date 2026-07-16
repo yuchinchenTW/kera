@@ -68,6 +68,7 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
       : []
   );
   const publicClearedBlueIds = new Set(hard ? (state.policePublicClearedBlueIds || []) : []);
+  const publicStrongSafeVoteIds = new Set([...voteSavedIds, ...publicClearedBlueIds]);
 
   // Hard+: collect police-confirmed reds — only if publicly revealed
   const confirmedRedIds = new Set();
@@ -222,9 +223,11 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
       let abstainChance = 0.15;
       if (votePhase === "early") abstainChance = 0.25;
       if (votePhase === "late") abstainChance = 0.05;
+      if (actor.role === Roles.CIVILIAN.id) abstainChance += 0.08;
       if (actor.aiMemory.personality === "cautious") abstainChance += 0.1;
       if (actor.aiMemory.personality === "aggressive") abstainChance -= 0.08;
-      if (topSusp < 0.35 && (state.policePublicRevealedRed ?? null) === null && state.rng() < abstainChance) {
+      const lowConfidenceThreshold = actor.role === Roles.CIVILIAN.id ? 0.42 : 0.35;
+      if (topSusp < lowConfidenceThreshold && (state.policePublicRevealedRed ?? null) === null && state.rng() < abstainChance) {
         // Abstain — low confidence, no police intel
         return;
       }
@@ -348,6 +351,12 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
         }
       }
 
+      if (hard && redTarget) {
+        if (voteSavedIds.has(redTarget.id) || publicClearedBlueIds.has(redTarget.id)) {
+          chance *= 0.15;
+        }
+      }
+
       if (redTarget?.alive && state.rng() < chance) {
         votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: redTarget.id });
         return;
@@ -358,6 +367,11 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
         ? everyone.filter((t) => t.role !== Roles.KILLER.id)
         : everyone;
     const candidates = pruned.length ? pruned : everyone;
+    const blueSafeFilteredCandidates =
+      hard && actor.faction === Faction.BLUE
+        ? candidates.filter((t) => !publicStrongSafeVoteIds.has(t.id))
+        : candidates;
+    const voteCandidates = blueSafeFilteredCandidates.length ? blueSafeFilteredCandidates : candidates;
 
     // Hard+ 紅方策略投票
     if (hard && actor.faction === Faction.RED) {
@@ -454,9 +468,11 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
 
     let target = null;
     // Hard+: blue civilians vote more deliberately (10% random vs 20% for others)
-    const effectiveChaos = (hard && actor.faction === Faction.BLUE) ? chaosVoteChance * 0.5 : chaosVoteChance;
+    const effectiveChaos = (hard && actor.faction === Faction.BLUE)
+      ? chaosVoteChance * (actor.role === Roles.CIVILIAN.id ? 0.25 : 0.5)
+      : chaosVoteChance;
     if (roll < effectiveChaos) {
-      target = randomChoice(candidates, state.rng);
+      target = randomChoice(voteCandidates, state.rng);
     } else {
       let best = null;
       let bestScore = -Infinity;
@@ -467,11 +483,13 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
       const jitterScale = hard ? clamp(1.0 - (dayNum - 1) * 0.1 - (18 - aliveCount) * 0.02, 0.4, 1.0) : 1.0;
       const voteJitter = (val) => clamp(val + (state.rng() - 0.5) * 0.3 * jitterScale, 0, 1);
 
-      for (const t of candidates) {
+      for (const t of voteCandidates) {
         const redProb = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
         const base = hard ? voteJitter(redProb) : jitter(redProb);
         const chatBonus = actor.role !== Roles.POLICE.id ? chatWeight(t.id) * 0.05 : 0;
         let s = clamp(base + chatBonus, 0, 1);
+        const civilianSignalScale =
+          hard && actor.faction === Faction.BLUE && actor.role === Roles.CIVILIAN.id ? 1.35 : 1.0;
 
         // Hard+: behavioral voting bonuses
         if (hard && votePatterns) {
@@ -479,13 +497,13 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
           for (const dead of state.players.filter((dp) => !dp.alive && dp.faction === Faction.RED)) {
             const togetherCount = votePatterns.votedTogether[t.id]?.[dead.id] || 0;
             if (togetherCount > 0) {
-              s += 0.08 * togetherCount;
+              s += 0.08 * togetherCount * civilianSignalScale;
             }
           }
           // Penalty: players who voted together with me are less suspicious
           const withMe = votePatterns.votedTogether[t.id]?.[actor.id] || 0;
           if (withMe > 0 && actor.faction === Faction.BLUE) {
-            s -= 0.05 * withMe;
+            s -= 0.05 * withMe * civilianSignalScale;
           }
         }
 
@@ -504,11 +522,11 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
 
         // Hard+: correct voter reward — players who voted to execute reds have good judgement
         if (hard && correctVoterIds.has(t.id)) {
-          s -= 0.12; // less suspicious (likely blue)
+          s -= 0.12 * civilianSignalScale; // less suspicious (likely blue)
         }
         // Hard+: wrong voter penalty — players who voted to execute blues are suspicious
         if (hard && wrongVoterIds.has(t.id)) {
-          s += 0.08;
+          s += 0.08 * civilianSignalScale;
         }
 
         // Hard+: arson-marked = likely blue (arsonist targets suspected blues)
@@ -523,12 +541,12 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
 
         // Hard+: opposed red execution = suspicious (voted for someone else when red was killed)
         if (hard && redExecOpposerCount[t.id]) {
-          s += Math.min(redExecOpposerCount[t.id] * 0.1, 0.25);
+          s += Math.min(redExecOpposerCount[t.id] * 0.1 * civilianSignalScale, 0.3);
         }
 
         // Hard+: defended dead reds in chat = suspicious (red allies cover each other)
         if (hard && redDefenderIds.has(t.id)) {
-          s += 0.1;
+          s += 0.1 * civilianSignalScale;
         }
 
         // Hard+: defended by police/known-blue = likely blue (strong protection signal)
@@ -591,7 +609,7 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
           best = t;
         }
       }
-      target = best || randomChoice(candidates, state.rng);
+      target = best || randomChoice(voteCandidates, state.rng);
     }
     if (target) {
       if (hard && actor.role === Roles.KILLER.id) killerVoteTargets.add(target.id);
@@ -612,7 +630,7 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
     }
     // For each voter, consider switching to consensus if they agree
     // Don't bandwagon onto confirmed-blue or saved targets
-    const consensusIsSafe = voteSavedIds.has(consensusTarget) || correctVoterIds.has(consensusTarget)
+    const consensusIsSafe = publicStrongSafeVoteIds.has(consensusTarget) || correctVoterIds.has(consensusTarget)
       || voteArsonMarkedIds.has(consensusTarget) || accusedByRedIds.has(consensusTarget);
 
     // Trust check: is the consensus backed by trusted blue voters?
@@ -665,7 +683,12 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
 
   if (votes.length === 0 && aiVoters.length > 0) {
     const actor = aiVoters[0];
-    const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id && t.alive);
+    const target = pickTargetBySuspicion(
+      state,
+      actor,
+      (t) => t.id !== actor.id && t.alive &&
+        !(hard && actor.faction === Faction.BLUE && publicStrongSafeVoteIds.has(t.id))
+    );
     if (target) votes.push({ actorId: actor.id, type: "VOTE_EXECUTE", targetId: target.id });
   }
 
