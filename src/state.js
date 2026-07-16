@@ -128,6 +128,7 @@ export function createInitialState(
     victory: null,
     lastNightSummary: [],
     winrateHint: null,
+    policePublicRevealedRed: null,
   };
 }
 
@@ -165,6 +166,7 @@ export function markDeath(state, playerId, cause, opts = {}) {
   state.aliveIds = state.players.filter((p) => p.alive).map((p) => p.id);
   if (!state.deadIds.includes(playerId)) state.deadIds.push(playerId);
   if (state.policeRevealedRed === playerId) state.policeRevealedRed = null;
+  if (state.policePublicRevealedRed === playerId) state.policePublicRevealedRed = null;
   addPublicLog(state, `${player.name} died (${formatDeathCause(cause)}).`);
 }
 

@@ -38,6 +38,12 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
     return line.includes(revealedRedTarget.name) &&
       (en.includes("red") || en.includes("confirmed") || en.includes("investigation"));
   });
+  const privatePoliceRedId =
+    !policePubliclyRevealed && (state.policeRevealedRed ?? null) !== null
+      ? state.policeRevealedRed
+      : null;
+  const canUseVoteTarget = (actor, target) =>
+    !!target && (actor.role === Roles.POLICE.id || target.id !== privatePoliceRedId);
 
   // Hard+: behavioral analysis for vote scoring
   const votePatterns = hard ? analyzeVotingPatterns(state) : null;
@@ -257,7 +263,9 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
         }
       }
       // Vote for whoever has the highest suspicion (mimic blue behavior to avoid detection)
-      const zombieCandidates = alivePlayers(state).filter((t) => t.id !== actor.id && t.role !== Roles.ZOMBIE.id);
+      const zombieCandidates = alivePlayers(state).filter(
+        (t) => t.id !== actor.id && t.role !== Roles.ZOMBIE.id && canUseVoteTarget(actor, t)
+      );
       if (zombieCandidates.length > 0) {
         let bestTarget = null;
         let bestSusp = -1;
@@ -277,7 +285,9 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
 
     const roll = state.rng();
     const jitter = (val) => clamp(val + (state.rng() - 0.5) * 0.3, 0, 1);
-    const everyone = alivePlayers(state).filter((t) => t.id !== actor.id && t.alive && t.id !== humanVoteTargetId);
+    const everyone = alivePlayers(state).filter(
+      (t) => t.id !== actor.id && t.alive && t.id !== humanVoteTargetId && canUseVoteTarget(actor, t)
+    );
     // if police found a red, only police use it to focus vote
     if (state.policeRevealedRed !== null && actor.role === Roles.POLICE.id) {
       const redTarget = getPlayer(state, state.policeRevealedRed);
@@ -602,6 +612,7 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
       if (v.targetId === consensusTarget) continue; // already voting consensus
       const actor = getPlayer(state, v.actorId);
       if (!actor || actor.isHuman) continue;
+      if (actor.role !== Roles.POLICE.id && consensusTarget === privatePoliceRedId) continue;
       // Red AI joins consensus to blend in — but only if target isn't a fellow red
       if (actor.faction === Faction.RED) {
         const conTarget = getPlayer(state, consensusTarget);
