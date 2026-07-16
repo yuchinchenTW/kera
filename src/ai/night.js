@@ -90,9 +90,24 @@ export async function buildAiNightActions(state, opts = {}) {
     }
   }
   if (!sharedPoliceTarget && policeActors.length > 0) {
-    sharedPoliceTarget = hard
-      ? pickPoliceSmartTarget(state, policeActors[0])
-      : pickGroupTarget(state, policeActors, (t) => t.role !== Roles.POLICE.id);
+    if (hard) {
+      const policePicks = {};
+      for (const p of policeActors) {
+        const pick = pickPoliceSmartTarget(state, p);
+        if (pick) policePicks[pick.id] = (policePicks[pick.id] || 0) + 1;
+      }
+      let bestTarget = null;
+      let bestCount = 0;
+      for (const [tid, cnt] of Object.entries(policePicks)) {
+        if (cnt > bestCount || (cnt === bestCount && state.rng() < 0.5)) {
+          bestCount = cnt;
+          bestTarget = getPlayer(state, Number(tid));
+        }
+      }
+      sharedPoliceTarget = bestTarget;
+    } else {
+      sharedPoliceTarget = pickGroupTarget(state, policeActors, (t) => t.role !== Roles.POLICE.id);
+    }
   }
   if (!sharedPoliceTarget) {
     sharedPoliceTarget = randomChoice(

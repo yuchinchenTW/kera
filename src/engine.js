@@ -655,6 +655,21 @@ export class GameEngine {
           "police",
           `Investigation result: ${target.name} is ${apparentFaction === Faction.RED ? "RED" : apparentFaction === Faction.GREEN ? "GREEN" : "BLUE"} (${target.role})`
         );
+        const resultLabel =
+          apparentFaction === Faction.RED ? "red" :
+          apparentFaction === Faction.GREEN ? "green" :
+          "blue";
+        for (const police of alivePlayers(this.state).filter((p) => p.role === Roles.POLICE.id)) {
+          police.aiMemory = police.aiMemory || { suspicion: {}, roleProbs: {} };
+          police.aiMemory.investigationResults = police.aiMemory.investigationResults || [];
+          if (!police.aiMemory.investigationResults.some((r) => r.targetId === target.id)) {
+            police.aiMemory.investigationResults.push({
+              targetId: target.id,
+              result: resultLabel,
+              day: this.state.dayNumber || 1,
+            });
+          }
+        }
         if (apparentFaction === Faction.RED && target.alive) {
           this.state.policeRevealedRed = target.id;
           this.state.policeConfirmed = this.state.policeConfirmed || {};

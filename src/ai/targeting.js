@@ -54,6 +54,7 @@ export function pickPoliceSmartTarget(state, actor) {
 
   // Hard+: identify saved players (confirmed blue by action)
   const savedIds = new Set(hard ? (state.lastNightSavedIds || []) : []);
+  const publicClearedBlueIds = new Set(hard ? (state.policePublicClearedBlueIds || []) : []);
 
   // Hard+: arson-marked = confirmed blue (arsonist targets blues)
   const arsonMarkedIds = new Set();
@@ -124,6 +125,9 @@ export function pickPoliceSmartTarget(state, actor) {
 
     // Skip already investigated (we know their result)
     if (hard && investigatedIds.has(t.id)) continue;
+
+    // Skip public-safe targets; police value is higher on unresolved slots.
+    if (hard && (publicClearedBlueIds.has(t.id) || savedIds.has(t.id) || arsonMarkedIds.has(t.id))) continue;
 
     const killerProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.KILLER.id] ?? 0;
     const redProb = factionProb(actor, t.id, Faction.RED) ?? 0;

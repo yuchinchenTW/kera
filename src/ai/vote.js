@@ -31,13 +31,30 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
   // Check if police publicly revealed a red in this round's dayChat
   // Non-police should only follow the reveal if it was actually announced
   const revealedRedTarget = (state.policePublicRevealedRed ?? null) !== null ? getPlayer(state, (state.policePublicRevealedRed ?? null)) : null;
-  const policePubliclyRevealed = revealedRedTarget && chats.some((line) => {
+  let policePubliclyRevealed = revealedRedTarget && chats.some((line) => {
     if (line.startsWith("[VOTE] ") || line.startsWith("[LAST] ")) return false;
     // Check if any police speaker mentioned the revealed red with accusation keywords
     const en = (line.split("||")[0] || "").toLowerCase();
     return line.includes(revealedRedTarget.name) &&
       (en.includes("red") || en.includes("confirmed") || en.includes("investigation"));
   });
+  if (hard && !policePubliclyRevealed && (state.policeRevealedRed ?? null) !== null) {
+    const redTarget = getPlayer(state, state.policeRevealedRed);
+    const policeSpeaker = alivePlayers(state).find((p) => p.role === Roles.POLICE.id && !p.isHuman);
+    if (redTarget?.alive && policeSpeaker) {
+      const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeRevealRed);
+      const line = tmpl(policeSpeaker.name, redTarget.name);
+      state.dayChat = state.dayChat || [];
+      state.publicLog = state.publicLog || [];
+      state.dayChat.push(line);
+      state.publicLog.push(line);
+      state.policePublicRevealedRed = redTarget.id;
+      state.roleClaims = state.roleClaims || {};
+      state.roleClaims[policeSpeaker.id] = Roles.POLICE.id;
+      if (chats !== state.dayChat) chats.push(line);
+      policePubliclyRevealed = true;
+    }
+  }
   const privatePoliceRedId =
     !policePubliclyRevealed && (state.policeRevealedRed ?? null) !== null
       ? state.policeRevealedRed

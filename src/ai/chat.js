@@ -30,6 +30,26 @@ export function generateChatLines(state, maxLines = 6) {
   // Advanced: Game phase for chat tone adjustment
   const gamePhase = hard ? getGamePhase(state) : "mid";
 
+  const markPoliceClaim = (policeId) => {
+    state.roleClaims = state.roleClaims || {};
+    state.roleClaims[policeId] = Roles.POLICE.id;
+  };
+
+  const markPublicInvestigationResult = (policeId, result) => {
+    markPoliceClaim(policeId);
+    if (!result) return;
+    if (result.result === "red") {
+      state.policePublicRevealedRed = result.targetId;
+      state.policeConfirmed = state.policeConfirmed || {};
+      state.policeConfirmed[result.targetId] = true;
+    } else if (result.result === "blue") {
+      state.policePublicClearedBlueIds = state.policePublicClearedBlueIds || [];
+      if (!state.policePublicClearedBlueIds.includes(result.targetId)) {
+        state.policePublicClearedBlueIds.push(result.targetId);
+      }
+    }
+  };
+
   if (hard && redFound?.alive && (state.policePublicRevealedRed ?? null) === null && (state.dayNumber || 1) >= 2) {
     const policeAlive = living.filter((p) => p.role === Roles.POLICE.id);
     const revealingPolice = policeAlive
@@ -50,9 +70,7 @@ export function generateChatLines(state, maxLines = 6) {
       if (forcedReveal || state.rng() < revealChance) {
         const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeRevealRed);
         lines.push(tmpl(revealingPolice.name, redFound.name));
-        state.policePublicRevealedRed = redFound.id;
-        state.roleClaims = state.roleClaims || {};
-        state.roleClaims[revealingPolice.id] = Roles.POLICE.id;
+        markPublicInvestigationResult(revealingPolice.id, { targetId: redFound.id, result: "red" });
         policeRevealedInChat = true;
         spokenSpeakers.add(revealingPolice.id);
       }
@@ -276,7 +294,14 @@ export function generateChatLines(state, maxLines = 6) {
           if (cid === speaker.id) continue;
           const claimer = getPlayer(state, cid);
           if (!claimer?.alive) continue;
-          if (speaker.role === Roles.POLICE.id && claimedRole === Roles.POLICE.id) continue;
+          if (speaker.role === Roles.POLICE.id && claimedRole === Roles.POLICE.id) {
+            if (claimer.role !== Roles.POLICE.id && state.rng() < 0.75) {
+              const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.roleClaim.challenge);
+              lines.push(tmpl(speaker.name, claimer.name, claimedRole, roleNameZh(claimedRole)));
+              break;
+            }
+            continue;
+          }
           const claimerSusp = speaker.aiMemory?.suspicion?.[cid] ?? 0.5;
           if (claimerSusp > 0.6 && state.rng() < 0.4) {
             const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.roleClaim.challenge);
@@ -356,7 +381,7 @@ export function generateChatLines(state, maxLines = 6) {
         });
 
         // About to die: dump all info (prioritize this over normal reveals)
-        if (selfThreat > 0.6 && results.length > 0 && (state.policePublicRevealedRed ?? null) === null) {
+        if (selfThreat > 0.6 && results.length > 0 && !speaker.aiMemory.policeDeathDumped) {
           const infoParts = results.map((r) => {
             const tp = getPlayer(state, r.targetId);
             return tp ? `${tp.name}=${r.result.toUpperCase()}` : "";
@@ -364,12 +389,13 @@ export function generateChatLines(state, maxLines = 6) {
           if (infoParts.length > 0) {
             const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeDeathDump);
             lines.push(tmpl(speaker.name, infoParts.join(", ")));
+            for (const r of results) {
+              markPublicInvestigationResult(speaker.id, r);
+            }
             if (results.some((r) => r.result === "red")) {
               policeRevealedInChat = true;
-              state.policePublicRevealedRed = state.policeRevealedRed;
             }
-            state.roleClaims = state.roleClaims || {};
-            state.roleClaims[speaker.id] = Roles.POLICE.id;
+            speaker.aiMemory.policeDeathDumped = true;
             continue;
           }
         }
@@ -384,10 +410,7 @@ export function generateChatLines(state, maxLines = 6) {
               const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeRevealRed);
               lines.push(tmpl(speaker.name, redTarget.name));
               policeRevealedInChat = true;
-              state.policePublicRevealedRed = state.policeRevealedRed;
-              // Mark speaker as publicly-acting-as-police so killers can see via roleClaims
-              state.roleClaims = state.roleClaims || {};
-              state.roleClaims[speaker.id] = Roles.POLICE.id;
+              markPublicInvestigationResult(speaker.id, { targetId: redTarget.id, result: "red" });
               continue;
             }
           }
@@ -406,13 +429,7 @@ export function generateChatLines(state, maxLines = 6) {
           if (blueTarget && state.rng() < finalChance) {
             const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeRevealBlue);
             lines.push(tmpl(speaker.name, blueTarget.name));
-            // Mark speaker as publicly-acting-as-police
-            state.roleClaims = state.roleClaims || {};
-            state.roleClaims[speaker.id] = Roles.POLICE.id;
-            state.policePublicClearedBlueIds = state.policePublicClearedBlueIds || [];
-            if (!state.policePublicClearedBlueIds.includes(blueTarget.id)) {
-              state.policePublicClearedBlueIds.push(blueTarget.id);
-            }
+            markPublicInvestigationResult(speaker.id, { targetId: blueTarget.id, result: "blue" });
             continue;
           }
         }
@@ -424,9 +441,7 @@ export function generateChatLines(state, maxLines = 6) {
       const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeReveal);
       lines.push(tmpl(speaker.name, redFound.name));
       policeRevealedInChat = true;
-      state.policePublicRevealedRed = state.policeRevealedRed;
-      state.roleClaims = state.roleClaims || {};
-      state.roleClaims[speaker.id] = Roles.POLICE.id;
+      markPublicInvestigationResult(speaker.id, { targetId: redFound.id, result: "red" });
       continue;
     }
 
