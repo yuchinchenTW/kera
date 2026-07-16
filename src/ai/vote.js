@@ -60,6 +60,14 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
 
   // Hard+: identify saved players (confirmed blue by doctor action)
   const voteSavedIds = new Set(hard ? (state.lastNightSavedIds || []) : []);
+  const publicPoliceClaimIds = new Set(
+    hard
+      ? Object.entries(state.roleClaims || {})
+          .filter(([_, role]) => role === Roles.POLICE.id)
+          .map(([id]) => Number(id))
+      : []
+  );
+  const publicClearedBlueIds = new Set(hard ? (state.policePublicClearedBlueIds || []) : []);
 
   // Hard+: collect police-confirmed reds — only if publicly revealed
   const confirmedRedIds = new Set();
@@ -483,7 +491,15 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
 
         // Hard+: saved-target penalty — doctor-saved players are confirmed blue
         if (hard && voteSavedIds.has(t.id)) {
-          s -= 0.25;
+          s -= actor.faction === Faction.BLUE ? 0.45 : 0.15;
+        }
+
+        if (hard && actor.faction === Faction.BLUE && publicPoliceClaimIds.has(t.id)) {
+          s -= 0.45;
+        }
+
+        if (hard && actor.faction === Faction.BLUE && publicClearedBlueIds.has(t.id)) {
+          s -= 0.4;
         }
 
         // Hard+: correct voter reward — players who voted to execute reds have good judgement

@@ -379,6 +379,10 @@ export function generateChatLines(state, maxLines = 6) {
             // Mark speaker as publicly-acting-as-police
             state.roleClaims = state.roleClaims || {};
             state.roleClaims[speaker.id] = Roles.POLICE.id;
+            state.policePublicClearedBlueIds = state.policePublicClearedBlueIds || [];
+            if (!state.policePublicClearedBlueIds.includes(blueTarget.id)) {
+              state.policePublicClearedBlueIds.push(blueTarget.id);
+            }
             continue;
           }
         }

@@ -245,6 +245,14 @@ export async function buildAiNightActions(state, opts = {}) {
 
             // Identify who was saved last night
             const savedLastNight = new Set(hard ? (state.lastNightSavedIds || []) : []);
+            const publicPoliceClaimIds = new Set(
+              hard
+                ? Object.entries(state.roleClaims || {})
+                    .filter(([_, role]) => role === Roles.POLICE.id)
+                    .map(([id]) => Number(id))
+                : []
+            );
+            const publicClearedBlueIds = new Set(hard ? (state.policePublicClearedBlueIds || []) : []);
 
             // Multi-night attack trend: count blue deaths by speaking pattern
             let nightDeathActive = 0;
@@ -339,6 +347,9 @@ export async function buildAiNightActions(state, opts = {}) {
                 // Mirror killer targeting: killers prefer blue + police + active speakers
                 const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
                 score += policeProb * 0.35;
+                if (publicPoliceClaimIds.has(t.id)) score += 1.0;
+                if (publicClearedBlueIds.has(t.id)) score += 0.35;
+                if (savedLastNight.has(t.id)) score += 0.2;
 
                 const speakRatio = (chatBehavior.speakCount[t.id] || 0) / maxSpoken;
                 score += speakRatio * 0.2;
