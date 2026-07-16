@@ -4,7 +4,6 @@ import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemo
 import { analyzeChatBehavior, analyzeVotingPatterns, factionProb, publicPoliceConfirmed } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
 import { pickTargetBySuspicion, pickGroupTarget, pickKillerSmartTarget, pickPoliceSmartTarget, pickCowboySmartTarget, pickSniperSmartTarget, pickTerroristSmartTarget, pickZombieTarget } from "./targeting.js";
-import { isNeuralModelLoaded, neuralInfer, neuralToNightActions } from "./neural.js";
 
 // ─── Night Actions ─────────────────────────────────────────────────────────
 
@@ -16,33 +15,7 @@ export async function buildAiNightActions(state, opts = {}) {
   const hard = isHard(state);
   ensureBeliefs(state);
 
-  // ── Neural AI path: use trained ONNX model (GOOD_VS_EVIL only) ──
-  // state.neuralFactions: if set (e.g. ["RED"]), only those factions use neural;
-  //                       others fall through to heuristic below.
-  const neuralFactions = state.neuralFactions || null;
-  const useNeural = hard && isNeuralModelLoaded() && state.theme === "GOOD_VS_EVIL";
-  let neuralActorIds = new Set();
   const actions = [];
-
-  if (useNeural) {
-    const neuralPlayerIds = alivePlayers(state)
-      .filter((p) => !p.isHuman && (!neuralFactions || neuralFactions.includes(p.faction)))
-      .map((p) => p.id);
-
-    if (neuralPlayerIds.length > 0) {
-      const neuralResults = await neuralInfer(state, neuralPlayerIds, "NIGHT");
-      const neuralActions = neuralToNightActions(state, neuralResults);
-      // Mark ALL neural players as handled (including those who chose skip/no_action)
-      neuralActorIds = new Set(neuralPlayerIds);
-
-      // If all AI players are neural, return early
-      if (!neuralFactions) {
-        return neuralActions;
-      }
-      // Mixed mode: add neural actions, heuristic fills in the rest below
-      actions.push(...neuralActions);
-    }
-  }
 
   const humanActionList = [];
   if (Array.isArray(humanActionsRaw)) {
@@ -159,7 +132,6 @@ export async function buildAiNightActions(state, opts = {}) {
 
   for (const actor of alivePlayers(state)) {
     if (actor.isHuman && !includeHuman) continue;
-    if (neuralActorIds.has(actor.id)) continue; // already handled by neural
     switch (actor.role) {
       case Roles.POLICE.id: {
         const target =

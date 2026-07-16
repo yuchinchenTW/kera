@@ -7,7 +7,6 @@ import { GameEngine } from "./src/engine.js";
 import { buildPlayerView, buildSpectatorView } from "./src/view.js";
 import { Theme, Phase } from "./src/roles.js";
 import { generateNightFactionChat } from "./src/ai/index.js";
-import { loadNeuralModel } from "./src/ai/neural.js";
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 18;
@@ -1046,7 +1045,6 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-server.listen(PORT, async () => {
+server.listen(PORT, () => {
   log(`Server listening on ${PORT}`);
-  await loadNeuralModel();
 });
