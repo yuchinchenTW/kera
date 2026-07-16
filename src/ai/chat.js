@@ -28,8 +28,38 @@ export function generateChatLines(state, maxLines = 6) {
   // Advanced: Game phase for chat tone adjustment
   const gamePhase = hard ? getGamePhase(state) : "mid";
 
+  if (hard && redFound?.alive && (state.policePublicRevealedRed ?? null) === null && (state.dayNumber || 1) >= 2) {
+    const policeAlive = living.filter((p) => p.role === Roles.POLICE.id);
+    const revealingPolice = policeAlive
+      .filter((p) => !p.isHuman)
+      .sort((a, b) => (b.aiMemory?.selfThreat || 0) - (a.aiMemory?.selfThreat || 0))[0];
+    if (revealingPolice) {
+      const dayNum = state.dayNumber || 1;
+      const lastRound = state.history?.votes?.[state.history.votes.length - 1] || null;
+      const priorVotesOnRed = lastRound?.tally?.[redFound.id] || 0;
+      const selfThreat = revealingPolice.aiMemory?.selfThreat || 0;
+      const forcedReveal =
+        policeAlive.length <= 2 ||
+        selfThreat >= 0.5 ||
+        priorVotesOnRed >= 2 ||
+        dayNum >= 4;
+      const revealChance = dayNum === 2 ? 0.75 : 0.9;
+
+      if (forcedReveal || state.rng() < revealChance) {
+        const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeRevealRed);
+        lines.push(tmpl(revealingPolice.name, redFound.name));
+        state.policePublicRevealedRed = redFound.id;
+        state.roleClaims = state.roleClaims || {};
+        state.roleClaims[revealingPolice.id] = Roles.POLICE.id;
+        policeRevealedInChat = true;
+        spokenSpeakers.add(revealingPolice.id);
+      }
+    }
+  }
+
   for (const speaker of speakers) {
     if (lines.length >= maxLines) break;
+    if (spokenSpeakers.has(speaker.id)) continue;
     ensureAdvancedMemory(speaker);
 
     // Hard+: some speakers skip (not everyone talks every round)
@@ -195,7 +225,7 @@ export function generateChatLines(state, maxLines = 6) {
         for (const [claimerId, claimedRole] of Object.entries(state.roleClaims)) {
           const cid = Number(claimerId);
           if (cid === speaker.id) continue;
-          if (claimedRole === speaker.role && speaker.faction === Faction.BLUE) {
+          if (claimedRole === speaker.role && speaker.faction === Faction.BLUE && claimedRole !== Roles.POLICE.id) {
             // Someone claimed my role — counter-claim!
             speaker.aiMemory.claimedRole = speaker.role;
             state.roleClaims[speaker.id] = speaker.role;
@@ -216,6 +246,7 @@ export function generateChatLines(state, maxLines = 6) {
           if (cid === speaker.id) continue;
           const claimer = getPlayer(state, cid);
           if (!claimer?.alive) continue;
+          if (speaker.role === Roles.POLICE.id && claimedRole === Roles.POLICE.id) continue;
           const claimerSusp = speaker.aiMemory?.suspicion?.[cid] ?? 0.5;
           if (claimerSusp > 0.6 && state.rng() < 0.4) {
             const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.roleClaim.challenge);
@@ -295,7 +326,7 @@ export function generateChatLines(state, maxLines = 6) {
         });
 
         // About to die: dump all info (prioritize this over normal reveals)
-        if (selfThreat > 0.6 && results.length > 0) {
+        if (selfThreat > 0.6 && results.length > 0 && (state.policePublicRevealedRed ?? null) === null) {
           const infoParts = results.map((r) => {
             const tp = getPlayer(state, r.targetId);
             return tp ? `${tp.name}=${r.result.toUpperCase()}` : "";
@@ -315,7 +346,7 @@ export function generateChatLines(state, maxLines = 6) {
         // Day 2+: reveal red — early reveal is critical for vote accuracy
         // Day 2: 90% reveal (was selfThreat>0.3 gated — too conservative)
         // Day 3+: 85% reveal
-        if (aliveRedResult) {
+        if (aliveRedResult && (state.policePublicRevealedRed ?? null) === null) {
           const revealChance = dayNum === 2 ? 0.9 : 0.85;
           if (state.rng() < revealChance) {
             const redTarget = getPlayer(state, aliveRedResult.targetId);
@@ -355,7 +386,7 @@ export function generateChatLines(state, maxLines = 6) {
     }
 
     // ── Police strategic reveal (legacy, kept for non-timed reveals) ──
-    if (speaker.role === Roles.POLICE.id && redFound?.alive && state.rng() < 0.8) {
+    if (speaker.role === Roles.POLICE.id && redFound?.alive && (state.policePublicRevealedRed ?? null) === null && state.rng() < 0.8) {
       const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.policeReveal);
       lines.push(tmpl(speaker.name, redFound.name));
       policeRevealedInChat = true;
