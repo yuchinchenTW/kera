@@ -19,14 +19,14 @@ npm start          # serves http://localhost:3001
 - Single-player (1 human + 17 AI) and WebSocket multiplayer (multiple humans, AI fills remaining seats and takes over on disconnect).
 - Fixed night/day cadence, majority/plurality daytime votes, private faction chats (day + night) with real-time ally action visibility.
 - Four AI difficulty levels with behavioral analysis, deception strategies, Bayesian belief systems, personality, role claiming, and emotional responses.
-- **Hard AI powered by trained neural network** — 650M-step MAPPO self-play policy served via ONNX Runtime (GOOD_VS_EVIL theme only), with automatic fallback to heuristic AI for other themes.
+- All AI is heuristic (no LLM, no neural network); seeded RNG keeps every game reproducible.
 
 ## 摘要（中文）
 - 18 人社交推理遊戲，多種主題角色組合。
 - 單人模式（1 人類 + 17 AI）與 WebSocket 多人模式（多名真人，AI 填補空位並在斷線時接管）。
 - 夜/日節奏固定，白天多數/最高票處決，陣營私聊（日夜皆有）即時同步隊友夜間行動。
 - 四種 AI 難度，含行為分析、欺騙策略、貝氏信念系統、個性系統、角色宣告、情緒反應。
-- **困難 AI 由訓練神經網路驅動** — 650M 步 MAPPO 自我對弈策略，透過 ONNX Runtime 推理（僅限正邪對決主題），其他主題或模型不存在時自動退回啟發式 AI。
+- 所有 AI 皆為啟發式演算法（不使用 LLM，也不使用神經網路），種子亂數確保每局可重現。
 
 ## Project Structure / 專案結構
 
@@ -43,7 +43,7 @@ npm start          # serves http://localhost:3001
 | `src/ai/vote.js` | 投票決策生成（buildAiVoteActions） |
 | `src/ai/chat.js` | 公開/陣營/遺言聊天生成 |
 | `src/ai/templates.js` | 雙語聊天模板（純資料） |
-| `src/ai/neural.js` | 神經網路 AI（ONNX 推理、動作轉換） |
+| `src/ai/neural.js` | ONNX 推理介面（實驗遺留，遊戲決策流程未使用） |
 | `src/ai/index.js` | AI 模組公開 API re-export |
 | `src/state.js` | 遊戲狀態初始化、玩家/死亡管理、陣營人數統計 |
 | `src/roles.js` | 角色/陣營/主題/階段定義、角色元資料 |
@@ -114,22 +114,18 @@ npm install && npm start
 
 所有 AI 決策皆為純演算法（不使用外部 LLM）。種子亂數確保可重現的遊戲結果。
 
-**困難模式（Hard）** 啟用時，若偵測到 ONNX 模型檔案（`training/mafia_policy.onnx`）且遊戲主題為 **GOOD_VS_EVIL（正邪對決）**，會使用 **650M 步自我對弈訓練的神經網路**做所有 AI 決策（夜間行動 + 投票 + 聊天），100% 保留訓練成果。其他主題或模型不存在時自動退回啟發式 AI，無需任何設定。
+四種難度共用同一套啟發式決策引擎，差異在於嫌疑倍率、隨機投票比例、是否啟用行為分析與紅方欺騙等參數。
 
 ### 難度等級 Difficulty Levels
 
 | 參數 Parameter | 簡單 Easy | 普通 Normal | 困難 Hard | 惡夢 Nightmare |
 |-----------|------|--------|------|-----------|
-| 決策引擎 Decision engine | 啟發式 | 啟發式 | **神經網路 (ONNX)** ¹ | **神經網路 (ONNX)** ¹ |
-| 嫌疑倍率 Suspicion scaling | 0.6x | 1.0x | 1.3x (fallback) | 1.6x (fallback) |
-| 隨機投票 Random voting | 80% | 60% | 20% (fallback) | 5% (fallback) |
-| 跟隨警察揭露 Follow police reveal | 50% | 70% | 95% (fallback) | 98% (fallback) |
+| 決策引擎 Decision engine | 啟發式 | 啟發式 | 啟發式 | 啟發式 |
+| 嫌疑倍率 Suspicion scaling | 0.6x | 1.0x | 1.3x | 1.6x |
+| 隨機投票 Random voting | 80% | 60% | 20% | 5% |
+| 跟隨警察揭露 Follow police reveal | 50% | 70% | 95% | 98% |
 | 紅方欺騙 Red team deception | - | - | 有 Yes | 有 Yes |
 | 行為分析 Behavioral analysis | - | - | 有 Yes | 有 Yes |
-
-> ¹ 神經網路目前僅支援 GOOD_VS_EVIL（正邪對決）主題。其他主題的 Hard/Nightmare 使用啟發式 AI。
-> 
-> 注意：當神經網路模型載入且主題為 GOOD_VS_EVIL 時，Hard/Nightmare 的所有 AI 決策由神經網路處理，上述啟發式參數僅在 fallback 模式生效。
 
 ### 信念系統 Belief System
 每個 AI 維護一組貝氏機率分佈，涵蓋所有其他玩家可能的角色（`aiMemory.roleProbs`）。每回合根據可觀察的訊號更新：
@@ -320,10 +316,6 @@ node tests/simulate.js 100 --zh                      # 中文版結果輸出
 node tests/simulate.js 100 --zh --compare            # 中文版難度比較
 node tests/simulate.js 100 GOOD_VS_EVIL hard --seed=12345  # 固定種子重現結果
 node tests/simulate.js --help                        # 顯示所有選項及可用主題
-node tests/simulate.js 200 GOOD_VS_EVIL hard --neural      # 全部 AI 使用 ONNX 神經網路
-node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-red  # 紅方用神經網路，藍方用啟發式
-node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-blue # 藍方用神經網路，紅方用啟發式
-node tests/simulate.js 200 GOOD_VS_EVIL hard --neural-red=training/mafia_policy.onnx  # 指定模型路徑
 node tests/behavior_audit.js                         # 250 場行為審計（行動/聊天/投票邏輯）
 ```
 
@@ -335,216 +327,31 @@ Output includes: faction win rates, game length distribution, victory reasons, p
 
 Behavior audit output includes: police investigation accuracy, killer friendly-fire / scatter-vote / private-chat target hit rates, doctor consecutive-target rate, sniper accuracy, civilian follow-reveal / chat-vote consistency, dead-speaker detection.
 
-## AI Training / AI 訓練系統
+## AI Tuning / AI 參數調校
 
-本專案提供三種 AI 訓練方式，可獨立或組合使用。
+遊戲中的 AI 全部是啟發式演算法。`training/` 目錄保留一套 CMA-ES 權重搜尋工具，用來自動調整啟發式 AI 的 hand-tuned 參數；不改變 AI 架構，只調整權重。
 
-Three AI training approaches are available, usable independently or combined.
+All in-game AI is heuristic. The `training/` directory keeps a CMA-ES tool that tunes the heuristic AI's hand-tuned parameters without changing its architecture.
 
 ### 安裝依賴 Install Dependencies
 
 ```bash
-pip install torch numpy tensorboard numba cma
+pip install numpy cma
 ```
 
-GPU 訓練需要 CUDA 版 PyTorch：
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu128
-```
-
-### 訓練檔案結構 Training Files
+### 相關檔案 Files
 
 | 檔案 File | 說明 Description |
 |------|-------------|
-| `training/fast_engine.py` | 純 Python 精簡遊戲引擎（GOOD_VS_EVIL，無 IPC，搭配 Numba JIT） |
-| `training/fast_encode_jit.py` | Numba JIT 觀測編碼器（比 Python 快 292 倍） |
-| `training/model.py` | MAPPO 策略網路（6.93M 參數, hidden=452，4 頭行動空間） |
-| `training/export_onnx.py` | PyTorch → ONNX 匯出腳本 |
-| `training/mafia_policy.onnx` | 匯出的 ONNX 模型（17.4MB，伺服器啟動時自動載入） |
-| `training/train.py` | 訓練迴圈（PPO + GAE + 集中式 critic） |
-| `training/evaluate.py` | RL vs 啟發式對戰評估 |
-| `training/distill.py` | 策略蒸餾（NN → JS 線性權重） |
 | `training/cma_optimize.py` | CMA-ES 權重自動搜尋 |
-| `training/game_server.js` | 完整引擎 JSON 伺服器（多場批次，供 evaluate 用） |
-| `training/state_encoder.js` | JS 觀測編碼器（1135 維，供 game_server 用） |
-| `training/env.py` | 批次遊戲環境（支援 JS subprocess 或 Python 引擎） |
-| `training/vec_env.py` | 多進程向量化環境（JS 引擎模式用） |
 | `training/eval_weights.js` | CMA-ES 用的 JS 模擬評估器 |
 | `training/weight_params.json` | 49 個可調參數定義（預設值 + 範圍） |
+| `training/optimized_weights.json` | CMA-ES 輸出結果 |
+| `src/ai/learned_weights.js` | 遊戲實際載入的權重模組，透過 `getWeight(role, phase, feature, default)` 注入，缺少的權重自動 fallback 到 hand-tuned 值 |
 
-### 方式一：RL 自我對弈 / RL Self-Play (MAPPO)
+### CMA-ES 權重優化 / CMA-ES Weight Optimization
 
-用強化學習訓練神經網路策略。RL 可學會假冒警察、栽贓無辜、保護隊友、策略性沉默等人類策略。
-
-RL trains a neural network through self-play. The agent can learn deception, strategic accusations, role claims, and social coordination.
-
-**快速開始 Quick Start：**
-```bash
-# 從頭訓練 650M steps（RTX 5060 約 10 天，6.93M 模型）
-python training/train.py --hidden 452 --lr 1e-4 --lr_min 5e-5 --ent_coef 0.01 --num_envs 256 --steps 650000000 --rollout_steps 128 --batch_size 8192 --eval_interval 14
-
-# 較短的訓練（測試用，約 7 小時）
-python training/train.py --hidden 452 --num_envs 256 --steps 28000000 --rollout_steps 128 --batch_size 8192
-
-# 即時監控訓練進度
-tensorboard --logdir training/logs
-```
-
-**接續訓練 Resume：**
-```bash
-# 從 checkpoint 繼續訓練到目標步數
-python training/train.py --resume training/checkpoints/policy_final.pt --steps 650000000 --hidden 452 --lr 1e-4 --lr_min 5e-5 --ent_coef 0.01 --num_envs 256
-
-# TensorBoard x 軸會正確接續，不會從 0 重跑
-```
-
-**匯出 ONNX 並部署到遊戲 Export & Deploy：**
-```bash
-# 匯出 ONNX 模型（伺服器啟動時自動載入）
-python training/export_onnx.py --checkpoint training/checkpoints/policy_final.pt
-
-# 啟動伺服器（自動載入 training/mafia_policy.onnx）
-npm start
-```
-
-**評估訓練結果 Evaluate：**
-```bash
-# RL 策略 vs 啟發式 AI 各跑 200 場
-python training/evaluate.py --checkpoint training/checkpoints/policy_final.pt --games 200 --mode all_rl
-python training/evaluate.py --games 200 --mode all_heuristic
-
-# 分析 RL 聊天/欺騙行為（殺手假冒警察、藍方跟票率等）
-python training/analyze_behavior.py --checkpoint training/checkpoints/policy_final.pt --games 500
-```
-
-**主要參數 Key Arguments：**
-
-| 參數 | 建議值 | 說明 |
-|------|--------|------|
-| `--num_envs` | 256 | 平行遊戲數（越大 GPU 利用率越高，但吃更多 RAM） |
-| `--steps` | 650000000 | 總訓練步數（650M，完整訓練約 10 天） |
-| `--hidden` | 452 | 模型隱藏層大小（452=6.93M 參數，336=3.95M，128=678K）需為 4 的倍數 |
-| `--rollout_steps` | 128 | 每次收集多少步再更新（越大越穩定） |
-| `--batch_size` | 8192 | PPO 小批次大小 |
-| `--eval_interval` | 5 | 每幾次 update 記錄一次 TensorBoard（5 ≈ 每 3 分鐘） |
-| `--lr` | 0.0003 | 學習率 |
-| `--resume` | 路徑 | 從 checkpoint 接續訓練 |
-| `--theme` | GOOD_VS_EVIL | 訓練主題（目前僅支援此主題） |
-| `--save_dir` | training/checkpoints | 模型儲存位置 |
-| `--log_dir` | training/logs | TensorBoard 日誌位置 |
-
-**訓練時間預估 Training Time：**
-
-| Steps | hidden | 參數量 | 耗時 (RTX 5060) | 預期效果 |
-|-------|--------|--------|----------------|---------|
-| 28M | 452 | 6.93M | ~12 小時 | 基礎策略測試 |
-| 100M | 452 | 6.93M | ~1.8 天 | 殺手學會栽贓，entropy 穩定下降 |
-| 300M | 452 | 6.93M | ~5.3 天 | 策略收斂中，BLUE 勝率 ~28% |
-| 500M | 452 | 6.93M | ~8.8 天 | 策略成熟，entropy ~1.1 |
-| 650M | 452 | 6.93M | ~11.4 天 | 完整訓練，BLUE 勝率 ~31% |
-
-注意：hidden=452 (6.93M) + batch_size=8192 約 660 sps。速度會隨訓練推進下降 10-20%。
-
-**速度參考 Performance（各配置峰值）：**
-
-| 配置 | 速度 | 24 小時產量 |
-|------|------|------------|
-| 16 envs (JS IPC 舊版) | 175 sps | 15M steps |
-| 64 envs (Python + Numba) | 750 sps | 65M steps |
-| 128 envs | 1,300 sps | 112M steps |
-| 256 envs (建議) | 1,550 sps | 134M steps |
-| 512 envs | 1,700 sps | 147M steps |
-
-**技術細節 Technical Details：**
-- **多頭行動空間 (63 維)**：目標 (19) + 聊天類型 (5: 沉默/指控/辯護/宣稱角色/轉移) + 聊天對象 (19) + 角色宣稱 (20)
-- **時序正確**：NIGHT step 只選夜間目標，VOTE step 選聊天+投票（看到夜晚結果後才決定聊天內容）
-- **觀測向量 (1135 維)**：投票圖譜 (18x18)、聊天指控/辯護矩陣、遺言信號、信念分佈、角色資源、角色宣稱記錄
-- **模型**：共享策略網路 + Multi-head Attention + 集中式 critic (CTDE)，6.93M 參數, hidden=452
-- **條件式 PPO**：chat_target 只在 accuse/defend 時計入 loss，claim_role 只在 claim 時計入。Dead/forced agent 不影響 actor loss，但 critic 仍學習所有狀態
-- **加速**：純 Python 引擎 + Numba JIT 觀測編碼（292x），無 Node.js subprocess 開銷
-**TensorBoard 指標說明 Metrics Guide：**
-
-| 指標 Metric | 位置 | 意義 | 健康範圍 |
-|-------------|------|------|---------|
-| `loss/policy` | 訓練 | 策略改善幅度（負值=策略在變好） | -0.01 ~ 0，穩定不大跳 |
-| `loss/value` | 訓練 | critic 預測「會不會贏」的準度（越低越準） | 0.1 ~ 0.4，持續下降是好的 |
-| `loss/entropy` | 訓練 | 行動隨機程度（高=探索中，低=確定策略） | 4-head 初期 ~5.0，收斂到 ~3.0 |
-| `perf/steps_per_sec` | 效能 | 訓練速度 | 256 envs 約 1500 sps |
-| `winrate/BLUE` | 遊戲 | 藍方（警察陣營）勝率 | 自我對弈趨近 0.5 |
-| `winrate/RED` | 遊戲 | 紅方（殺手陣營）勝率 | 自我對弈趨近 0.5 |
-| `game/avg_length` | 遊戲 | 平均遊戲天數（越長=雙方越強） | 5-7 天正常 |
-| `game/total_games` | 遊戲 | 累計完成遊戲數 | 持續上升 |
-| `usage/doctorInjections` | 角色 | 每場醫生平均打針數（上限 6） | ~3-4 |
-| `usage/doctorSaves` | 角色 | 每場醫生平均救援數 | ~0.3-0.5 |
-| `usage/doctorOverdoses` | 角色 | 每場雙針殺人次數 | ~0.2-0.3 |
-| `usage/sniperShots` | 角色 | 每場狙擊手開槍數（上限 4） | ~3-3.5 |
-| `usage/policeFoundRed` | 角色 | 每場警察查獲紅方數 | ~1.5-2.0 |
-| `usage/nightKills` | 整體 | 每場夜間總死亡數 | ~7-9 |
-| `usage/voteKills` | 整體 | 每場投票處決數 | ~4-6 |
-
-**Per-step Shaping Rewards（每步即時獎勵）：**
-
-訓練除了終局勝負（±1.0）外，每一步都有即時獎勵信號，教角色正確使用能力：
-
-**夜間事件 Night Events：**
-
-| 事件 | 對象 | 獎勵 | 目的 |
-|------|------|------|------|
-| 殺手殺死警察 | 存活殺手群 | +0.06 | 擊殺高價值目標 |
-| 殺手殺死非警察藍方 | 存活殺手群 | +0.03 | 鼓勵擊殺 |
-| 殺手殺到紅方 | 存活殺手群 | -0.02 | 懲罰友射 |
-| 狙擊手打中藍方 | 狙擊手 | +0.05 | 鼓勵開槍（防止學會不開槍） |
-| 狙擊手打到紅方 | 狙擊手 | -0.05 | 懲罰友射 |
-| 醫生成功救人 | 醫生 | +0.05 | 鼓勵打針 |
-| 醫生 overdose 紅方 | 醫生 | +0.06 | 精準 overdose 獎勵 |
-| 醫生 overdose 藍方 | 醫生 | -0.08 | 重罰誤殺隊友 |
-| 警察查到紅方 | 警察 | +0.05 | 鼓勵調查 |
-
-**聊天行動 Chat Actions：**
-
-| 事件 | 對象 | 獎勵 | 目的 |
-|------|------|------|------|
-| 殺手指控藍方 | 殺手 | +0.02 | 鼓勵栽贓 |
-| 殺手辯護紅方隊友 | 殺手 | +0.02 | 鼓勵保護隊友 |
-| 殺手宣稱警察 | 殺手 | +0.04 | 鼓勵假冒警察 |
-| 警察宣稱警察 | 警察 | +0.04 | 鼓勵公開身份 |
-| 警察指控紅方 | 警察 | +0.05 | 鼓勵分享紅方情報 |
-| 警察告知誰是藍方 | 警察 | +0.02 | 鼓勵分享藍方情報 |
-
-**投票結果 Vote Outcomes：**
-
-| 事件 | 對象 | 獎勵 | 目的 |
-|------|------|------|------|
-| 投票投出紅方 | **投票者本人** | +0.04 | 正確判斷 |
-| 非警察藍方跟隨真警察投紅方 | 投票者 | +0.08 extra | 跟對情報 |
-| 投票投出警察/醫生 | **投票者本人** | -0.05 | 殺死關鍵角色重罰 |
-| 投票投出其他藍方 | **投票者本人** | -0.02 | 小失誤 |
-| 投票投出平民 | **投票者本人** | 0 | 可接受的損失 |
-| 非警察藍方被假警察騙投藍方 | 投票者 | -0.02 extra | 被欺騙懲罰 |
-| 有真揭露但非警察藍方沒跟投 | 投票者 | -0.04 | 懲罰忽略情報 |
-| 指控某人→被投出→是紅方 | 指控者 | +0.03 | 獎勵有效指控 |
-| 指控某人→被投出→是藍方 | 指控者 | -0.02 | 懲罰錯誤指控 |
-
-**終局 Terminal：**
-
-| 事件 | 對象 | 獎勵 |
-|------|------|------|
-| 陣營勝利 | 勝方全員 | +1.0 |
-| 陣營失敗 | 敗方全員 | -1.0 |
-| 存活加分 | 存活者 | +0.05 |
-
-**如何判斷訓練是否正常 How to tell if training is healthy：**
-- `entropy` 緩慢下降 = 策略在收斂（好），急跌 = 過早收斂（不好）
-- `value loss` 持續下降 = AI 越來越會判斷局勢，自我對弈中回升到 0.18 是正常的（策略變複雜）
-- `winrate` 初期紅方先跑（~80%），中期藍方追上，最終趨向 50:50
-- `avg_length` 增加 = 雙方攻防品質提升
-- `policy loss` 持續為負 = 策略在改善，接近 0 = 收斂
-- `sniperShots` 如果持續下降到 <1.0 = shaping reward 不夠強
-- `steps_per_sec` 穩定 = 沒有記憶體洩漏或效能退化
-
-### 方式二：CMA-ES 權重優化 / CMA-ES Weight Optimization
-
-自動搜尋現有啟發式 AI 中 49 個 hand-tuned 參數的最優組合。不改變 AI 架構，只調整權重。追求雙方都變強、遊戲品質提升。
+自動搜尋現有啟發式 AI 中 49 個 hand-tuned 參數的最優組合，追求雙方都變強、遊戲品質提升。
 
 Automatically searches optimal values for 49 hand-tuned heuristic parameters, optimizing for game quality (balance + length + engagement).
 
@@ -558,109 +365,8 @@ python training/cma_optimize.py --population 16 --games 150        # 更大搜�
 - 輸出：`training/optimized_weights.json`
 - Fitness：遊戲品質導向（遊戲長度 35% + 平衡度 25% + 醫生救援 20% + 多樣性 20%）
 
-### 方式三：策略蒸餾 / Policy Distillation
+### 已停用的 RL 實驗 / Discontinued RL Experiment
 
-從訓練好的 NN 提取策略，轉換為 JS 啟發式可用的權重，部署到瀏覽器。
+`training/` 目錄中其餘檔案（`train.py`、`model.py`、`fast_engine.py`、`fast_encode_jit.py`、`env.py`、`vec_env.py`、`evaluate.py`、`analyze_behavior.py`、`distill.py`、`export_onnx.py`、`game_server.js`、`state_encoder.js`、`mafia_policy.onnx`）以及 `src/ai/neural.js` 屬於一次 MAPPO 自我對弈訓練實驗的遺留。此方向已停止開發，遊戲伺服器與客戶端都不會載入模型或使用這些模組；保留僅供參考。
 
-Extracts learned policy from trained NN into JS-compatible weights for browser deployment.
-
-```bash
-# 蒸餾（從 checkpoint 提取權重）
-python training/distill.py --checkpoint training/checkpoints/policy_final.pt --samples 10000
-
-# 輸出檔案：
-#   training/learned_weights.json      — 原始權重數據
-#   src/ai/learned_weights.js          — JS 模組（自動整合到遊戲）
-```
-
-整合方式：透過 `getWeight(role, phase, feature, default)` 注入，缺少的權重自動 fallback 到 hand-tuned 值。
-
-### 完整訓練流程 Full Training Pipeline
-
-```bash
-# 1. 安裝依賴
-pip install torch --index-url https://download.pytorch.org/whl/cu128
-pip install numpy tensorboard numba cma onnx onnxruntime onnxscript
-
-# 2. RL 訓練（掛著跑 ~10 天）
-python training/train.py --hidden 452 --lr 1e-4 --lr_min 5e-5 --ent_coef 0.01 --num_envs 256 --steps 650000000 --rollout_steps 128 --batch_size 8192 --eval_interval 14
-
-# 3. 監控（另開終端）
-tensorboard --logdir training/logs
-
-# 4. 評估
-python training/evaluate.py --checkpoint training/checkpoints/policy_final.pt --games 200 --mode all_rl
-
-# 5. 行為分析（殺手欺騙、藍方跟票等）
-python training/analyze_behavior.py --checkpoint training/checkpoints/policy_final.pt --games 500
-
-# 6. 匯出 ONNX 模型（部署到遊戲伺服器）
-python training/export_onnx.py --checkpoint training/checkpoints/policy_final.pt
-
-# 7. (可選) 蒸餾為 JS 線性權重（用於無 ONNX 環境）
-python training/distill.py --checkpoint training/checkpoints/policy_final.pt --samples 10000
-
-# 8. 啟動伺服器（自動載入 ONNX 模型）
-npm start
-
-# 9. 接續訓練更多 steps
-python training/train.py --resume training/checkpoints/policy_final.pt --steps 800000000 --hidden 452 --lr 1e-4 --lr_min 5e-5 --ent_coef 0.01 --num_envs 256
-```
-
-### 架構圖 Architecture
-
-```
-         ┌─────────────────────────────────────────────┐
-         │              Training (Python)               │
-         │                                             │
-         │  ┌─────────────┐     ┌──────────────────┐  │
-         │  │ fast_engine  │────►│ fast_encode_jit  │  │
-         │  │  (game sim)  │     │  (Numba JIT obs) │  │
-         │  └──────────────┘     └────────┬─────────┘  │
-         │                                │            │
-         │                    obs [256, 18, 1135]      │
-         │                                │            │
-         │                       ┌────────▼─────────┐  │
-         │                       │   MafiaPolicy    │  │
-         │                       │   (GPU, 6.93M)    │  │
-         │                       │   4-head output  │  │
-         │                       └────────┬─────────┘  │
-         │                                │            │
-         │                   actions [256, 18, 4]      │
-         │                                │            │
-         │  ┌─────────────────────────────▼──────────┐ │
-         │  │            train.py (MAPPO)             │ │
-         │  │  PPO + GAE + centralized critic         │ │
-         │  └─────────────────────────────┬──────────┘ │
-         └────────────────────────────────┼────────────┘
-                                          │
-                              policy_final.pt
-                                          │
-                    ┌──────────────┬──────┼──────────────────┐
-                    │              │      │                  │
-              ┌─────▼─────┐ ┌─────▼────┐ ┌──────▼──────┐   ┌──────▼──────┐
-              │ evaluate   │ │ analyze  │ │  distill    │   │  CMA-ES     │
-              │ (vs heur.) │ │ behavior │ │  (NN→JSON)  │   │ (49 params) │
-              └────────────┘ └──────────┘ └──────┬──────┘   └──────┬──────┘
-                                                 │                  │
-                                        learned_weights.js   optimized_weights
-                                                 │                  │
-                                          ┌──────▼──────────────────▼──────┐
-                                          │     src/ai/ (JS heuristic)     │
-                                          │     getWeight() fallback       │
-                                          └────────────────────────────────┘
-
-                    ┌──────────────┐
-                    │ export_onnx  │
-                    │ (PyTorch→ONNX│
-                    └──────┬───────┘
-                           │
-                  mafia_policy.onnx (17.4MB)
-                           │
-                    ┌──────▼───────────────────────┐
-                    │  src/ai/neural.js (ONNX RT)  │
-                    │  Hard AI: neural network      │
-                    │  (GOOD_VS_EVIL only)          │
-                    │  Fallback: heuristic AI       │
-                    └──────────────────────────────┘
-```
+The remaining files under `training/` and `src/ai/neural.js` are leftovers from a discontinued MAPPO self-play experiment. The game server and clients never load the model or call these modules; they are kept for reference only.
