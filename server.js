@@ -2,7 +2,7 @@ import http from "node:http";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 import { GameEngine } from "./src/engine.js";
 import { buildPlayerView, buildSpectatorView } from "./src/view.js";
 import { Theme, Phase } from "./src/roles.js";
@@ -11,10 +11,12 @@ import { generateNightFactionChat } from "./src/ai/index.js";
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 18;
 const RESTART_DELAY_MS = 25000;
+const MAX_MESSAGE_BYTES = 16 * 1024;
 
 const room = {
   started: false,
   engine: null,
+  resolving: null,
   host: null,
   theme: Theme.GOOD_VS_EVIL.id,
   seats: [], // { playerId, name }
@@ -82,18 +84,19 @@ function nextSeatId() {
 function broadcast(payload) {
   const message = JSON.stringify(payload);
   for (const ws of room.connections.keys()) {
-    ws.send(message);
+    if (ws.readyState === WebSocket.OPEN) ws.send(message);
   }
 }
 
 function send(ws, payload) {
-  ws.send(JSON.stringify(payload));
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
 }
 
 function resetRoomState(clearSeats = false) {
   clearTimer();
   room.started = false;
   room.engine = null;
+  room.resolving = null;
   room.nightActions.clear();
   room.voteActions.clear();
   room.lastWords.clear();
@@ -132,6 +135,7 @@ function startGame(theme = Theme.GOOD_VS_EVIL.id) {
   const humanIds = room.seats.map((s) => s.playerId);
   room.theme = theme;
   room.engine = new GameEngine(Date.now(), theme, "hard", { humanIds });
+  room.resolving = null;
   room.engine.state.spectatorChat = room.spectatorChat;
   for (const seat of room.seats) {
     const p = room.engine.state.players[seat.playerId];
@@ -168,12 +172,20 @@ function broadcastTimer() {
 
 function startTimer(phase, durationMs, onFire) {
   clearTimer();
-  room.timer.phase = phase;
-  room.timer.endsAt = Date.now() + durationMs;
-  room.timer.handle = setTimeout(() => {
-    onFire();
+  const engine = room.engine;
+  const day = engine?.state.dayNumber;
+  const timer = { handle: null, interval: null, phase, endsAt: Date.now() + durationMs };
+  room.timer = timer;
+  timer.handle = setTimeout(() => {
+    if (room.timer !== timer || room.engine !== engine || engine?.state.dayNumber !== day) return;
+    if (phase !== "RESTART" && engine?.state.phase !== phase) return;
+    try {
+      Promise.resolve(onFire()).catch((err) => log("Timer failed:", err.message));
+    } catch (err) {
+      log("Timer failed:", err.message);
+    }
   }, durationMs);
-  room.timer.interval = setInterval(() => broadcastTimer(), 1000);
+  timer.interval = setInterval(() => broadcastTimer(), 1000);
   broadcastTimer();
 }
 
@@ -188,36 +200,12 @@ function scheduleNightTimer() {
     }
     broadcastViews();
   }
-  startTimer("NIGHT", DURATIONS.night, async () => {
-    try {
-      const humanActions = Object.fromEntries(room.nightActions.entries());
-      await room.engine.resolveNight(null, { humanActions, includeHuman: false });
-      room.nightActions.clear();
-      broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
-      broadcastViews();
-      if (room.engine.state.phase !== Phase.END) scheduleDayToVote();
-      scheduleRestartAfterVictory();
-    } catch (err) {
-      log("Error resolving night:", err.message, err.stack);
-      // Attempt recovery: advance to DAY to avoid permanent hang
-      try {
-        room.nightActions.clear();
-        if (room.engine) {
-          room.engine.state.phase = Phase.DAY;
-          broadcast({ type: "phase", phase: Phase.DAY, day: room.engine.state.dayNumber });
-          broadcastViews();
-          scheduleDayToVote();
-        }
-      } catch (recoveryErr) {
-        log("Recovery failed:", recoveryErr.message);
-      }
-    }
-  });
+  startTimer("NIGHT", DURATIONS.night, () => resolvePhase(Phase.NIGHT));
 }
 
 function advanceToVotePhase() {
   try {
-    if (!room.engine || room.engine.state.phase === Phase.END) return;
+    if (!room.engine || room.resolving || room.engine.state.phase !== Phase.DAY) return;
     room.engine.state.phase = Phase.VOTE;
     broadcast({ type: "phase", phase: Phase.VOTE, day: room.engine.state.dayNumber });
     broadcastViews();
@@ -234,36 +222,53 @@ function scheduleDayToVote() {
 }
 
 function scheduleVoteTimer() {
-  startTimer("VOTE", DURATIONS.vote, async () => {
-    try {
-      checkAfkPlayers(); // must run before voteActions.clear()
+  startTimer("VOTE", DURATIONS.vote, () => resolvePhase(Phase.VOTE));
+}
+
+async function resolvePhase(phase, ws = null) {
+  const engine = room.engine;
+  if (!room.started || !engine || engine.state.phase !== phase || room.resolving) {
+    if (ws) send(ws, { type: "error", message: "Phase is not available for resolution." });
+    return;
+  }
+  // Acquire before awaiting; identity also invalidates work after a room reset.
+  const resolution = { engine, day: engine.state.dayNumber };
+  room.resolving = resolution;
+  clearTimer();
+  const isCurrent = () => room.started && room.engine === engine && room.resolving === resolution;
+  try {
+    if (phase === Phase.NIGHT) {
+      const humanActions = Object.fromEntries(room.nightActions.entries());
+      await engine.resolveNight(null, { humanActions, includeHuman: false });
+    } else {
+      checkAfkPlayers();
+      if (!isCurrent()) return;
       const humanVotes = Object.fromEntries(room.voteActions.entries());
       const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
-      await room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
-      room.voteActions.clear();
-      room.lastWords.clear();
-      broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
-      broadcastViews();
-      if (room.engine.state.phase !== Phase.END) scheduleNightTimer();
-      scheduleRestartAfterVictory();
-    } catch (err) {
-      log("Error resolving vote:", err.message, err.stack);
-      // Attempt recovery: advance to NIGHT to avoid permanent hang
-      try {
-        room.voteActions.clear();
-        room.lastWords.clear();
-        if (room.engine) {
-          room.engine.state.phase = Phase.NIGHT;
-          room.engine.state.dayNumber = (room.engine.state.dayNumber || 1) + 1;
-          broadcast({ type: "phase", phase: Phase.NIGHT, day: room.engine.state.dayNumber });
-          broadcastViews();
-          scheduleNightTimer();
-        }
-      } catch (recoveryErr) {
-        log("Recovery failed:", recoveryErr.message);
-      }
+      await engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
     }
-  });
+    if (!isCurrent()) return;
+  } catch (err) {
+    if (!isCurrent()) return;
+    log("Error resolving phase:", phase, err.message, err.stack);
+    // A partially applied round must not be retried against the same state.
+    engine.state.phase = engine.state.victory ? Phase.END : phase === Phase.NIGHT ? Phase.DAY : Phase.NIGHT;
+    if (phase === Phase.VOTE && !engine.state.victory) engine.state.dayNumber = resolution.day + 1;
+    if (ws) send(ws, { type: "error", message: "Resolution failed; advancing to the next phase." });
+  } finally {
+    if (room.resolving === resolution) room.resolving = null;
+  }
+  if (!room.started || room.engine !== engine) return;
+  if (phase === Phase.NIGHT) room.nightActions.clear();
+  else {
+    room.voteActions.clear();
+    room.lastWords.clear();
+  }
+  broadcast({ type: "phase", phase: engine.state.phase, day: engine.state.dayNumber });
+  broadcastViews();
+  if (engine.state.phase === Phase.DAY) scheduleDayToVote();
+  else if (engine.state.phase === Phase.NIGHT) scheduleNightTimer();
+  scheduleRestartAfterVictory();
 }
 
 function ensureHost(ws) {
@@ -272,6 +277,17 @@ function ensureHost(ws) {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const baseDir = path.resolve(__dirname);
+const publicFiles = new Set([
+  "/index.html", "/multiplayer.html", "/styles.css",
+  "/src/main.js", "/src/multi.js", "/src/engine.js", "/src/state.js",
+  "/src/view.js", "/src/roles.js", "/src/rng.js",
+  "/src/ai/index.js", "/src/ai/night.js", "/src/ai/vote.js", "/src/ai/chat.js",
+  "/src/ai/analysis.js", "/src/ai/memory.js", "/src/ai/targeting.js",
+  "/src/ai/utils.js", "/src/ai/templates.js", "/src/ai/learned_weights.js",
+  "/src/ai/neural.js",
+  // Statically imported by the browser's neural module, even without a model.
+  "/training/state_encoder.js",
+]);
 
 function contentTypeFor(filePath) {
   const ext = path.extname(filePath).toLowerCase();
@@ -300,14 +316,21 @@ async function serveStatic(req, res) {
     res.end("Method Not Allowed");
     return;
   }
-  const urlPath = new URL(req.url, "http://localhost").pathname;
-  const normalized = path.normalize(urlPath);
-  const filePath = path.resolve(baseDir, normalized === "/" ? "index.html" : "." + normalized);
-  if (!filePath.startsWith(baseDir)) {
-    res.writeHead(403);
-    res.end("Forbidden");
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
+  } catch {
+    res.writeHead(400);
+    res.end("Bad Request");
     return;
   }
+  if (urlPath === "/") urlPath = "/index.html";
+  if (!publicFiles.has(urlPath)) {
+    res.writeHead(404);
+    res.end("Not found");
+    return;
+  }
+  const filePath = path.join(baseDir, urlPath.slice(1));
   try {
     const data = await fs.readFile(filePath);
     res.writeHead(200, { "Content-Type": contentTypeFor(filePath) });
@@ -320,9 +343,17 @@ async function serveStatic(req, res) {
 }
 
 const server = http.createServer((req, res) => {
-  serveStatic(req, res);
+  serveStatic(req, res).catch((err) => {
+    log("HTTP request failed:", err.message);
+    if (res.destroyed) return;
+    if (res.headersSent) res.destroy();
+    else {
+      res.writeHead(500);
+      res.end("Internal Server Error");
+    }
+  });
 });
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: MAX_MESSAGE_BYTES });
 
 let lobbyBroadcastHandle = null;
 function scheduleLobbyBroadcast() {
@@ -339,7 +370,6 @@ const RATE_LIMIT = {
   maxTokens: 8,
   refill: 8,
 };
-const MAX_MESSAGE_BYTES = 16 * 1024; // hard cap per incoming WS message
 const VIOLATION_LIMIT = 5; // disconnect after too many violations
 function makeRateLimiter() {
   return { tokens: RATE_LIMIT.maxTokens, last: Date.now(), violations: 0 };
@@ -370,7 +400,7 @@ setInterval(() => {
 }, BAN_DURATION_MS);
 
 function scheduleRestartAfterVictory() {
-  if (!room.engine) return;
+  if (!room.engine || room.resolving) return;
   const victory = !!room.engine.state?.victory;
   const isEndPhase = room.engine.state.phase === Phase.END;
   if (!victory && !isEndPhase) return;
@@ -526,6 +556,7 @@ function promoteWaitingSpectatorsToSeats() {
 }
 
 wss.on("connection", (ws, req) => {
+  ws.on("error", (err) => log("WebSocket error:", err.code || err.message));
   const ip = req?.socket?.remoteAddress || "unknown";
   ws.ip = ip;
   const penalty = ipPenalties.get(ip);
@@ -539,7 +570,7 @@ wss.on("connection", (ws, req) => {
     }
   }
   ws.rateLimiter = makeRateLimiter();
-  ws.on("message", async (data) => {
+  async function handleMessage(data) {
     if (!consumeToken(ws.rateLimiter)) {
       const record = ipPenalties.get(ws.ip) || { violations: 0, lastViolationTime: 0 };
       record.violations += 1;
@@ -569,6 +600,21 @@ wss.on("connection", (ws, req) => {
       msg = JSON.parse(data.toString());
     } catch (err) {
       send(ws, { type: "error", message: "Invalid JSON" });
+      return;
+    }
+
+    if (!msg || typeof msg !== "object" || Array.isArray(msg) || typeof msg.type !== "string") {
+      send(ws, { type: "error", message: "Message must be an object with a string type." });
+      return;
+    }
+    for (const field of ["name", "text", "theme", "lastWords"]) {
+      if (Object.hasOwn(msg, field) && typeof msg[field] !== "string") {
+        send(ws, { type: "error", message: `${field} must be a string.` });
+        return;
+      }
+    }
+    if (room.resolving && msg.type !== "restart") {
+      send(ws, { type: "error", message: "Phase resolution is in progress." });
       return;
     }
 
@@ -782,19 +828,7 @@ wss.on("connection", (ws, req) => {
           return;
         }
         if (!room.started || !room.engine) return;
-        try {
-          const humanActions = Object.fromEntries(room.nightActions.entries());
-          await room.engine.resolveNight(null, { humanActions, includeHuman: false });
-          room.nightActions.clear();
-          clearTimer();
-          broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
-          broadcastViews();
-          if (room.engine.state.phase !== Phase.END) scheduleDayToVote();
-          scheduleRestartAfterVictory();
-        } catch (err) {
-          log("Error in resolve_night:", err.message, err.stack);
-          send(ws, { type: "error", message: "Night resolution failed. Try again or restart." });
-        }
+        await resolvePhase(Phase.NIGHT, ws);
         break;
       }
       case "vote": {
@@ -849,22 +883,7 @@ wss.on("connection", (ws, req) => {
           return;
         }
         if (!room.started || !room.engine) return;
-        try {
-          checkAfkPlayers(); // must run before voteActions.clear()
-          const humanVotes = Object.fromEntries(room.voteActions.entries());
-          const lastWordsByPlayer = Object.fromEntries(room.lastWords.entries());
-          await room.engine.resolveVote(null, "", { humanVotes, lastWordsByPlayer, includeHuman: false });
-          room.voteActions.clear();
-          room.lastWords.clear();
-          clearTimer();
-          broadcast({ type: "phase", phase: room.engine.state.phase, day: room.engine.state.dayNumber });
-          broadcastViews();
-          if (room.engine.state.phase !== Phase.END) scheduleNightTimer();
-          scheduleRestartAfterVictory();
-        } catch (err) {
-          log("Error in resolve_vote:", err.message, err.stack);
-          send(ws, { type: "error", message: "Vote resolution failed. Try again or restart." });
-        }
+        await resolvePhase(Phase.VOTE, ws);
         break;
       }
       case "last_words": {
@@ -1019,6 +1038,12 @@ wss.on("connection", (ws, req) => {
       default:
         send(ws, { type: "error", message: "Unknown message type." });
     }
+  }
+  ws.on("message", (data) => {
+    handleMessage(data).catch((err) => {
+      log("Message handling failed:", err.message, err.stack);
+      send(ws, { type: "error", message: "Unable to process message." });
+    });
   });
 
   ws.on("close", () => {
