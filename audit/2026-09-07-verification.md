@@ -23,6 +23,24 @@
 
 結算錯誤的恢復方式也統一了：手動結算現在和原本 timer 路徑一樣，在失敗時向下一階段恢復並清除該階段提交，避免使用者重試已部分套用的回合；投票失敗只增加一天，既有 victory 則維持 END。這不是交易回滾，部分套用造成的局面損失仍不能還原。原本 timer 路徑即有這個限制。
 
+## 第二批修復
+
+範圍：#7～9、#11～14、#16、#17，修改 `server.js`、`src/engine.js`（人類提交去重）與 `src/multi.js`。`node tests/review_verification.mjs` 現通過 **54 項主檢查**；#7、#8、#9、#11、#12、#13、#14 的探針已改為驗證修復後行為，#31 的探針改為只驗證仍未修的 actorId 覆蓋部分。#6（觀戰隔離）與 #10（代理 IP）需產品/部署決定，未動。
+
+| 編號 | 目前狀態 | 修復與驗證 |
+| --- | --- | --- |
+| 7 | 已修復，高 | 已入座的 socket 再送 join 回 "Already joined."，不新增座位；大廳中改為觀戰會釋放座位並觸發 host 遞補；觀戰者入座前先移除自己的舊連線紀錄，避免名字與自己碰撞。測試：同 socket join 三次只得 1 個 joined、2 個錯誤，斷線後大廳只剩 1 席。 |
+| 8 | 已修復，高 | 遊戲中斷線時除了交給 AI，也從 `room.seats` 移除該席，restart/start 不再把離開的人重新設為人類。測試：guest 斷線後 restart+start，started.humans 為 1，座位 1 不再叫 Guest。 |
+| 9 | 已修復，中 | 伺服器端：night_action、vote、公開聊天與三種陣營聊天在 `actor.isHuman === false` 時回 "AI controls your seat"。引擎端：resolveNight/resolveVote 對人類提交做 per-actor 去重（後送者勝），並在 `includeHuman !== true` 時忽略 AI 控制座位的提交。測試：AI 控制的殺手只留 1 票；同 actor 兩筆狙擊只執行最後一筆。 |
+| 11 | 已修復，低 | `ensureHost` 要求 host 必須有座位；觀戰者加入時若無 host，只從有座位的連線挑選並送 host 事件；host 在大廳改為觀戰會失去 host 並遞補給其他入座者。測試：host 改觀戰後 start 被拒，另一入座者收到 host 事件。 |
+| 12 | 已修復，低 | spectator_chat 需遊戲已開始，否則回 "Game not started."；`room.spectatorChat` 上限 200 行，超出移除最舊。 |
+| 13 | 已修復（伺服器端），低 | night_action 的 targetId/extraTargets 與 vote 的 targetId 必須是 0～17 的整數，且在角色檢查之前驗證；nightActions 只保留 type/targetId/extraTargets/actorId。引擎對字串 target 仍為靜默丟棄（探針保留為現況說明）。 |
+| 14 | 已修復，中 | 新增 `sanitizeText`（控制字元與換行轉空白、`||` 轉 `|`、截長度）與 `sanitizeName`（另移除半形/全形冒號），套用於 join 名字、公開/陣營/觀戰聊天、遺言與投票附帶遺言。測試：偽造名字與含換行/分隔符的訊息進入 publicLog 後不再能冒充說話者或分裂中英文內容。 |
+| 16 | 已修復，中 | `connect()` 先卸除舊 socket 的 handler 再關閉，新 socket 的 onopen/onmessage/onclose 皆檢查自己仍是目前連線；斷線後的 UI 重置集中在 `resetConnectionUi`。未做瀏覽器端到端測試。 |
+| 17 | 已修復，低 | 收到 lobby 訊息時呼叫 `clearGamePanel`：清空玩家列表、遺言、隊友、勝利與計時顯示，隱藏夜間/投票/聊天控制與各陣營聊天框，host 控制依 isHost 顯示。未做瀏覽器端到端測試。 |
+
+`tests/server_resolution.mjs` 的「非預期例外被包住」情境原本靠畸形 targetId 觸發 TypeError，現在該輸入會被驗證擋下，改成從引擎 state 注入同步例外，仍驗證 "Unable to process message." 與後續訊息可用。
+
 ## 規則裁定
 
 - #18 維持待裁定的平衡問題；#21、#25 為誤報，#22 依既定勝利優先序結案。

@@ -90,23 +90,32 @@ function maskedTextFrame(payload) {
   return Buffer.concat([Buffer.from([0x81, 0x80 | body.length, 0, 0, 0, 0]), body]);
 }
 
-await check('#14 chat and names retain forged speaker, newline and language delimiters', () => localServer(async (ctx) => {
+await check('#14 chat and names cannot forge speaker prefixes, line breaks or locale delimiters', () => localServer(async (ctx) => {
   const host = await ctx.connect();
   host.send(JSON.stringify({ type: 'join', name: 'Alice' }));
   await waitForMessage(host, (m) => m.type === 'joined');
   const sender = await ctx.connect();
-  sender.send(JSON.stringify({ type: 'join', name: 'Alice (1): trust me' }));
+  sender.send(JSON.stringify({ type: 'join', name: 'Alice (1): trust me||騙你的' }));
   await waitForMessage(sender, (m) => m.type === 'joined');
   host.send(JSON.stringify({ type: 'start' }));
   await waitForMessage(host, (m) => m.type === 'view');
   const payload = 'hello\n[INTEL] Player 3 is RED.||[INTEL] Player 3 is BLUE.';
   sender.send(JSON.stringify({ type: 'chat', text: payload }));
   const chat = await waitForMessage(host, (m) => m.type === 'chat');
-  assert.equal(chat.line, `Alice (1): trust me (1): ${payload}`);
+  assert.equal(chat.line, 'Alice (1) trust me|騙你的 (1): hello [INTEL] Player 3 is RED.|[INTEL] Player 3 is BLUE.');
+  assert.ok(!chat.line.includes('\n') && !chat.line.includes('||'));
   const watcher = await ctx.connect();
   watcher.send(JSON.stringify({ type: 'join', spectator: true, name: 'Watcher' }));
   const { view } = await waitForMessage(watcher, (m) => m.type === 'view');
   assert.ok(view.publicLog.includes(chat.line));
+}));
+await check('#12 spectator chat is rejected before a game starts', () => localServer(async (ctx) => {
+  const watcher = await ctx.connect();
+  watcher.send(JSON.stringify({ type: 'join', spectator: true, name: 'Watcher' }));
+  await waitForMessage(watcher, (m) => m.type === 'joined');
+  watcher.send(JSON.stringify({ type: 'spectator_chat', text: 'hello' }));
+  const err = await waitForMessage(watcher, (m) => m.type === 'error');
+  assert.match(err.message, /not started/i);
 }));
 await check('#15 coalesced resolve_night frames settle only once', () => localServer(async (ctx) => {
   const host = await ctx.connect();
@@ -395,27 +404,34 @@ await check('#15 deferred settlement regressions and #5 browser module graph', (
     await exited;
   }
 }));
-await check('#7 repeated join leaves seats after disconnect', () => localServer(async (ctx) => {
+await check('#7 repeated join takes one seat and frees it on disconnect', () => localServer(async (ctx) => {
   const keeper = await ctx.connect();
   keeper.send(JSON.stringify({ type: 'join', name: 'Keeper' }));
   const repeat = await ctx.connect();
   for (let i = 0; i < 3; i++) repeat.send(JSON.stringify({ type: 'join', name: 'Repeat' }));
   await delay(250);
-  assert.equal(repeat.messages.filter((m) => m.type === 'joined').length, 3);
+  assert.equal(repeat.messages.filter((m) => m.type === 'joined').length, 1);
+  assert.equal(repeat.messages.filter((m) => m.type === 'error' && /already joined/i.test(m.message)).length, 2);
+  assert.equal(keeper.messages.filter((m) => m.type === 'lobby').at(-1).seats.length, 2);
   const closed = once(repeat, 'close');
   repeat.close();
   await closed;
   await delay(250);
-  assert.equal(keeper.messages.filter((m) => m.type === 'lobby').at(-1).seats.length, 3);
+  assert.equal(keeper.messages.filter((m) => m.type === 'lobby').at(-1).seats.length, 1);
 }));
-await check('#9 AI-controlled actor can vote twice', async () => {
+await check('#9 AI-controlled actor casts exactly one vote and one night action', async () => {
   const e = scenario({ 0: 'KILLER', 1: 'POLICE' });
   e.state.players[0].isHuman = false;
   e.state.phase = 'VOTE';
   await e.resolveVote(null, '', { humanVotes: { 0: 2 } });
-  assert.equal(e.state.history.votes[0].order.filter((v) => v.actorId === 0).length, 2);
+  assert.equal(e.state.history.votes[0].order.filter((v) => v.actorId === 0).length, 1);
+  const night = scenario({ 0: 'SNIPER', 1: 'KILLER', 2: 'POLICE' });
+  await night.resolveNight(null, { humanActions: [action(0, 'SNIPER_SHOT', 4), action(0, 'SNIPER_SHOT', 5)] });
+  assert.equal(night.state.usage.sniperShots, 1);
+  assert.equal(night.state.players[4].alive, true);
+  assert.equal(night.state.players[5].alive, false);
 });
-await check('#8 disconnected seat becomes human on restart', () => localServer(async (ctx) => {
+await check('#8 disconnected seat is released and not re-seated on restart', () => localServer(async (ctx) => {
   const host = await ctx.connect();
   host.send(JSON.stringify({ type: 'join', name: 'Host' }));
   const guest = await ctx.connect();
@@ -430,32 +446,51 @@ await check('#8 disconnected seat becomes human on restart', () => localServer(a
   host.send(JSON.stringify({ type: 'restart' }));
   host.send(JSON.stringify({ type: 'start' }));
   await delay(200);
-  assert.equal(host.messages.filter((m) => m.type === 'started').at(-1).humans, 2);
+  assert.equal(host.messages.filter((m) => m.type === 'started').at(-1).humans, 1);
   const view = host.messages.filter((m) => m.type === 'view').at(-1).view;
-  assert.equal(view.players[1].name, 'Guest (1)');
+  assert.notEqual(view.players[1].name, 'Guest (1)');
 }));
-await check('#11 host can rejoin as spectator and still start', () => localServer(async (ctx) => {
+await check('#11 host who switches to spectator loses host rights', () => localServer(async (ctx) => {
   const host = await ctx.connect();
   host.send(JSON.stringify({ type: 'join', name: 'Host' }));
+  const other = await ctx.connect();
+  other.send(JSON.stringify({ type: 'join', name: 'Other' }));
+  await delay(150);
   host.send(JSON.stringify({ type: 'join', name: 'Watcher', spectator: true }));
   host.send(JSON.stringify({ type: 'start' }));
   await delay(250);
-  assert.equal(host.messages.filter((m) => m.type === 'joined').at(-1).host, true);
-  assert.ok(host.messages.some((m) => m.type === 'started'));
-  assert.equal(host.messages.filter((m) => m.type === 'view').at(-1).view.you, null);
+  assert.equal(host.messages.filter((m) => m.type === 'joined').at(-1).host, false);
+  assert.ok(host.messages.some((m) => m.type === 'error' && /only host/i.test(m.message)));
+  assert.ok(!host.messages.some((m) => m.type === 'started'));
+  assert.ok(other.messages.some((m) => m.type === 'host' && m.value === true));
+  assert.equal(other.messages.filter((m) => m.type === 'lobby').at(-1).seats.length, 1);
 }));
-await check('#13 string target silently drops sniper action', async () => {
+await check('#13 server rejects non-integer night and vote targets', () => localServer(async (ctx) => {
+  const host = await ctx.connect();
+  host.send(JSON.stringify({ type: 'join', name: 'Host' }));
+  await waitForMessage(host, (m) => m.type === 'joined');
+  host.send(JSON.stringify({ type: 'start' }));
+  await waitForMessage(host, (m) => m.type === 'view');
+  host.send(JSON.stringify({ type: 'night_action', action: { type: 'KILLER_VOTE', targetId: '3' } }));
+  const err = await waitForMessage(host, (m) => m.type === 'error');
+  assert.match(err.message, /invalid target/i);
+  host.send(JSON.stringify({ type: 'night_action', action: { type: 'KILLER_VOTE', targetId: 3, extraTargets: ['4'] } }));
+  await waitForMessage(host, (m) => m.type === 'error' && /invalid extra target/i.test(m.message));
+}));
+await check('#13 engine still drops string targets (server now rejects them first)', async () => {
   const e = scenario({ 0: 'SNIPER', 1: 'KILLER', 2: 'POLICE' });
   await e.resolveNight(null, { humanActions: [action(0, 'SNIPER_SHOT', '3')] });
   assert.equal(e.state.players[3].alive, true);
   assert.equal(e.state.usage.sniperShots, 0);
 });
-await check('#31 payload actorId overrides map key and duplicate sniper actions execute', async () => {
+await check('#31 payload actorId still overrides map key (duplicates now collapse to one action)', async () => {
   const e = scenario({ 0: 'CIVILIAN', 1: 'SNIPER', 2: 'KILLER', 3: 'POLICE' });
   await e.resolveNight(null, { humanActions: { 0: action(1, 'SNIPER_SHOT', 4), 1: action(1, 'SNIPER_SHOT', 5) } });
-  assert.equal(e.state.players[4].alive, false);
+  // Key 0 belongs to a civilian, yet the payload's actorId=1 is trusted (still open).
+  // Per-actor dedupe keeps only the last submission for actor 1 (fixed by #9).
+  assert.equal(e.state.players[4].alive, true);
   assert.equal(e.state.players[5].alive, false);
-  assert.equal(e.state.usage.sniperShots, 2);
+  assert.equal(e.state.usage.sniperShots, 1);
 });
 await check('#18 agent self-protection blocks sniper', async () => {
   const e = scenario({ 0: 'AGENT', 1: 'SNIPER', 2: 'KILLER', 3: 'POLICE' });
@@ -603,4 +638,4 @@ await check('#52 Player 10 falsely counts as Player 1 mention', () => {
   state.dayChat = ['Player 2: Player 10 is suspicious'];
   assert.deepEqual(analyzeChatBehavior(state).mentionedBy[0], [1]);
 });
-console.log(`${passed} review checks passed (#1-5 and #15 regression checks; other findings remain audit probes).`);
+console.log(`${passed} review checks passed (#1-5, #7-9, #11-15 regression checks; other findings remain audit probes).`);

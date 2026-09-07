@@ -163,9 +163,15 @@ export class GameEngine {
         }
       }
     }
+    const humanActionByActor = new Map();
     for (const ha of humanActionsList) {
-      if (ha && typeof ha.actorId === "number") actions.push(ha);
+      if (!ha || typeof ha.actorId !== "number") continue;
+      const actor = getPlayer(this.state, ha.actorId);
+      // A seat the AI controls (disconnect / AFK takeover) already has an AI action.
+      if (actor && actor.isHuman === false && opts.includeHuman !== true) continue;
+      humanActionByActor.set(ha.actorId, ha); // last submission wins
     }
+    actions.push(...humanActionByActor.values());
 
     const controlActions = [];
     let otherActions = [];
@@ -1007,7 +1013,7 @@ export class GameEngine {
     }
 
     const lastWordsByPlayer = opts.lastWordsByPlayer || {};
-    const humanVotesList = [];
+    let humanVotesList = [];
     const human = this.human();
     if (human?.alive && humanVoteTargetId !== null) {
       humanVotesList.push({ actorId: human.id, targetId: humanVoteTargetId });
@@ -1028,6 +1034,14 @@ export class GameEngine {
         }
       }
     }
+
+    const humanVoteByActor = new Map();
+    for (const hv of humanVotesList) {
+      const actor = getPlayer(this.state, hv.actorId);
+      if (actor && actor.isHuman === false && opts.includeHuman !== true) continue;
+      humanVoteByActor.set(hv.actorId, hv); // last submission wins
+    }
+    humanVotesList = Array.from(humanVoteByActor.values());
 
     for (const hv of humanVotesList) {
       if (hv.targetId === null || hv.targetId === undefined) continue;

@@ -431,10 +431,58 @@ function setupThemeOptions() {
   els.themeSelect.value = Theme.GOOD_VS_EVIL.id;
 }
 
+// Clear everything that belongs to a finished or abandoned game while keeping
+// the connection-level state (host badge, seat) intact.
+function clearGamePanel() {
+  latestView = null;
+  timerState = null;
+  els.dayDisplay.textContent = "-";
+  els.youDisplay.textContent = "-";
+  els.victoryDisplay.textContent = "-";
+  els.victoryDisplay.style.color = "#333";
+  els.playersList.innerHTML = "";
+  if (els.timerDisplay) els.timerDisplay.textContent = "-";
+  if (els.lastWordsList) els.lastWordsList.innerHTML = "";
+  if (els.alliesDisplay) els.alliesDisplay.textContent = "-";
+  if (els.endBanner) { els.endBanner.textContent = ""; els.endBanner.classList.add("hidden"); }
+  for (const box of [els.killerChatBox, els.grudgeChatBox, els.policeChatBox, els.spectatorChatBox, els.deadLastWordsBox]) {
+    if (box) box.classList.add("hidden");
+  }
+  document.getElementById("hostControls").style.display = isHost ? "block" : "none";
+  document.getElementById("nightControls").style.display = "none";
+  document.getElementById("voteControls").style.display = "none";
+  document.getElementById("chatControls").style.display = "none";
+}
+
+// Full reset after the connection is gone.
+function resetConnectionUi() {
+  isHost = false;
+  seatId = null;
+  lobbySeats = [];
+  clearGamePanel();
+  els.phaseDisplay.textContent = "-";
+  els.logText.value = "";
+  els.seatInfo.textContent = "";
+  els.hostBadge.textContent = "";
+  renderLobby();
+}
+
 function connect() {
-  if (ws) ws.close();
-  ws = new WebSocket(els.wsUrl.value || "wss://kera.onrender.com");
-  ws.onopen = () => {
+  if (ws) {
+    // Detach the old socket first so its late close/message events cannot
+    // clobber the state of the connection we are about to open.
+    const old = ws;
+    ws = null;
+    old.onopen = null;
+    old.onmessage = null;
+    old.onclose = null;
+    old.close();
+  }
+  resetConnectionUi();
+  const socket = new WebSocket(els.wsUrl.value || "wss://kera.onrender.com");
+  ws = socket;
+  socket.onopen = () => {
+    if (ws !== socket) return;
     const name = (els.playerName.value || "Player").slice(0, 32);
     const spectator = !!els.spectatorToggle?.checked;
     const waitForStart = !!els.spectatorWait?.checked;
@@ -451,32 +499,14 @@ function connect() {
       isSpectator = true;
     }
   };
-  ws.onclose = () => {
+  socket.onclose = () => {
+    if (ws !== socket) return;
+    ws = null;
     log("Connection closed.");
-    isHost = false;
-    seatId = null;
-    latestView = null;
-    // Reset all game UI fields to avoid stale state from previous game
-    timerState = null;
-    els.phaseDisplay.textContent = "-";
-    els.dayDisplay.textContent = "-";
-    els.youDisplay.textContent = "-";
-    els.victoryDisplay.textContent = "-";
-    els.victoryDisplay.style.color = "#333";
-    els.playersList.innerHTML = "";
-    els.logText.value = "";
-    if (els.timerDisplay) els.timerDisplay.textContent = "-";
-    if (els.lastWordsList) els.lastWordsList.innerHTML = "";
-    if (els.alliesDisplay) els.alliesDisplay.textContent = "-";
-    if (els.endBanner) { els.endBanner.textContent = ""; els.endBanner.classList.add("hidden"); }
-    // Hide all control panels
-    document.getElementById("hostControls").style.display = "none";
-    document.getElementById("nightControls").style.display = "none";
-    document.getElementById("voteControls").style.display = "none";
-    document.getElementById("chatControls").style.display = "none";
-    renderLobby();
+    resetConnectionUi();
   };
-  ws.onmessage = (evt) => {
+  socket.onmessage = (evt) => {
+    if (ws !== socket) return;
     let msg = null;
     try {
       msg = JSON.parse(evt.data);
@@ -548,10 +578,8 @@ function handleMessage(msg) {
     case "lobby":
       lobbySeats = msg.seats || [];
       renderLobby();
-      latestView = null;
+      clearGamePanel();
       els.phaseDisplay.textContent = t("lobby");
-      els.dayDisplay.textContent = "-";
-      els.youDisplay.textContent = "-";
       log("Lobby reset (waiting to start)");
       if (isSpectator && seatId === null && els.spectatorWait?.checked) {
         const name = (els.playerName.value || "Player").slice(0, 32);

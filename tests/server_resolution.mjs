@@ -180,8 +180,16 @@ for (const phase of [Phase.NIGHT, Phase.VOTE]) {
 }
 {
   const rig = await setup();
-  rig.send({ type: 'night_action', action: { type: 'KILLER_VOTE', targetId: { toString: null } } });
+  // Input validation now rejects malformed targets up front, so inject the
+  // unexpected exception from inside the engine state instead.
+  const engine = rig.engines[0];
+  const players = engine.state.players;
+  Object.defineProperty(engine.state, 'players', {
+    configurable: true, get() { throw new TypeError('Injected synchronous failure'); },
+  });
+  rig.send({ type: 'night_action', action: { type: 'KILLER_VOTE', targetId: 1 } });
   await flush();
+  Object.defineProperty(engine.state, 'players', { configurable: true, writable: true, enumerable: true, value: players });
   assert.ok(rig.host.messages.some((m) => m.message === 'Unable to process message.'));
   rig.send({ type: 'resolve_night' });
   await flush();

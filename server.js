@@ -50,6 +50,43 @@ function normalizeName(str) {
   return (str || "").trim().toLowerCase();
 }
 
+const MAX_CHAT_CHARS = 120;
+const MAX_LAST_WORDS_CHARS = 200;
+const MAX_SPECTATOR_CHAT_LINES = 200;
+
+// Collapse control characters and whitespace, and neutralise the "||" bilingual
+// delimiter so user text cannot forge log lines or per-locale content.
+function sanitizeText(str, max = MAX_CHAT_CHARS) {
+  return String(str ?? "")
+    .replace(/\|\|/g, "|")
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max)
+    .trim();
+}
+
+// Names additionally drop ":" so a name cannot imitate a "speaker: text" prefix.
+function sanitizeName(str) {
+  return sanitizeText(str, 32).replace(/[:\uff1a]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function isValidTargetId(id) {
+  return Number.isInteger(id) && id >= 0 && id < MAX_PLAYERS;
+}
+
+function isSeated(meta) {
+  return !!meta && !meta.spectator && meta.playerId !== undefined && meta.playerId !== null;
+}
+
+function assignSeatedHost() {
+  const seated = Array.from(room.connections.entries()).find(([, meta]) => isSeated(meta));
+  if (!seated) return false;
+  room.host = seated[0];
+  send(room.host, { type: "host", value: true });
+  return true;
+}
+
 function makeUniqueName(rawName) {
   const baseRaw = (rawName || "Player").trim() || "Player";
   const allNames = [
@@ -272,7 +309,7 @@ async function resolvePhase(phase, ws = null) {
 }
 
 function ensureHost(ws) {
-  return ws === room.host;
+  return ws === room.host && isSeated(room.connections.get(ws));
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -620,20 +657,35 @@ wss.on("connection", (ws, req) => {
 
     switch (msg.type) {
       case "join": {
-        const wantsSpectator = !!msg.spectator;
-        if (room.started && !wantsSpectator) {
-          // Auto-convert to spectator waiting for next game.
-          msg.spectator = true;
-          msg.waitForStart = true;
+        const existing = room.connections.get(ws);
+        // Joining mid-game always means spectating until the next start.
+        const wantsSpectator = !!msg.spectator || room.started;
+        const requestedName = sanitizeName(msg.name);
+        if (isSeated(existing)) {
+          if (!wantsSpectator) {
+            send(ws, { type: "error", message: "Already joined." });
+            return;
+          }
+          if (room.started) {
+            send(ws, { type: "error", message: "Cannot switch to spectator during a game." });
+            return;
+          }
+          // Lobby: give the seat back before continuing as a spectator.
+          room.seats = room.seats.filter((s) => s.playerId !== existing.playerId);
+          room.connections.delete(ws);
+          if (room.host === ws) {
+            // Resolve the vacancy while this socket is unregistered, so it
+            // cannot be promoted straight back into the seat it just left.
+            room.host = null;
+            handleHostVacancy();
+          }
+          scheduleLobbyBroadcast();
         }
-        if (wantsSpectator || msg.spectator) {
-          const name = makeUniqueName((msg.name || `Spectator`).slice(0, 32));
+        if (wantsSpectator) {
+          const name = existing?.spectator ? existing.name : makeUniqueName(requestedName || "Spectator");
           const waitForStart = room.started ? true : !!msg.waitForStart;
           room.connections.set(ws, { spectator: true, name, waitForStart });
-          if (!room.host && room.seats.length > 0) {
-            const hostSeat = room.connections.keys().next().value;
-            room.host = hostSeat || ws;
-          }
+          if (!room.host && room.seats.length > 0) assignSeatedHost();
           send(ws, { type: "joined", spectator: true, host: ensureHost(ws) });
           broadcastViews();
           log("Spectator joined", name);
@@ -648,7 +700,9 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "Room is full." });
           return;
         }
-        const name = makeUniqueName((msg.name || `Player ${seatId + 1}`).slice(0, 32));
+        // A spectator taking a seat must not collide with its own old name.
+        room.connections.delete(ws);
+        const name = makeUniqueName(requestedName || `Player ${seatId + 1}`);
         const seat = { playerId: seatId, name };
         room.seats.push(seat);
         room.connections.set(ws, seat);
@@ -683,6 +737,24 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "You are dead and cannot act." });
           return;
         }
+        if (!actor.isHuman) {
+          send(ws, { type: "error", message: "AI controls your seat for this game." });
+          return;
+        }
+        if (!msg.action || typeof msg.action !== "object" || Array.isArray(msg.action)) {
+          room.nightActions.delete(seat.playerId);
+          return;
+        }
+        if (msg.action.targetId !== undefined && msg.action.targetId !== null && !isValidTargetId(msg.action.targetId)) {
+          send(ws, { type: "error", message: "Invalid target." });
+          return;
+        }
+        if (msg.action.extraTargets !== undefined) {
+          if (!Array.isArray(msg.action.extraTargets) || !msg.action.extraTargets.every(isValidTargetId)) {
+            send(ws, { type: "error", message: "Invalid extra target." });
+            return;
+          }
+        }
         // Role-based allowlist to prevent tampering.
         const roleActions = {
           POLICE: ["POLICE_INVESTIGATE"],
@@ -704,7 +776,7 @@ wss.on("connection", (ws, req) => {
           PURIFIER: ["PURIFY"],
           GRUDGE_BEAST: ["GRUDGE_JUDGE", "GRUDGE_KILL_VOTE"],
         };
-        if (!msg.action || !msg.action.type) {
+        if (typeof msg.action.type !== "string" || !msg.action.type) {
           room.nightActions.delete(seat.playerId);
           return;
         }
@@ -737,7 +809,12 @@ wss.on("connection", (ws, req) => {
             }
           }
         }
-        room.nightActions.set(seat.playerId, { ...msg.action, actorId: seat.playerId });
+        room.nightActions.set(seat.playerId, {
+          type: msg.action.type,
+          targetId: msg.action.targetId ?? undefined,
+          extraTargets: msg.action.extraTargets,
+          actorId: seat.playerId,
+        });
         const targetName =
           typeof msg.action.targetId === "number"
             ? room.engine.state.players?.[msg.action.targetId]?.name || null
@@ -843,10 +920,14 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "You cannot vote." });
           return;
         }
+        if (!actor.isHuman) {
+          send(ws, { type: "error", message: "AI controls your seat for this game." });
+          return;
+        }
         if (msg.targetId === undefined || msg.targetId === null) {
           room.voteActions.delete(seat.playerId);
         } else {
-          const target = room.engine.state.players?.[msg.targetId];
+          const target = isValidTargetId(msg.targetId) ? room.engine.state.players?.[msg.targetId] : null;
           if (!target || !target.alive) {
             send(ws, { type: "error", message: "Invalid vote target." });
             return;
@@ -854,7 +935,7 @@ wss.on("connection", (ws, req) => {
           room.voteActions.set(seat.playerId, msg.targetId);
         }
         if (typeof msg.lastWords === "string") {
-          room.lastWords.set(seat.playerId, msg.lastWords);
+          room.lastWords.set(seat.playerId, sanitizeText(msg.lastWords, MAX_LAST_WORDS_CHARS));
         }
         const actorName = room.engine.state.players?.[seat.playerId]?.name || seat.name || `Player ${seat.playerId + 1}`;
         const targetName =
@@ -902,7 +983,7 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "Only dead players can send last words." });
           return;
         }
-        const text = (msg.text || "").trim();
+        const text = sanitizeText(msg.text, MAX_LAST_WORDS_CHARS);
         if (!text) {
           send(ws, { type: "error", message: "Empty last words." });
           return;
@@ -928,9 +1009,13 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "Dead players cannot use public chat." });
           return;
         }
-        const text = (msg.text || "").trim();
+        if (!chatActor.isHuman) {
+          send(ws, { type: "error", message: "AI controls your seat for this game." });
+          return;
+        }
+        const text = sanitizeText(msg.text);
         if (!text) return;
-        const line = `${room.engine.state.players[seat.playerId]?.name || "Player"}: ${text.slice(0, 120)}`;
+        const line = `${chatActor.name}: ${text}`;
         room.engine.state.dayChat = room.engine.state.dayChat || [];
         room.engine.state.dayChat.push(line);
         room.engine.state.publicLog.push(line);
@@ -949,9 +1034,13 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "Only alive killers can use killer chat." });
           return;
         }
-        const text = (msg.text || "").trim();
+        if (!actor.isHuman) {
+          send(ws, { type: "error", message: "AI controls your seat for this game." });
+          return;
+        }
+        const text = sanitizeText(msg.text);
         if (!text) return;
-        const line = `${actor.name}: ${text.slice(0, 120)}`;
+        const line = `${actor.name}: ${text}`;
         room.engine.state.killerChat = room.engine.state.killerChat || [];
         room.engine.state.killerChat.push(line);
         room.engine.state.privateLogs.killer = room.engine.state.privateLogs.killer || [];
@@ -960,7 +1049,11 @@ wss.on("connection", (ws, req) => {
         break;
       }
       case "spectator_chat": {
-        const text = (msg.text || "").trim();
+        if (!room.started || !room.engine) {
+          send(ws, { type: "error", message: "Game not started." });
+          return;
+        }
+        const text = sanitizeText(msg.text);
         if (!text) return;
         const meta = room.connections.get(ws) || {};
         const seat = room.connections.get(ws);
@@ -974,8 +1067,11 @@ wss.on("connection", (ws, req) => {
           return;
         }
         const name = player?.name || meta.name || "Spectator";
-        const line = `${name}: ${text.slice(0, 120)}`;
+        const line = `${name}: ${text}`;
         room.spectatorChat.push(line);
+        if (room.spectatorChat.length > MAX_SPECTATOR_CHAT_LINES) {
+          room.spectatorChat.splice(0, room.spectatorChat.length - MAX_SPECTATOR_CHAT_LINES);
+        }
         if (room.engine?.state) {
           room.engine.state.spectatorChat = room.spectatorChat;
         }
@@ -994,9 +1090,13 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "Only alive police can use police chat." });
           return;
         }
-        const text = (msg.text || "").trim();
+        if (!actor.isHuman) {
+          send(ws, { type: "error", message: "AI controls your seat for this game." });
+          return;
+        }
+        const text = sanitizeText(msg.text);
         if (!text) return;
-        const line = `${actor.name}: ${text.slice(0, 120)}`;
+        const line = `${actor.name}: ${text}`;
         room.engine.state.policeChat = room.engine.state.policeChat || [];
         room.engine.state.policeChat.push(line);
         room.engine.state.privateLogs.police = room.engine.state.privateLogs.police || [];
@@ -1016,9 +1116,13 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "Only alive grudge beasts can use grudge chat." });
           return;
         }
-        const text = (msg.text || "").trim();
+        if (!actor.isHuman) {
+          send(ws, { type: "error", message: "AI controls your seat for this game." });
+          return;
+        }
+        const text = sanitizeText(msg.text);
         if (!text) return;
-        const line = `${actor.name}: ${text.slice(0, 120)}`;
+        const line = `${actor.name}: ${text}`;
         room.engine.state.grudgeChat = room.engine.state.grudgeChat || [];
         room.engine.state.grudgeChat.push(line);
         room.engine.state.privateLogs.grudge = room.engine.state.privateLogs.grudge || [];
@@ -1056,6 +1160,8 @@ wss.on("connection", (ws, req) => {
         if (!player.name.endsWith(" (AI)")) {
           player.name = `${player.name} (AI)`;
         }
+        // The seat is gone for good; the next start must not re-seat this player as human.
+        room.seats = room.seats.filter((s) => s.playerId !== seat.playerId);
         log("Player disconnected, AI taking over seat", seat.playerId, player.name);
       } else if (!room.started) {
         room.seats = room.seats.filter((s) => s.playerId !== seat.playerId);
