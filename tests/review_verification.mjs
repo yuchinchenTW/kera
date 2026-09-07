@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { GameEngine, checkVictory } from '../src/engine.js';
 import { createInitialState, cloneState } from '../src/state.js';
-import { buildPlayerView } from '../src/view.js';
+import { buildPlayerView, buildSpectatorView } from '../src/view.js';
 import { Roles } from '../src/roles.js';
 import { createRng } from '../src/rng.js';
 import { ensureBeliefs } from '../src/ai/memory.js';
@@ -165,31 +165,34 @@ await check('#23 zero votes skip execution; majority still selects the majority 
   });
   assert.ok(majority.state.publicLog.includes('Player 18 was executed by vote (10/18).'));
 });
-await check('#23 tied killer votes choose lower id without three-of-four majority', async () => {
+await check('#23 killer vote without a majority of acting killers is invalid', async () => {
   const e = scenario({ 0: 'KILLER', 1: 'KILLER', 2: 'KILLER', 3: 'KILLER', 4: 'POLICE' });
   await e.resolveNight(null, { humanActions: [action(0, 'KILLER_VOTE', 6), action(1, 'KILLER_VOTE', 5)] });
-  assert.equal(e.state.players[5].deathCause, 'KILLER_MURDER');
+  assert.equal(e.state.players[5].alive, true);
   assert.equal(e.state.players[6].alive, true);
+  assert.ok(e.state.privateLogs.killer.includes('Killers failed to agree on a target.'));
+  const majority = scenario({ 0: 'KILLER', 1: 'KILLER', 2: 'KILLER', 3: 'KILLER', 4: 'POLICE' });
+  await majority.resolveNight(null, { humanActions: [action(0, 'KILLER_VOTE', 5), action(1, 'KILLER_VOTE', 5), action(2, 'KILLER_VOTE', 5), action(3, 'KILLER_VOTE', 6)] });
+  assert.equal(majority.state.players[5].deathCause, 'KILLER_MURDER');
 });
-await check('#24 no-vote killer fallback selects first eligible player, not always Player 1', async () => {
-  for (const deadId of [null, 0]) {
+await check('#24 killers with no votes kill nobody regardless of rng', async () => {
+  for (const roll of [0.1, 0.9]) {
     const e = scenario({ 3: 'KILLER', 4: 'KILLER', 5: 'POLICE' });
-    if (deadId !== null) e.state.players[deadId].alive = false;
-    e.state.rng = () => 0.1;
+    e.state.rng = () => roll;
     await e.resolveNight(null);
-    const targetId = deadId === null ? 0 : 1;
-    assert.equal(e.state.players[targetId].deathCause, 'KILLER_MURDER');
-    assert.equal(e.state.players[2].alive, true);
+    assert.ok(e.state.players.every((p) => p.alive));
+    assert.ok(e.state.privateLogs.killer.includes('Killers failed to agree on a target.'));
   }
-  const noFallback = scenario({ 3: 'KILLER', 4: 'KILLER', 5: 'POLICE' });
-  await noFallback.resolveNight(null);
-  assert.ok(noFallback.state.players.every((p) => p.alive));
 });
-await check('#24 split police votes ignore voted targets and investigate pool[0]', async () => {
+await check('#24 split police votes produce no investigation', async () => {
   const e = scenario({ 0: 'CIVILIAN', 1: 'KILLER', 2: 'POLICE', 3: 'POLICE', 4: 'POLICE' });
   await e.resolveNight(null, { humanActions: [action(2, 'POLICE_INVESTIGATE', 5), action(3, 'POLICE_INVESTIGATE', 6)] });
-  assert.deepEqual(e.state.players[2].aiMemory.investigationResults.map((r) => r.targetId), [0]);
-  assert.ok(e.state.privateLogs.police.some((line) => line.startsWith('Investigation result: Player 1 ')));
+  assert.equal(e.state.players[2].aiMemory.investigationResults, undefined);
+  assert.ok(!e.state.privateLogs.police.some((line) => line.startsWith('Investigation result:')));
+  assert.ok(e.state.privateLogs.police.includes('Police could not agree on a target.'));
+  const agreed = scenario({ 0: 'CIVILIAN', 1: 'KILLER', 2: 'POLICE', 3: 'POLICE', 4: 'POLICE' });
+  await agreed.resolveNight(null, { humanActions: [action(2, 'POLICE_INVESTIGATE', 1), action(3, 'POLICE_INVESTIGATE', 1)] });
+  assert.ok(agreed.state.privateLogs.police.some((line) => line.startsWith('Investigation result: Player 2 is RED')));
 });
 await check('#24 Police could not agree is reachable when no non-police target is alive', async () => {
   const e = scenario({ 0: 'POLICE', 1: 'POLICE' });
@@ -234,32 +237,33 @@ await check('#26 vine death swap works on planting night but not the next night'
   }
 });
 await check('#26 vine blue-action trigger also expires after planting night', async () => {
+  // Shields now resolve before seeds (#30), so use a police investigation as the blue action.
   for (const nextNight of [false, true]) {
     const e = scenario({ 0: 'VINE_DEMON', 2: 'AGENT', 3: 'KILLER', 4: 'POLICE' });
     e.state.players[0].status.vineActive = true;
-    const investigate = action(4, 'POLICE_INVESTIGATE', 5);
+    const investigateOther = action(4, 'POLICE_INVESTIGATE', 5);
+    const investigateSeeded = action(4, 'POLICE_INVESTIGATE', 1);
     const plant = action(0, 'VINE_SEED', 1);
-    const protect = action(2, 'AGENT_PROTECT', 1);
     if (nextNight) {
-      await e.resolveNight(null, { humanActions: [plant, investigate] });
+      await e.resolveNight(null, { humanActions: [plant, investigateOther] });
       e.state.dayNumber++;
-      await e.resolveNight(null, { humanActions: [protect, investigate] });
+      await e.resolveNight(null, { humanActions: [investigateSeeded] });
     } else {
-      await e.resolveNight(null, { humanActions: [plant, protect, investigate] });
+      await e.resolveNight(null, { humanActions: [plant, investigateSeeded] });
     }
     assert.equal(e.state.players[1].alive, nextNight);
-    assert.equal(e.state.players[2].alive, nextNight);
+    assert.equal(e.state.players[4].alive, nextNight);
   }
 });
-await check('#27 nightmare investigation exists in state but is missing from player view', async () => {
+await check('#27 nightmare investigation reaches the demon and nobody else', async () => {
   const e = scenario({ 0: 'NIGHTMARE_DEMON', 1: 'SNIPER', 2: 'KILLER', 3: 'POLICE' });
   await e.resolveNight(null, { humanActions: [action(0, 'NIGHTMARE_ATTACK', 1)] });
   const intel = 'Player 1 learned Player 2 is SNIPER.';
   assert.ok(e.state.privateLogs.nightmare.includes(intel));
   const view = buildPlayerView(e.state, 0);
   assert.equal(view.players[1].role, 'HIDDEN');
-  assert.equal(view.privateIntel.includes(intel), false);
-  assert.equal(JSON.stringify(view).includes(intel), false);
+  assert.equal(view.privateIntel.includes(intel), true);
+  assert.equal(JSON.stringify(buildPlayerView(e.state, 5)).includes(intel), false);
 });
 
 await check('#1 type:null does NOT crash', () => localServer(async (ctx) => {
@@ -483,14 +487,15 @@ await check('#13 engine still drops string targets (server now rejects them firs
   assert.equal(e.state.players[3].alive, true);
   assert.equal(e.state.usage.sniperShots, 0);
 });
-await check('#31 payload actorId still overrides map key (duplicates now collapse to one action)', async () => {
-  const e = scenario({ 0: 'CIVILIAN', 1: 'SNIPER', 2: 'KILLER', 3: 'POLICE' });
-  await e.resolveNight(null, { humanActions: { 0: action(1, 'SNIPER_SHOT', 4), 1: action(1, 'SNIPER_SHOT', 5) } });
-  // Key 0 belongs to a civilian, yet the payload's actorId=1 is trusted (still open).
-  // Per-actor dedupe keeps only the last submission for actor 1 (fixed by #9).
-  assert.equal(e.state.players[4].alive, true);
-  assert.equal(e.state.players[5].alive, false);
-  assert.equal(e.state.usage.sniperShots, 1);
+await check('#31 object-form submissions use the map key, not the payload actorId', async () => {
+  const spoof = scenario({ 0: 'CIVILIAN', 1: 'SNIPER', 2: 'KILLER', 3: 'POLICE' });
+  await spoof.resolveNight(null, { humanActions: { 0: action(1, 'SNIPER_SHOT', 4) } });
+  assert.equal(spoof.state.players[4].alive, true);
+  assert.equal(spoof.state.usage.sniperShots, 0);
+  const legit = scenario({ 0: 'CIVILIAN', 1: 'SNIPER', 2: 'KILLER', 3: 'POLICE' });
+  await legit.resolveNight(null, { humanActions: { 1: action(99, 'SNIPER_SHOT', 5) } });
+  assert.equal(legit.state.players[5].alive, false);
+  assert.equal(legit.state.usage.sniperShots, 1);
 });
 await check('#18 agent self-protection blocks sniper', async () => {
   const e = scenario({ 0: 'AGENT', 1: 'SNIPER', 2: 'KILLER', 3: 'POLICE' });
@@ -499,43 +504,58 @@ await check('#18 agent self-protection blocks sniper', async () => {
   assert.equal(e.state.usage.agentBlocks, 1);
 });
 for (const attacker of ['COWBOY', 'NECROMANCER']) {
-  await check(`#19 ${attacker} delayed kill bypasses agent`, async () => {
+  await check(`#19 ${attacker} delayed kill is blocked by the agent shield`, async () => {
     const e = scenario({ 0: 'AGENT', 1: attacker, 3: 'KILLER', 4: 'POLICE' });
     e.state.players[1].souls = 2;
     e.state.rng = () => 0.1;
     await e.resolveNight(null, { humanActions: [action(0, 'AGENT_PROTECT', 2), action(1, attacker === 'COWBOY' ? 'COWBOY_GAMBLE' : 'NECROMANCER_CURSE', 2), action(3, 'KILLER_VOTE', 5)] });
-    assert.equal(e.state.players[2].alive, false);
-    assert.equal(e.state.players[2].status.protectedByAgent, true);
+    assert.equal(e.state.players[2].alive, true);
+    assert.equal(e.state.usage.agentBlocks, 1);
+    // Unprotected, the same delayed attack still lands.
+    const open = scenario({ 0: 'AGENT', 1: attacker, 3: 'KILLER', 4: 'POLICE' });
+    open.state.players[1].souls = 2;
+    open.state.rng = () => 0.1;
+    await open.resolveNight(null, { humanActions: [action(1, attacker === 'COWBOY' ? 'COWBOY_GAMBLE' : 'NECROMANCER_CURSE', 2), action(3, 'KILLER_VOTE', 5)] });
+    assert.equal(open.state.players[2].alive, false);
   });
 }
-await check('#20 killer murder loses grudge trigger faction', async () => {
+await check('#20 killer murder records RED as the grudge trigger faction', async () => {
   const e = scenario({ 0: 'KILLER', 1: 'GRUDGE_BEAST', 2: 'GRUDGE_BEAST', 3: 'POLICE' });
   await e.resolveNight(null, { humanActions: [action(0, 'KILLER_VOTE', 1)] });
   assert.equal(e.state.grudgeState.berserk, true);
-  assert.equal(e.state.grudgeState.triggerFaction, null);
+  assert.equal(e.state.grudgeState.triggerFaction, 'RED');
+  const arson = scenario({ 0: 'ARSONIST', 1: 'GRUDGE_BEAST', 2: 'GRUDGE_BEAST', 3: 'KILLER', 4: 'POLICE' });
+  await arson.resolveNight(null, { humanActions: [action(0, 'ARSON_MARK', 1)] });
+  await arson.resolveNight(null, { humanActions: [action(0, 'ARSON_IGNITE', 1)] });
+  assert.equal(arson.state.players[1].alive, false);
+  assert.equal(arson.state.grudgeState.triggerFaction, 'RED');
 });
 await check('#21 sniper prevents numerical red victory', () => {
   const e = scenario({ 0: 'KILLER', 1: 'KILLER', 2: 'SNIPER', 3: 'POLICE' });
   for (const p of e.state.players) p.alive = p.id < 5;
   assert.equal(checkVictory(e.state), null);
 });
-await check('#28 human exorcist gets unrequested targets', async () => {
+await check('#28 human exorcist strikes only the targets they chose', async () => {
   const e = scenario({ 0: 'EXORCIST', 1: 'KILLER', 2: 'KILLER', 3: 'POLICE' });
   e.state.players[0].maxChains = 3;
   await e.resolveNight(null, { humanActions: [action(0, 'EXORCIST_STRIKE', 1)] });
-  assert.ok(e.state.players[0].status.exorcistChainsUsed > 1);
+  assert.equal(e.state.players[0].status.exorcistChainsUsed, 1);
+  assert.equal(e.state.players[0].exorcistMistakes, 0);
+  assert.equal(e.state.players.filter((p) => !p.alive).length, 1);
 });
-await check('#29 A,B,A allowed; A,skip,A incorrectly rejected', async () => {
+await check('#29 kidnap forbids only the same target on consecutive nights', async () => {
   const e = scenario({ 0: 'KIDNAPPER', 1: 'KILLER' });
   for (const target of [3, 4, 3]) {
     await e.resolveNight(null, { humanActions: [action(0, 'KIDNAP', target)] });
     assert.equal(e.state.players[target].status.kidnapped, true);
   }
+  await e.resolveNight(null, { humanActions: [action(0, 'KIDNAP', 3)] });
+  assert.equal(e.state.players[3].status.kidnapped, false, 'A,A is rejected');
   await e.resolveNight(null);
   await e.resolveNight(null, { humanActions: [action(0, 'KIDNAP', 3)] });
-  assert.equal(e.state.players[3].status.kidnapped, false);
+  assert.equal(e.state.players[3].status.kidnapped, true, 'A,skip,A is allowed');
 });
-await check('#30 smoke removal depends on action order', async () => {
+await check('#30 shield clears smoke regardless of action order', async () => {
   async function run(protectFirst) {
     const e = scenario({ 0: 'AGENT', 1: 'SNIPER', 2: 'RIOT_POLICE', 4: 'KILLER', 5: 'POLICE' });
     const protect = action(0, 'AGENT_PROTECT', 1);
@@ -544,23 +564,28 @@ await check('#30 smoke removal depends on action order', async () => {
     return e.state.players[3].alive;
   }
   assert.equal(await run(true), false);
-  assert.equal(await run(false), true);
+  assert.equal(await run(false), false);
 });
-await check('#32 view leaks counters and faction ratios', () => {
-  const e = scenario({ 0: 'KILLER', 1: 'POLICE' });
+await check('#32 view exposes only the viewer\'s own ability counters', () => {
+  const e = scenario({ 0: 'KILLER', 1: 'POLICE', 3: 'DOCTOR' });
   e.state.usage.doctorInjections = 3;
-  const view = buildPlayerView(e.state, 2);
-  assert.equal(view.usage.doctorInjections, 3);
-  assert.equal(view.winrateHint, e.state.winrateHint);
+  const civilian = buildPlayerView(e.state, 2);
+  assert.equal(civilian.usage.doctorInjections, undefined);
+  assert.equal(civilian.winrateHint, undefined);
+  assert.equal(buildPlayerView(e.state, 3).usage.doctorInjections, 3);
+  const spectator = buildSpectatorView(e.state);
+  assert.equal(spectator.winrateHint, undefined);
+  assert.deepEqual(spectator.usage, {});
 });
-await check('#33 public log names hidden converted zombie', async () => {
+await check('#33 public log does not name the converted zombie', async () => {
   const e = scenario({ 0: 'ZOMBIE', 1: 'ZOMBIE', 2: 'KILLER', 3: 'POLICE' });
   await e.resolveNight(null, { humanActions: [action(0, 'ZOMBIE_BITE', 4), action(1, 'ZOMBIE_BITE', 4)] });
   const view = buildPlayerView(e.state, 5);
   assert.equal(view.players[4].role, 'HIDDEN');
-  assert.ok(view.publicLog.some((line) => line.includes('Player 5 was overwhelmed and turned into a zombie')));
+  assert.ok(!view.publicLog.some((line) => line.includes('Player 5 was overwhelmed')));
+  assert.ok(view.publicLog.some((line) => line.includes('Someone was overwhelmed and turned into a zombie')));
 });
-await check('#34 RNG diverges after integer precision loss', () => {
+await check('#34 RNG matches the int32 reference for 6M draws', () => {
   const rng = createRng(0);
   let s = 0;
   let divergence = 0;
@@ -571,16 +596,20 @@ await check('#34 RNG diverges after integer precision loss', () => {
     const expected = ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     if (rng() !== expected) { divergence = i; break; }
   }
-  assert.ok(divergence > 0);
-  console.log(`  first divergence: ${divergence}`);
+  assert.equal(divergence, 0);
 });
-await check('#35-37 seed coercion, rng clone loss, unknown theme', () => {
-  assert.equal(createRng('abc')(), createRng(0)());
+await check('#35-37 string seeds hash, clones keep rng position, unknown theme resolves', () => {
+  assert.notEqual(createRng('abc')(), createRng(0)());
+  assert.equal(createRng('abc')(), createRng('abc')());
   assert.equal(createRng('123')(), createRng(123)());
+  assert.throws(() => createRng(null), TypeError);
   const state = createInitialState(0, 'INVALID');
-  assert.equal(state.theme, 'INVALID');
+  assert.equal(state.theme, 'GOOD_VS_EVIL');
   assert.equal(state.players.length, 18);
-  assert.equal(cloneState(state).rng, undefined);
+  state.rng(); state.rng();
+  const clone = cloneState(state);
+  assert.equal(typeof clone.rng, 'function');
+  assert.equal(clone.rng(), state.rng());
 });
 await check('#39 public confirmation returns private entries', () => {
   const state = createInitialState(1);
@@ -638,4 +667,4 @@ await check('#52 Player 10 falsely counts as Player 1 mention', () => {
   state.dayChat = ['Player 2: Player 10 is suspicious'];
   assert.deepEqual(analyzeChatBehavior(state).mentionedBy[0], [1]);
 });
-console.log(`${passed} review checks passed (#1-5, #7-9, #11-15 regression checks; other findings remain audit probes).`);
+console.log(`${passed} review checks passed (#1-5, #7-9, #11-15, #19-20, #23-24 night, #27-37 regression checks; other findings remain audit probes).`);

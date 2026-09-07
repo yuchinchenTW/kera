@@ -41,6 +41,7 @@ function makePlayer(id, name, roleId, isHuman = false) {
     souls: 0,
     pendingSoulsFromDay: 0,
     lastKidnapTarget: null,
+    kidnapTargetTonight: null,
     kidnapExecutionUsed: false,
     maxChains: roleId === Roles.EXORCIST.id ? Roles.EXORCIST.maxChain : 0,
     exorcistMistakes: 0,
@@ -59,7 +60,8 @@ export function createInitialState(
   opts = {}
 ) {
   const rng = createRng(seed);
-  const rolePool = roleListFromTheme(themeId);
+  const resolvedTheme = Object.values(Theme).find((t) => t.id === themeId) || Theme.GOOD_VS_EVIL;
+  const rolePool = roleListFromTheme(resolvedTheme.id);
   shuffle(rng, rolePool);
 
   const humanIds = Array.isArray(opts.humanIds) ? opts.humanIds : [];
@@ -85,7 +87,7 @@ export function createInitialState(
     players,
     aliveIds,
     deadIds: [],
-    theme: themeId,
+    theme: resolvedTheme.id,
   publicLog: [],
   privateLogs: {
     police: [],
@@ -134,7 +136,9 @@ export function createInitialState(
 }
 
 export function cloneState(state) {
-  return JSON.parse(JSON.stringify(state));
+  const clone = JSON.parse(JSON.stringify(state));
+  clone.rng = createRng(state.seed, state.rng?.getState?.());
+  return clone;
 }
 
 export function alivePlayers(state) {

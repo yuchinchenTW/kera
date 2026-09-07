@@ -41,6 +41,28 @@
 
 `tests/server_resolution.mjs` 的「非預期例外被包住」情境原本靠畸形 targetId 觸發 TypeError，現在該輸入會被驗證擋下，改成從引擎 state 注入同步例外，仍驗證 "Unable to process message." 與後續訊息可用。
 
+## 第三批修復
+
+範圖：引擎規則 #19、#20、#23（殺手夜間部分）、#24、#27～#37，修改 `src/engine.js`、`src/state.js`、`src/rng.js`、`src/view.js`、`src/main.js`（夢魔情報顯示）與 `server.js`（主題驗證）。#18、#26 維持待裁定，#22 依規格結案；白天投票的最高票 fallback 依 README 保留。`node tests/review_verification.mjs` 仍為 **54 項**，對應探針已改為修復後斷言。同 seed 200 局 hard 模擬與 250 局行為審計結果與修復前完全一致（純 AI 對局中殺手/警察本就先協調共同目標），差異只出現在有人類參與且意見分歧的夜晚。
+
+| 編號 | 目前狀態 | 修復與驗證 |
+| --- | --- | --- |
+| 19 | 已修復，高 | 牛仔命中與雙魂詛咒改以 `addKill(..., { timing: "delayed" })` 進入同一條保護管線，特務盾與天煞吸收生效；`delayedKills` 陣列移除。醫生依 `roles.js` 仍不可救這兩種死因（符合裁定）。測試：受保護目標存活且 `agentBlocks` 為 1；無保護時同一攻擊仍致死。 |
+| 20 | 已修復，高 | 殺手擊殺歸因到一名行動中的殺手，縱火點燃歸因到縱火者，`grudgeState.triggerFaction` 因此可設為 RED。`GRUDGE_PUNISH` 依原設計仍不觸發。測試：殺手殺怨獸與縱火燒死怨獸都得到 triggerFaction=RED。 |
+| 23（夜間） | 已修復，中 | 殺手票未達行動中殺手過半即無效，移除最高票與最小 id 平票邏輯。白天投票未動。測試：4 殺手 1:1 分票無人死亡並記錄 "Killers failed to agree"；3:1 仍成功。 |
+| 24 | 已修復，中 | 移除殺手四段機率 fallback 與警察兩段 fallback；無共識即無行動，並寫入既有的 "failed to agree" / "could not agree" 訊息。測試：無票殺手在任何 rng 下都不殺人；警察分票不產生調查結果，合票仍正常。 |
+| 27 | 已修復，中 | `view.js` 將 `privateLogs.nightmare` 交給夢魔視角；單人 `main.js` 的情報框同步顯示。測試：夢魔 view 含結果、目標角色仍 HIDDEN、其他玩家 view 不含。 |
+| 28 | 已修復，中 | 移除人類驅魔師目標不足時的隨機補打；只打所選目標並受 maxChains 上限。測試：只選 1 人時鎖鏈用量 1、失誤 0、死亡 1。 |
+| 29 | 已修復，低 | 新增 `kidnapTargetTonight`，於 `startNight` 轉成 `lastKidnapTarget`，只禁止連續兩晚同一目標。測試：A,B,A 允許；A,A 拒絕；A,休息,A 允許。 |
+| 30 | 已修復，低 | Stage 2 先處理 `AGENT_PROTECT`/`FIEND_PROTECT` 再處理其他行動，解煙不再依提交順序。副作用：同夜的藤種、汽油標記會被已存在的護盾擋下，行為一致化；#26 探針的同夜情境改用警察調查觸發。 |
+| 31 | 已修復，低 | 物件形式的 humanActions 以 map key 為 actorId，忽略 payload 的 actorId。測試：key 0（平民）帶 actorId=1 的狙擊被丟棄；key 1 帶 actorId=99 正常執行。 |
+| 32 | 已修復，中 | 玩家 view 移除 `winrateHint`，`usage` 只回傳自己角色的計數器（醫生/狙擊/防暴/縱火/特務/牛仔）；觀戰 view 兩者皆不提供。單人 `main.js` 直接讀 engine.state，不受影響；`multi.js` 未使用這兩個欄位。 |
+| 33 | 已修復，低 | 立即轉化殭屍的公開訊息改為 "Someone was overwhelmed..."，與隔夜轉化一致。 |
+| 34 | 已修復，低 | `s = (s + C) | 0` 維持 int32；前 4,917,758 次結果與舊實作完全相同，600 萬次與參考實作零分歧。 |
+| 35 | 已修復，低 | `normalizeSeed`：有限數字 `>>> 0`；純數字字串等同數字；其他字串以 FNV-1a 雜湊；null/BigInt 等拋 TypeError。 |
+| 36 | 已修復，低 | rng 提供 `getState()`，`createRng(seed, resumeState)` 可從指定位置續跑，`cloneState` 據此重建 rng。測試：clone 與原本下一個亂數相同。 |
+| 37 | 已修復，低 | `createInitialState` 先解析主題再取角色池，`state.theme` 記錄實際使用的 id；伺服器 `start` 對未知 theme 回 "Unknown theme." 而非靜默回退。 |
+
 ## 規則裁定
 
 - #18 維持待裁定的平衡問題；#21、#25 為誤報，#22 依既定勝利優先序結案。

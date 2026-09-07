@@ -101,6 +101,9 @@ export class GameEngine {
       p.status.cannotAct = false;
       p.status.zombieBites = 0;
       p.status.exorcistChainsUsed = 0;
+      // "Same target on consecutive nights" only looks one night back.
+      p.lastKidnapTarget = p.kidnapTargetTonight ?? null;
+      p.kidnapTargetTonight = null;
     }
 
     // AI faction chat: night-phase strategic discussion before actions
@@ -158,8 +161,9 @@ export class GameEngine {
       } else {
         for (const [actorIdStr, entry] of Object.entries(opts.humanActions)) {
           if (!entry) continue;
-          const actorId = entry.actorId ?? Number(actorIdStr);
-          humanActionsList.push({ ...entry, actorId });
+          const actorId = Number(actorIdStr);
+          if (!Number.isInteger(actorId)) continue;
+          humanActionsList.push({ ...entry, actorId }); // the map key is the authority
         }
       }
     }
@@ -204,15 +208,7 @@ export class GameEngine {
       else otherActions.push(action);
     }
 
-    // Expand human exorcist chains: if a human exorcist submits strikes, fill up to maxChains unique targets.
-    const shuffleList = (arr) => {
-      const res = [...arr];
-      for (let i = res.length - 1; i > 0; i--) {
-        const j = Math.floor(this.state.rng() * (i + 1));
-        [res[i], res[j]] = [res[j], res[i]];
-      }
-      return res;
-    };
+    // Expand human exorcist chains: a human exorcist may submit several strikes (up to maxChains).
     const expandedOther = [];
     for (const action of otherActions) {
       if (action.type === "EXORCIST_STRIKE") {
@@ -234,24 +230,19 @@ export class GameEngine {
             added += 1;
             if (added >= maxChains) break;
           }
-          // If user picked fewer than maxChains, fill remaining randomly (excluding duplicates and self)
-          if (added < maxChains) {
-            const candidates = shuffleList(
-              alivePlayers(this.state).filter((p) => p.id !== actor.id && !seen.has(p.id))
-            );
-            for (const c of candidates) {
-              if (added >= maxChains) break;
-              expandedOther.push({ actorId: actor.id, type: "EXORCIST_STRIKE", targetId: c.id });
-              seen.add(c.id);
-              added += 1;
-            }
-          }
           continue; // skip default push; we've added expanded strikes
         }
       }
       expandedOther.push(action);
     }
     otherActions = expandedOther;
+    // Shields resolve first: a shield that clears smoke must restore the target's action
+    // regardless of the order actions were submitted in.
+    const protectTypes = new Set(["AGENT_PROTECT", "FIEND_PROTECT"]);
+    otherActions = [
+      ...otherActions.filter((a) => protectTypes.has(a.type)),
+      ...otherActions.filter((a) => !protectTypes.has(a.type)),
+    ];
 
     const killerVotes = {};
     const policeVotes = {};
@@ -262,11 +253,11 @@ export class GameEngine {
     const vineSeeds = {};
     const targetedByBlue = new Map();
     const pendingKills = [];
-    const delayedKills = [];
     const convertNow = [];
     const biteBacklash = [];
     const nightDeaths = [];
     let doctorAction = null;
+    let arsonIgniterId = null;
     const arsonMarkedTargets = new Set(this.state.players.filter((p) => p.status.arsonMarked).map((p) => p.id));
     let arsonIgnite = false;
 
@@ -314,9 +305,9 @@ export class GameEngine {
           break;
         }
         case "KIDNAP": {
-          if (actor.lastKidnapTarget === target.id) break;
+          if (actor.lastKidnapTarget === target.id) break; // same target two nights in a row
           kidnapMap[actor.id] = target.id;
-          actor.lastKidnapTarget = target.id;
+          actor.kidnapTargetTonight = target.id;
           target.status.kidnapped = true;
           target.status.cannotAct = true;
           addPublicLog(this.state, `Someone kidnapped ${target.name}.`);
@@ -409,7 +400,7 @@ export class GameEngine {
           const roll = this.state.rng();
           this.state.usage.cowboyShots++;
           if (roll < 2 / 6) {
-            delayedKills.push({ targetId: target.id, cause: DeathCause.COWBOY_SHOT, killerId: actor.id });
+            addKill(target.id, DeathCause.COWBOY_SHOT, { killerId: actor.id, timing: "delayed" });
             addPublicLog(this.state, `Someone fired a risky shot at ${target.name}.`);
             this.state.usage.cowboyHits++;
           } else if (roll < 5 / 6) {
@@ -460,6 +451,7 @@ export class GameEngine {
           break;
         case "ARSON_IGNITE":
           arsonIgnite = true;
+          arsonIgniterId = actor.id;
           addPublicLog(this.state, `Someone prepared to ignite marked targets.`);
           break;
         case "VINE_SEED":
@@ -512,10 +504,9 @@ export class GameEngine {
           } else if (souls === 3) {
             addKill(target.id, DeathCause.NECROMANCER_CURSE, { killerId: actor.id, blockable: false });
           } else {
-            delayedKills.push({
-              targetId: target.id,
-              cause: DeathCause.NECROMANCER_CURSE,
+            addKill(target.id, DeathCause.NECROMANCER_CURSE, {
               killerId: actor.id,
+              timing: "delayed",
               requiresAliveActor: actor.id,
             });
           }
@@ -552,52 +543,18 @@ export class GameEngine {
     // Majority decisions.
     const killersAlive = alivePlayers(this.state).filter((p) => p.role === Roles.KILLER.id && !actorBlocked(p)).length;
     const killerNeeded = Math.floor(killersAlive / 2) + 1;
-    let killerDecision = majorityTarget(killerVotes, killerNeeded);
-    if (!killerDecision && Object.keys(killerVotes).length > 0) {
-      // allow plurality kill if no majority
-      let bestId = null;
-      let bestCount = -1;
-      for (const [tid, cnt] of Object.entries(killerVotes)) {
-        const numId = Number(tid);
-        if (cnt > bestCount || (cnt === bestCount && numId < (bestId ?? numId + 1))) {
-          bestId = numId;
-          bestCount = cnt;
-        }
-      }
-      if (bestId !== null) killerDecision = { targetId: bestId, count: bestCount };
-    }
-    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.5) {
-      const pool = alivePlayers(this.state).filter(
-        (p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id && !isUntargetable(p) && !p.status.purified
-      );
-      if (pool.length) {
-        killerDecision = { targetId: pool[0].id, count: killerNeeded };
-      }
-    }
-    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.5) {
-      const pool = alivePlayers(this.state).filter((p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id);
-      if (pool.length) killerDecision = { targetId: pool[0].id, count: killerNeeded };
-    }
-    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.2) {
-      const pool = alivePlayers(this.state).filter(
-        (p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id && !isUntargetable(p) && !p.status.purified
-      );
-      if (pool.length) {
-        killerDecision = { targetId: pool[0].id, count: killerNeeded };
-      }
-    }
-    if (!killerDecision && killersAlive > 0 && this.state.rng() < 0.2) {
-      const pool = alivePlayers(this.state).filter((p) => p.faction !== Faction.RED && p.role !== Roles.KILLER.id);
-      if (pool.length) killerDecision = { targetId: pool[0].id, count: killerNeeded };
-    }
+    // Rule: the kill needs a majority of acting killers; otherwise it is invalid.
+    const killerDecision = majorityTarget(killerVotes, killerNeeded);
     if (killerDecision) {
       const tgt = getPlayer(this.state, killerDecision.targetId);
       if (tgt && !tgt.status.purified && !isUntargetable(tgt)) {
-    addKill(tgt.id, DeathCause.KILLER_MURDER, { killerId: null });
-    addPrivateLog(this.state, "killer", `Killers targeted ${tgt.name}.`);
-  }
-} else if (killersAlive > 0) {
-  addPrivateLog(this.state, "killer", "Killers failed to agree on a target.");
+        // Attribute the murder to an acting killer so faction-based triggers (grudge rage) work.
+        const killerRep = alivePlayers(this.state).find((p) => p.role === Roles.KILLER.id && !actorBlocked(p));
+        addKill(tgt.id, DeathCause.KILLER_MURDER, { killerId: killerRep?.id ?? null });
+        addPrivateLog(this.state, "killer", `Killers targeted ${tgt.name}.`);
+      }
+    } else if (killersAlive > 0) {
+      addPrivateLog(this.state, "killer", "Killers failed to agree on a target.");
     }
 
     if (this.state.grudgeState.berserk) {
@@ -640,17 +597,8 @@ export class GameEngine {
 
     const policeAlive = alivePlayers(this.state).filter((p) => p.role === Roles.POLICE.id && !actorBlocked(p)).length;
     const policeNeeded = Math.floor(policeAlive / 2) + 1;
-    let policeDecision = majorityTarget(policeVotes, policeNeeded);
-    if (!policeDecision && policeAlive > 0) {
-      const pool = alivePlayers(this.state).filter(
-        (p) => p.role !== Roles.POLICE.id && !isUntargetable(p) && !p.status.purified
-      );
-      if (pool.length) policeDecision = { targetId: pool[0].id, count: policeNeeded };
-    }
-    if (!policeDecision && policeAlive > 0) {
-      const pool = alivePlayers(this.state).filter((p) => p.role !== Roles.POLICE.id);
-      if (pool.length) policeDecision = { targetId: pool[0].id, count: policeNeeded };
-    }
+    // Rule: the investigation needs a majority of acting police; otherwise it is invalid.
+    const policeDecision = majorityTarget(policeVotes, policeNeeded);
     if (policeDecision) {
       const target = getPlayer(this.state, policeDecision.targetId);
       if (target) {
@@ -698,7 +646,7 @@ export class GameEngine {
       for (const targetId of arsonMarkedTargets) {
         const target = getPlayer(this.state, targetId);
         if (target?.alive) {
-          addKill(target.id, DeathCause.ARSON_BURN, { unstoppable: true, noLastWords: true });
+          addKill(target.id, DeathCause.ARSON_BURN, { killerId: arsonIgniterId, unstoppable: true, noLastWords: true });
         }
       }
       for (const t of this.state.players) t.status.arsonMarked = false;
@@ -768,8 +716,7 @@ export class GameEngine {
       const agent = getPlayer(this.state, agentId);
       const target = getPlayer(this.state, targetId);
       if (!agent || !target) continue;
-      const agentHasIncoming =
-        filteredKills.some((k) => k.targetId === agentId) || delayedKills.some((k) => k.targetId === agentId);
+      const agentHasIncoming = filteredKills.some((k) => k.targetId === agentId);
       if (!agentHasIncoming) continue;
       filteredKills.push({
         targetId,
@@ -917,7 +864,6 @@ export class GameEngine {
     };
 
     nightDeaths.push(...applyKills(filteredKills.filter((k) => k.timing !== "delayed")));
-    nightDeaths.push(...applyKills(delayedKills));
     nightDeaths.push(...applyKills(filteredKills.filter((k) => k.timing === "delayed")));
 
     // Convert zombies.
@@ -926,7 +872,7 @@ export class GameEngine {
       if (target?.alive) {
         target.role = Roles.ZOMBIE.id;
         target.faction = Faction.GREEN;
-        addPublicLog(this.state, `${target.name} was overwhelmed and turned into a zombie immediately.`);
+        addPublicLog(this.state, `Someone was overwhelmed and turned into a zombie immediately.`);
         target.status.zombieBites = 0;
       }
     }

@@ -253,8 +253,8 @@ AI 決策邏輯遵守與玩家相同的資訊可見性規則：
 
 ## Roles & Rules (EN)
 - **Civilian (BLUE)**: No night action.
-- **Police (BLUE)**: Night vote to investigate; majority result reveals faction/role to police (terrorist appears BLUE). Investigating a Kidnapper executes that kidnapper's hostage (blockable, once per kidnapper).
-- **Killer (RED)**: Night murder vote; majority/plurality kills one non-red target (blockable, doctor-revivable).
+- **Police (BLUE)**: Night vote to investigate; a majority of acting police is required, otherwise no investigation happens. The result reveals faction/role to police (terrorist appears BLUE). Investigating a Kidnapper executes that kidnapper's hostage (blockable, once per kidnapper).
+- **Killer (RED)**: Night murder vote; a majority of acting killers is required, otherwise the kill is invalid. Kills one target (blockable, doctor-revivable).
 - **Doctor (BLUE)**: 6 injections. Cancels blockable deaths from killers/kidnap ransom/agent link/vine swap unless the cause is non-revivable (sniper, bomb, arson, zombie bite/fatal, fiend shot, exorcist petrify, necromancer curse). Two empty shots on the same target cause an unstoppable fatal overdose.
 - **Sniper (RED)**: Up to 4 headshots; instant kill, no last words; agent shield can body-block.
 - **Agent (BLUE)**: Protect one target; clears smoke, sets a life link-if agent dies, the protected target dies (blockable). Blocks vine seeds, gasoline marks, and smoke on the target.
@@ -275,8 +275,8 @@ AI 決策邏輯遵守與玩家相同的資訊可見性規則：
 
 ## 角色與規則 (中文)
 - 平民（藍）：沒有夜行動。
-- 警察（藍）：夜間共同投票查一人；多數結果只回報給警察（恐怖份子視為藍方）。若查到綁匪，綁匪的人質會被處決一次（可被保護）。
-- 殺手（紅）：夜間謀殺投票，多數／最高票處決一名非紅方（可被醫生救）。
+- 警察（藍）：夜間共同投票查一人，需行動中警察過半同意，否則當晚不調查；結果只回報給警察（恐怖份子視為藍方）。若查到綁匪，綁匪的人質會被處決一次（可被保護）。
+- 殺手（紅）：夜間謀殺投票，需行動中殺手過半同意，否則當晚無效；擊殺一名目標（可被醫生救）。
 - 醫生（藍）：共 6 針。可救回殺手殺害／綁票處決／特務連動／藤魔交換等可阻擋的死亡；無法救狙擊、炸彈、縱火、喪屍咬死、天煞射殺、驅魔石化、死靈詛咒。對同一目標打 2 發空針會造成無法阻擋的致死過量。
 - 狙擊手（紅）：最多 4 發即死狙擊，無遺言；特務護盾可擋。
 - 特務（藍）：保護一人，清除煙霧並建立生命連動；特務死亡時被保護者一同死亡（可被阻擋、可被醫生救）。可擋汽油彈、藤魔種子、煙霧。

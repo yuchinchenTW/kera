@@ -11,6 +11,25 @@ function canSeeRole(viewer, target) {
   return false;
 }
 
+// Ability counters are private to the role that owns them; nothing else about
+// global usage is public information.
+const USAGE_BY_ROLE = {
+  [Roles.DOCTOR.id]: ["doctorInjections", "doctorSaves"],
+  [Roles.SNIPER.id]: ["sniperShots"],
+  [Roles.RIOT_POLICE.id]: ["riotGrenades"],
+  [Roles.ARSONIST.id]: ["arsonMarks"],
+  [Roles.AGENT.id]: ["agentBlocks"],
+  [Roles.COWBOY.id]: ["cowboyShots", "cowboyHits", "cowboyMisses", "cowboyBackfires"],
+};
+
+function visibleUsage(state, viewer) {
+  const out = {};
+  for (const key of USAGE_BY_ROLE[viewer.role] || []) {
+    if (state.usage && key in state.usage) out[key] = state.usage[key];
+  }
+  return out;
+}
+
 function visibleRole(viewer, target) {
   return canSeeRole(viewer, target) ? target.role : "HIDDEN";
 }
@@ -45,6 +64,7 @@ export function buildPlayerView(state, playerId) {
   if (viewer.role === Roles.POLICE.id) privateIntel = privateIntel.concat(state.privateLogs.police || []);
   if (viewer.role === Roles.KILLER.id) privateIntel = privateIntel.concat(state.privateLogs.killer || []);
   if (viewer.role === Roles.GRUDGE_BEAST.id) privateIntel = privateIntel.concat(state.privateLogs.grudge || []);
+  if (viewer.role === Roles.NIGHTMARE_DEMON.id) privateIntel = privateIntel.concat(state.privateLogs.nightmare || []);
 
   const aiTakenOver = !viewer.isHuman && state.phase !== "SETUP";
 
@@ -74,8 +94,7 @@ export function buildPlayerView(state, playerId) {
     grudgeChat: viewer.role === Roles.GRUDGE_BEAST.id ? [...(state.grudgeChat || [])] : [],
     spectatorChat: !viewer.alive ? [...(state.spectatorChat || [])] : [],
     privateIntel,
-    winrateHint: state.winrateHint,
-    usage: { ...state.usage },
+    usage: visibleUsage(state, viewer),
   };
 }
 
@@ -103,8 +122,7 @@ export function buildSpectatorView(state) {
     lastNightSummary: [...state.lastNightSummary],
     grudgeState: { berserk: !!state.grudgeState?.berserk },
     privateIntel: [],
-    winrateHint: state.winrateHint,
-    usage: { ...state.usage },
+    usage: {},
     // Do not expose private channels to spectators to prevent leakage.
     killerChat: [],
     policeChat: [],

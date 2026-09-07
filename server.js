@@ -721,6 +721,10 @@ wss.on("connection", (ws, req) => {
           send(ws, { type: "error", message: "Game already started." });
           return;
         }
+        if (msg.theme !== undefined && !Object.values(Theme).some((t) => t.id === msg.theme)) {
+          send(ws, { type: "error", message: "Unknown theme." });
+          return;
+        }
         const theme = msg.theme || room.theme;
         startGame(theme);
         break;

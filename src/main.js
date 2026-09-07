@@ -523,6 +523,9 @@ function renderLog() {
   if (human.role === Roles.GRUDGE_BEAST.id) {
     intelLines.push(...(engine.state.privateLogs.grudge || []));
   }
+  if (human.role === Roles.NIGHTMARE_DEMON.id) {
+    intelLines.push(...(engine.state.privateLogs.nightmare || []));
+  }
   if (intelLines.length) {
     const list = document.createElement("ul");
     translateLines(intelLines.slice(-5)).forEach((entry) => {
