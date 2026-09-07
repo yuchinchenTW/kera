@@ -63,6 +63,22 @@
 | 36 | 已修復，低 | rng 提供 `getState()`，`createRng(seed, resumeState)` 可從指定位置續跑，`cloneState` 據此重建 rng。測試：clone 與原本下一個亂數相同。 |
 | 37 | 已修復，低 | `createInitialState` 先解析主題再取角色池，`state.theme` 記錄實際使用的 id；伺服器 `start` 對未知 theme 回 "Unknown theme." 而非靜默回退。 |
 
+## 第四批修復
+
+範圍：AI 作弊 #38～#44，修改 `src/ai/analysis.js`、`utils.js`、`night.js`、`targeting.js`、`vote.js`、`chat.js` 與 `src/state.js`。`node tests/review_verification.mjs` 增至 **58 項**。同 seed 200 局 hard 模擬：BLUE 勝率由 18.0% 變為 21.5%，平均天數 5.8 → 5.7；250 局行為審計的殺手友射率 26.3% → 25.9%，議題數不變。差異方向與「紅方不再偷看資訊」一致。
+
+共用工具：`analysis.js` 新增 `publicRedIds`（所有曾被公開宣稱的紅方，含真警察揭露與殺手假冒）、`recordPublicRedClaim`（三個設定 `policePublicRevealedRed` 的地方統一經此記錄到 `state.policePublicRedIds`）、`canSeeFaction`（與 `view.js` 同規則）、`estimateFactionCounts`（以信念估算人數）；`utils.js` 新增 `publicChatMemory`。
+
+| 編號 | 目前狀態 | 修復與驗證 |
+| --- | --- | --- |
+| 38 | 已修復，高 | 縱火者、藤魔、夢魔、死靈四處 `t.role === KILLER` 改為排除 `publicPoliceConfirmed` 中的公開紅方。測試：信念認為殺手是警察時，縱火者會標記該殺手。 |
+| 39 | 已修復，高 | `publicPoliceConfirmed` 對非警察只回傳 `publicRedIds`；`vote.js` 內兩處直接讀 `state.policeConfirmed` 的 hard 邏輯同步改用公開集合。測試：私查 id 2 不再出現在平民視角。 |
+| 40 | 已修復，高 | `vote.js` 非警察藍方與紅方賣隊友、`chat.js` 跟隨揭露改讀 `policePublicRevealedRed`。另移除 `canUseVoteTarget` 中「非警察不得投私查紅方」的限制（同樣依賴私有情報）。測試：公開指控 Player 4、私查 Player 1 時，藍方投 Player 4。 |
+| 41 | 已修復，高 | 紅方跟票避開隊友改為 `canSeeFaction(actor, target) && target.faction === RED`，只有殺手互認、怨獸互認與死者可見。測試：helper 行為與 view 規則一致。 |
+| 42 | 已修復，中 | 防暴警察 `bluePressure` 改用 `estimateFactionCounts`；`night.js` 不再 import `factionCounts`。測試：無信念時估算為 17×0.3 紅、17×0.7+1 藍。 |
+| 43 | 已修復，中 | `night.js` 4 處、`targeting.js` 4 處、`vote.js` 2 處遍歷他人 `chatMemory` 改為 `publicChatMemory(p)`，過濾 `source: "faction"`；本人讀自己記憶的路徑（含 `applyDeductionChains`）不變。測試：人類殺手私聊產生 faction entry 後，公開讀取不含該筆。 |
+| 44 | 已修復（程式碼核對），低 | 殭屍投票候選不再排除其他殭屍；未另寫行為測試，因候選集合差異受嫌疑值影響不易穩定斷言。 |
+
 ## 規則裁定
 
 - #18 維持待裁定的平衡問題；#21、#25 為誤報，#22 依既定勝利優先序結案。

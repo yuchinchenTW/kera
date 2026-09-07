@@ -1,6 +1,6 @@
 import { alivePlayers, getPlayer } from "../state.js";
 import { Roles, Faction, roleMeta } from "../roles.js";
-import { clamp, isHard, randomChoice, shuffled, getGamePhase, rolePriorCounts, ensureAdvancedMemory } from "./utils.js";
+import { clamp, isHard, randomChoice, shuffled, getGamePhase, rolePriorCounts, ensureAdvancedMemory, publicChatMemory } from "./utils.js";
 import { analyzeVotingPatterns, analyzeChatBehavior, factionProb, publicPoliceConfirmed } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
 import { getWeight } from "./learned_weights.js";
@@ -431,7 +431,7 @@ export function pickKillerSmartTarget(state, actor) {
   if ((state.policePublicRevealedRed ?? null) !== null) knownDeadReds.add((state.policePublicRevealedRed ?? null));
   for (const p of state.players) {
     if (!p.aiMemory?.chatMemory) continue;
-    for (const m of p.aiMemory.chatMemory) {
+    for (const m of publicChatMemory(p)) {
       if (m.accusedId !== null && knownDeadReds.has(m.accusedId)) {
         redAccuserCount[m.speakerId] = (redAccuserCount[m.speakerId] || 0) + 1;
       }
@@ -460,7 +460,7 @@ export function pickKillerSmartTarget(state, actor) {
   const killerBlueDefended = new Set();
   for (const p of state.players) {
     if (!p.aiMemory?.chatMemory) continue;
-    for (const m of p.aiMemory.chatMemory) {
+    for (const m of publicChatMemory(p)) {
       if (m.defendedId === null) continue;
       // Only treat as police if they publicly claimed the role
       const claimedPolice = state.roleClaims?.[m.speakerId] === Roles.POLICE.id;
@@ -609,7 +609,7 @@ export function pickCowboySmartTarget(state, actor) {
   const accusedByRedIds = new Set();
   for (const p of state.players) {
     if (!p.aiMemory?.chatMemory) continue;
-    for (const m of p.aiMemory.chatMemory) {
+    for (const m of publicChatMemory(p)) {
       if (m.accusedId === null) continue;
       const speaker = getPlayer(state, m.speakerId);
       if (!speaker) continue;
@@ -719,7 +719,7 @@ export function pickSniperSmartTarget(state, actor) {
   }
   for (const p of state.players) {
     if (!p?.aiMemory?.chatMemory) continue;
-    for (const m of p.aiMemory.chatMemory) {
+    for (const m of publicChatMemory(p)) {
       if (knownRedIds.has(m.speakerId) && m.accusedId !== null) {
         confirmedBluish.add(m.accusedId);
       }

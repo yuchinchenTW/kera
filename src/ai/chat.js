@@ -1,7 +1,7 @@
 import { alivePlayers, getPlayer } from "../state.js";
 import { Roles, Faction } from "../roles.js";
 import { isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, pickTemplate, roleNameZh } from "./utils.js";
-import { analyzeChatBehavior, analyzeVotingPatterns, factionProb, publicPoliceConfirmed } from "./analysis.js";
+import { analyzeChatBehavior, analyzeVotingPatterns, factionProb, publicPoliceConfirmed, recordPublicRedClaim } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
 import { pickKillerSmartTarget, pickPoliceSmartTarget } from "./targeting.js";
 import { CHAT_TEMPLATES, FACTION_CHAT, NIGHT_FACTION_CHAT, LAST_WORDS_TEMPLATES } from "./templates.js";
@@ -39,7 +39,7 @@ export function generateChatLines(state, maxLines = 6) {
     markPoliceClaim(policeId);
     if (!result) return;
     if (result.result === "red") {
-      state.policePublicRevealedRed = result.targetId;
+      recordPublicRedClaim(state, result.targetId);
       state.policeConfirmed = state.policeConfirmed || {};
       state.policeConfirmed[result.targetId] = true;
     } else if (result.result === "blue") {
@@ -209,7 +209,7 @@ export function generateChatLines(state, maxLines = 6) {
         // Write fake "public reveal" so blue AI's vote logic picks it up
         // Only if no real police has revealed yet (otherwise it conflicts)
         if ((state.policePublicRevealedRed ?? null) === null) {
-          state.policePublicRevealedRed = frameTarget.id;
+          recordPublicRedClaim(state, frameTarget.id);
         }
 
         continue;
@@ -446,8 +446,8 @@ export function generateChatLines(state, maxLines = 6) {
     }
 
     // ── Blue non-police follow police reveal — ONLY after police has publicly announced ──
-    if (hard && policeRevealedInChat && state.policeRevealedRed !== null && speaker.faction === Faction.BLUE && speaker.role !== Roles.POLICE.id) {
-      const revealedTarget = getPlayer(state, state.policeRevealedRed);
+    if (hard && policeRevealedInChat && (state.policePublicRevealedRed ?? null) !== null && speaker.faction === Faction.BLUE && speaker.role !== Roles.POLICE.id) {
+      const revealedTarget = getPlayer(state, state.policePublicRevealedRed);
       if (revealedTarget?.alive && state.rng() < 0.85) {
         const tmpl = pickTemplate(state.rng, CHAT_TEMPLATES.followReveal);
         lines.push(tmpl(speaker.name, revealedTarget.name));

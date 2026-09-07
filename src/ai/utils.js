@@ -18,6 +18,14 @@ export function isHard(state) {
 
 // ─── Behavioral Analysis ───────────────────────────────────────────────────
 
+/**
+ * Chat memory as visible to *other* players: entries parsed from a private faction
+ * channel (source "faction") must never leak into someone else's reasoning.
+ */
+export function publicChatMemory(p) {
+  return (p?.aiMemory?.chatMemory || []).filter((m) => m.source !== "faction");
+}
+
 export function ensureAdvancedMemory(p) {
   if (!p.aiMemory) p.aiMemory = { suspicion: {}, roleProbs: {} };
   if (!p.aiMemory.roleProbs) p.aiMemory.roleProbs = {};

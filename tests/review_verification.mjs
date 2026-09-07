@@ -11,7 +11,8 @@ import { buildPlayerView, buildSpectatorView } from '../src/view.js';
 import { Roles } from '../src/roles.js';
 import { createRng } from '../src/rng.js';
 import { ensureBeliefs } from '../src/ai/memory.js';
-import { publicPoliceConfirmed, analyzeChatBehavior } from '../src/ai/analysis.js';
+import { publicPoliceConfirmed, analyzeChatBehavior, canSeeFaction, estimateFactionCounts } from '../src/ai/analysis.js';
+import { publicChatMemory } from '../src/ai/utils.js';
 import { buildAiNightActions } from '../src/ai/night.js';
 import { buildAiVoteActions } from '../src/ai/vote.js';
 import { generateLastWords } from '../src/ai/chat.js';
@@ -611,13 +612,60 @@ await check('#35-37 string seeds hash, clones keep rng position, unknown theme r
   assert.equal(typeof clone.rng, 'function');
   assert.equal(clone.rng(), state.rng());
 });
-await check('#39 public confirmation returns private entries', () => {
+await check('#39 non-police only see publicly claimed reds', () => {
   const state = createInitialState(1);
   state.policeConfirmed = { 1: true, 2: true };
   state.policePublicRevealedRed = 1;
-  assert.equal(publicPoliceConfirmed(state, { role: 'CIVILIAN' })[2], true);
+  const civilianView = publicPoliceConfirmed(state, { role: 'CIVILIAN' });
+  assert.equal(civilianView[1], true);
+  assert.equal(civilianView[2], undefined);
+  assert.equal(publicPoliceConfirmed(state, { role: 'POLICE' })[2], true);
+  assert.equal(publicPoliceConfirmed({ policeConfirmed: { 2: true } }, { role: 'CIVILIAN' }), null);
 });
-await check('#40 blue voter follows private target after a different public accusation', async () => {
+await check('#38 red utility roles no longer exclude killers they cannot see', async () => {
+  const e = scenario({ 0: 'ARSONIST', 1: 'KILLER', 2: 'CIVILIAN', 3: 'POLICE' });
+  e.state.difficulty = 'hard';
+  for (const p of e.state.players) p.alive = p.id <= 2;
+  e.state.players[0].isHuman = false;
+  e.state.players[0].aiMemory.roleProbs = { 1: { POLICE: 1 }, 2: { CIVILIAN: 1 } };
+  e.state.rng = () => 0.9;
+  const actions = await buildAiNightActions(e.state, {});
+  const mark = actions.find((a) => a.actorId === 0 && a.type === 'ARSON_MARK');
+  assert.ok(mark, 'arsonist marks someone');
+  assert.equal(mark.targetId, 1, 'the (hidden) killer is chosen when beliefs say they are police');
+});
+await check('#41 faction visibility helper mirrors the view rules', () => {
+  const e = scenario({ 0: 'KILLER', 1: 'KILLER', 2: 'SNIPER', 3: 'POLICE' });
+  const [k1, k2, sniper, police, civ] = [0, 1, 2, 3, 4].map((id) => e.state.players[id]);
+  assert.equal(canSeeFaction(k1, k2), true);
+  assert.equal(canSeeFaction(sniper, k1), false);
+  assert.equal(canSeeFaction(k1, sniper), false);
+  assert.equal(canSeeFaction(police, civ), false);
+  assert.equal(canSeeFaction(sniper, sniper), true);
+  civ.alive = false;
+  assert.equal(canSeeFaction(sniper, civ), true);
+});
+await check('#42 riot police headcount comes from beliefs, not true factions', () => {
+  const e = scenario({ 0: 'RIOT_POLICE', 1: 'KILLER', 2: 'KILLER', 3: 'KILLER', 4: 'KILLER', 5: 'POLICE' });
+  const est = estimateFactionCounts(e.state, e.state.players[0]);
+  assert.ok(Math.abs(est.red - 17 * 0.3) < 1e-9);
+  assert.ok(Math.abs(est.blue - (17 * 0.7 + 1)) < 1e-9);
+  e.state.players[0].aiMemory.roleProbs = { 1: { KILLER: 1 } };
+  const informed = estimateFactionCounts(e.state, e.state.players[0]);
+  assert.ok(Math.abs(informed.red - (1 + 16 * 0.3)) < 1e-9);
+});
+await check('#43 private faction chat stays out of other players\' memory reads', () => {
+  const e = scenario({ 0: 'KILLER', 1: 'KILLER', 2: 'POLICE' });
+  e.state.difficulty = 'hard';
+  e.state.players[0].isHuman = false;
+  e.state.players[1].isHuman = true;
+  e.state.killerChat = ['Player 2: target Player 5 tonight'];
+  ensureBeliefs(e.state);
+  const own = e.state.players[0].aiMemory.chatMemory;
+  assert.ok(own.some((m) => m.source === 'faction' && m.speakerId === 1 && m.accusedId === 4));
+  assert.ok(!publicChatMemory(e.state.players[0]).some((m) => m.source === 'faction'));
+});
+await check('#40 blue voter follows the public accusation, not the private police target', async () => {
   const e = scenario({ 0: 'KILLER', 1: 'POLICE' });
   e.state.players[2].isHuman = false;
   e.state.policeRevealedRed = 0;
@@ -625,7 +673,7 @@ await check('#40 blue voter follows private target after a different public accu
   e.state.dayChat = ['Player 1: Player 4 is confirmed red'];
   e.state.rng = () => 0;
   const votes = await buildAiVoteActions(e.state);
-  assert.equal(votes.find((v) => v.actorId === 2).targetId, 0);
+  assert.equal(votes.find((v) => v.actorId === 2).targetId, 3);
 });
 await check('#46 grudge last words can contain undefined', () => {
   const e = scenario({ 0: 'GRUDGE_BEAST' });
@@ -667,4 +715,4 @@ await check('#52 Player 10 falsely counts as Player 1 mention', () => {
   state.dayChat = ['Player 2: Player 10 is suspicious'];
   assert.deepEqual(analyzeChatBehavior(state).mentionedBy[0], [1]);
 });
-console.log(`${passed} review checks passed (#1-5, #7-9, #11-15, #19-20, #23-24 night, #27-37 regression checks; other findings remain audit probes).`);
+console.log(`${passed} review checks passed (#1-5, #7-9, #11-15, #19-20, #23-24 night, #27-43 regression checks; other findings remain audit probes).`);

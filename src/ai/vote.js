@@ -1,7 +1,7 @@
 import { alivePlayers, getPlayer } from "../state.js";
 import { Roles, Faction, roleMeta, roleListFromTheme } from "../roles.js";
-import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, pickTemplate } from "./utils.js";
-import { analyzeVotingPatterns, analyzeChatBehavior, factionProb, publicPoliceConfirmed } from "./analysis.js";
+import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, pickTemplate, publicChatMemory } from "./utils.js";
+import { analyzeVotingPatterns, analyzeChatBehavior, factionProb, publicPoliceConfirmed, publicRedIds, recordPublicRedClaim, canSeeFaction } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
 import { pickTargetBySuspicion } from "./targeting.js";
 import { CHAT_TEMPLATES } from "./templates.js";
@@ -48,19 +48,16 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
       state.publicLog = state.publicLog || [];
       state.dayChat.push(line);
       state.publicLog.push(line);
-      state.policePublicRevealedRed = redTarget.id;
+      recordPublicRedClaim(state, redTarget.id);
       state.roleClaims = state.roleClaims || {};
       state.roleClaims[policeSpeaker.id] = Roles.POLICE.id;
       if (chats !== state.dayChat) chats.push(line);
       policePubliclyRevealed = true;
     }
   }
-  const privatePoliceRedId =
-    !policePubliclyRevealed && (state.policeRevealedRed ?? null) !== null
-      ? state.policeRevealedRed
-      : null;
-  const canUseVoteTarget = (actor, target) =>
-    !!target && (actor.role === Roles.POLICE.id || target.id !== privatePoliceRedId);
+  // Non-police may land on the police's private target by their own reasoning; the
+  // engine must not steer them away from it (that would itself use private intel).
+  const canUseVoteTarget = (actor, target) => !!target;
 
   // Hard+: behavioral analysis for vote scoring
   const votePatterns = hard ? analyzeVotingPatterns(state) : null;
@@ -88,12 +85,8 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
   const publicStrongSafeVoteIds = new Set([...voteSavedIds, ...publicClearedBlueIds]);
 
   // Hard+: collect police-confirmed reds — only if publicly revealed
-  const confirmedRedIds = new Set();
-  if (hard && state.policePublicRevealedRed != null && state.policeConfirmed) {
-    for (const [id, result] of Object.entries(state.policeConfirmed)) {
-      if (result === true) confirmedRedIds.add(Number(id));
-    }
-  }
+  const publicRedSet = publicRedIds(state);
+  const confirmedRedIds = new Set(hard ? publicRedSet : []);
 
   // Hard+: identify players who correctly voted to kill reds (good judgement = likely blue)
   const correctVoterIds = new Set();
@@ -134,13 +127,12 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
   if (hard) {
     for (const p of state.players) {
       if (!p.alive || !p.aiMemory?.chatMemory) continue;
-      for (const m of p.aiMemory.chatMemory) {
+      for (const m of publicChatMemory(p)) {
         if (m.accusedId === null) continue;
         // Check if the accuser is a known red (dead red or police-confirmed)
         const speaker = getPlayer(state, m.speakerId);
         if (!speaker) continue;
-        const isKnownRed = (!speaker.alive && speaker.faction === Faction.RED) ||
-          (state.policePublicRevealedRed != null && state.policeConfirmed?.[m.speakerId] === true);
+        const isKnownRed = (!speaker.alive && speaker.faction === Faction.RED) || publicRedSet.has(m.speakerId);
         if (isKnownRed) accusedByRedIds.add(m.accusedId);
       }
     }
@@ -175,7 +167,7 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
     const deadReds = state.players.filter((p) => !p.alive && p.faction === Faction.RED);
     for (const p of state.players) {
       if (!p.aiMemory?.chatMemory) continue;
-      for (const m of p.aiMemory.chatMemory) {
+      for (const m of publicChatMemory(p)) {
         if (m.defendedId === null) continue;
         if (deadReds.some((dr) => dr.id === m.defendedId)) {
           redDefenderIds.add(m.speakerId);
@@ -292,7 +284,7 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
       }
       // Vote for whoever has the highest suspicion (mimic blue behavior to avoid detection)
       const zombieCandidates = alivePlayers(state).filter(
-        (t) => t.id !== actor.id && t.role !== Roles.ZOMBIE.id && canUseVoteTarget(actor, t)
+        (t) => t.id !== actor.id && canUseVoteTarget(actor, t)
       );
       if (zombieCandidates.length > 0) {
         let bestTarget = null;
@@ -327,7 +319,7 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
     // Non-police blue: only follow reveal if police actually announced it in public chat
     // Hard+: skepticism — doubt claims from "police" who haven't shown prior investigation behavior
     if (policePubliclyRevealed && actor.faction === Faction.BLUE && actor.role !== Roles.POLICE.id) {
-      const redTarget = getPlayer(state, state.policeRevealedRed);
+      const redTarget = getPlayer(state, state.policePublicRevealedRed);
       let followPoliceChance = { easy: 0.5, normal: 0.7, hard: 0.95, nightmare: 0.98 };
       let chance = followPoliceChance[state.difficulty || "normal"] ?? 0.7;
 
@@ -393,7 +385,7 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
     // Hard+ 紅方策略投票
     if (hard && actor.faction === Faction.RED) {
       // Red only knows about exposed teammate if police publicly announced it
-      const redTargetId = policePubliclyRevealed ? state.policeRevealedRed : null;
+      const redTargetId = policePubliclyRevealed ? (state.policePublicRevealedRed ?? null) : null;
       const exposedRed =
         redTargetId !== null ? getPlayer(state, redTargetId) : null;
 
@@ -663,12 +655,12 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
       if (v.targetId === consensusTarget) continue; // already voting consensus
       const actor = getPlayer(state, v.actorId);
       if (!actor || actor.isHuman) continue;
-      if (actor.role !== Roles.POLICE.id && consensusTarget === privatePoliceRedId) continue;
       // Red AI joins consensus to blend in — but only if target isn't a fellow red
       if (actor.faction === Faction.RED) {
         const conTarget = getPlayer(state, consensusTarget);
         // Only bandwagon if target isn't a red teammate AND consensus is strong
-        if (!conTarget || conTarget.faction === Faction.RED || consensusCount < 3) continue;
+        const knownRedAlly = canSeeFaction(actor, conTarget) && conTarget.faction === Faction.RED;
+        if (!conTarget || knownRedAlly || consensusCount < 3) continue;
         // Lower rate than blue (25%) — blend occasionally, not always
         if (state.rng() >= 0.25) continue;
         const currentVotesR = tally[v.targetId] || 0;

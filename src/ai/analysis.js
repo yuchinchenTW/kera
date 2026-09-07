@@ -55,7 +55,57 @@ export function publicRevealedRed(state, actor) {
  */
 export function publicPoliceConfirmed(state, actor) {
   if (actor && actor.role === Roles.POLICE.id) return state.policeConfirmed ?? null;
-  return (state.policePublicRevealedRed != null) ? (state.policeConfirmed ?? null) : null;
+  const ids = publicRedIds(state);
+  if (!ids.size) return null;
+  return Object.fromEntries([...ids].map((id) => [id, true]));
+}
+
+/**
+ * Every red that has been claimed in public (real police reveals and fake claims alike).
+ * This is the only "confirmed red" knowledge a non-police player may act on.
+ */
+export function publicRedIds(state) {
+  const ids = new Set(state.policePublicRedIds || []);
+  if (state.policePublicRevealedRed != null) ids.add(state.policePublicRevealedRed);
+  return ids;
+}
+
+/** Record a public red claim so it stays known even after later claims replace the "current" one. */
+export function recordPublicRedClaim(state, targetId) {
+  state.policePublicRevealedRed = targetId;
+  state.policePublicRedIds = state.policePublicRedIds || [];
+  if (!state.policePublicRedIds.includes(targetId)) state.policePublicRedIds.push(targetId);
+}
+
+/** Mirrors view.js visibility: who may an actor know the true faction of? */
+export function canSeeFaction(actor, target) {
+  if (!actor || !target) return false;
+  if (actor.id === target.id || !target.alive) return true;
+  const shared = [Roles.POLICE.id, Roles.KILLER.id, Roles.GRUDGE_BEAST.id];
+  return shared.includes(actor.role) && actor.role === target.role;
+}
+
+/** Belief-based headcount an actor may legitimately reason about (no true faction reads). */
+export function estimateFactionCounts(state, actor) {
+  let red = 0;
+  let blue = 0;
+  for (const t of alivePlayers(state)) {
+    if (canSeeFaction(actor, t)) {
+      if (t.faction === Faction.RED) red += 1;
+      else if (t.faction === Faction.BLUE) blue += 1;
+      continue;
+    }
+    const pr = factionProb(actor, t.id, Faction.RED);
+    const pb = factionProb(actor, t.id, Faction.BLUE);
+    if (pr === null || pb === null) {
+      red += 0.3; // rough prior: about a third of a table is red
+      blue += 0.7;
+    } else {
+      red += pr;
+      blue += pb;
+    }
+  }
+  return { red, blue };
 }
 
 /**

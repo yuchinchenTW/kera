@@ -131,6 +131,7 @@ export function createInitialState(
     lastNightSummary: [],
     winrateHint: null,
     policePublicRevealedRed: null,
+    policePublicRedIds: [],
     policePublicClearedBlueIds: [],
   };
 }

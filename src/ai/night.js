@@ -1,7 +1,7 @@
-import { alivePlayers, getPlayer, factionCounts } from "../state.js";
+import { alivePlayers, getPlayer } from "../state.js";
 import { Roles, Faction } from "../roles.js";
-import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory } from "./utils.js";
-import { analyzeChatBehavior, analyzeVotingPatterns, factionProb, publicPoliceConfirmed } from "./analysis.js";
+import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, publicChatMemory } from "./utils.js";
+import { analyzeChatBehavior, analyzeVotingPatterns, factionProb, publicPoliceConfirmed, estimateFactionCounts } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
 import { pickTargetBySuspicion, pickGroupTarget, pickKillerSmartTarget, pickPoliceSmartTarget, pickCowboySmartTarget, pickSniperSmartTarget, pickTerroristSmartTarget, pickZombieTarget } from "./targeting.js";
 
@@ -215,7 +215,7 @@ export async function buildAiNightActions(state, opts = {}) {
               // If accused by reds or heavily voted, killers may target us
               const selfAccusedByRed = (state.players || []).some((p) => {
                 if (!p.aiMemory?.chatMemory) return false;
-                return p.aiMemory.chatMemory.some((m) => {
+                return publicChatMemory(p).some((m) => {
                   if (m.accusedId !== actor.id) return false;
                   const sp = getPlayer(state, m.speakerId);
                   return sp && ((!sp.alive && sp.faction === Faction.RED) || publicPoliceConfirmed(state, actor)?.[m.speakerId] === true);
@@ -316,7 +316,7 @@ export async function buildAiNightActions(state, opts = {}) {
               if ((state.policePublicRevealedRed ?? null) !== null) knownDeadReds.add((state.policePublicRevealedRed ?? null));
               for (const p of state.players) {
                 if (!p.aiMemory?.chatMemory) continue;
-                for (const m of p.aiMemory.chatMemory) {
+                for (const m of publicChatMemory(p)) {
                   if (m.accusedId !== null && knownDeadReds.has(m.accusedId)) {
                     redAccuserCount[m.speakerId] = (redAccuserCount[m.speakerId] || 0) + 1;
                   }
@@ -337,7 +337,7 @@ export async function buildAiNightActions(state, opts = {}) {
             if (hard) {
               for (const p of state.players) {
                 if (!p.aiMemory?.chatMemory) continue;
-                for (const m of p.aiMemory.chatMemory) {
+                for (const m of publicChatMemory(p)) {
                   if (m.accusedId === null) continue;
                   const speaker = getPlayer(state, m.speakerId);
                   if (!speaker) continue;
@@ -903,7 +903,7 @@ export async function buildAiNightActions(state, opts = {}) {
             // Hard+: multi-role scoring + arson urgency + self-threat awareness
             const remaining = (Roles.RIOT_POLICE.maxGrenades || 0) - state.usage.riotGrenades;
             const dayNum = state.dayNumber || 1;
-            const counts = factionCounts(state);
+            const counts = estimateFactionCounts(state, actor);
             const bluePressure = counts.red >= counts.blue;
             const selfThreat = actor.aiMemory?.selfThreat ?? 0;
 
@@ -975,7 +975,7 @@ export async function buildAiNightActions(state, opts = {}) {
             let best = null;
             let bestScore = -Infinity;
             for (const t of shuffled(alivePlayers(state), state.rng)) {
-              if (t.id === actor.id || t.role === Roles.KILLER.id) continue;
+              if (t.id === actor.id || publicPoliceConfirmed(state, actor)?.[t.id]) continue;
               if (t.status.arsonMarked) continue; // already marked
               const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
               const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
@@ -1010,7 +1010,7 @@ export async function buildAiNightActions(state, opts = {}) {
           let best = null;
           let bestScore = -Infinity;
           for (const t of shuffled(alivePlayers(state), state.rng)) {
-            if (t.id === actor.id || t.role === Roles.KILLER.id) continue;
+            if (t.id === actor.id || publicPoliceConfirmed(state, actor)?.[t.id]) continue;
             // High suspicion targets are likely to be investigated by police
             const suspicion = actor.aiMemory?.suspicion?.[t.id] ?? 0.5;
             // High blue prob targets are likely to be protected by agent
@@ -1038,7 +1038,7 @@ export async function buildAiNightActions(state, opts = {}) {
           let bestScore = -Infinity;
           const knownRoles = actor.aiMemory?.grudgeKnownRole || {};
           for (const t of shuffled(alivePlayers(state), state.rng)) {
-            if (t.id === actor.id || t.role === Roles.KILLER.id) continue;
+            if (t.id === actor.id || publicPoliceConfirmed(state, actor)?.[t.id]) continue;
             const civProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.CIVILIAN.id] ?? 0;
             const bratProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.BRAT.id] ?? 0;
             // Civilians/brats die instantly — high value kill
@@ -1094,7 +1094,7 @@ export async function buildAiNightActions(state, opts = {}) {
           const exAccusedByRed = new Set();
           for (const p of state.players) {
             if (!p.aiMemory?.chatMemory) continue;
-            for (const m of p.aiMemory.chatMemory) {
+            for (const m of publicChatMemory(p)) {
               if (m.accusedId === null) continue;
               const sp = getPlayer(state, m.speakerId);
               if (!sp) continue;
@@ -1269,7 +1269,7 @@ export async function buildAiNightActions(state, opts = {}) {
               let best = null;
               let bestScore = -Infinity;
               for (const t of alivePlayers(state)) {
-                if (t.id === actor.id || t.role === Roles.KILLER.id) continue;
+                if (t.id === actor.id || publicPoliceConfirmed(state, actor)?.[t.id]) continue;
                 const policeProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.POLICE.id] ?? 0;
                 const doctorProb = actor.aiMemory?.roleProbs?.[t.id]?.[Roles.DOCTOR.id] ?? 0;
                 const blueProb = factionProb(actor, t.id, Faction.BLUE) ?? 0.5;
