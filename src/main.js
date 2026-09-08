@@ -209,7 +209,11 @@ function applyLocaleText() {
 function resetGame() {
   const themeId = el.themeSelect?.value || Theme.GOOD_VS_EVIL.id;
   const difficulty = el.difficultySelect?.value || defaultDifficulty || "normal";
-  engine = new GameEngine(Date.now(), themeId, difficulty);
+  const seedParam = new URLSearchParams(window.location.search).get("seed");
+  const seed = seedParam !== null && /^\d+$/.test(seedParam) && Number.isSafeInteger(Number(seedParam))
+    ? Number(seedParam)
+    : Date.now();
+  engine = new GameEngine(seed, themeId, difficulty);
   render();
 }
 
@@ -767,7 +771,7 @@ function renderControls() {
             options = buildPlayerOptions((p) => p.role !== Roles.POLICE.id);
             break;
           case Roles.KILLER.id:
-            options = buildPlayerOptions((p) => p.faction !== "RED");
+            options = buildPlayerOptions((p) => p.role !== Roles.KILLER.id && p.id !== human.id);
             break;
           case Roles.DOCTOR.id:
             options = buildPlayerOptions(() => true);
@@ -880,7 +884,7 @@ function init() {
     el.localeSelect.addEventListener("change", () => {
       locale = el.localeSelect.value === "en" ? "en" : "zh";
       applyLocaleText();
-      resetGame();
+      render();
     });
   }
   if (el.sendKillerChatBtn) el.sendKillerChatBtn.addEventListener("click", sendKillerChat);

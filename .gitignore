@@ -5,3 +5,6 @@ training/logs/
 training/__pycache__/
 training/_tmp_weights.json
 training/*.pt
+training/*.onnx
+node_modules/
+*.bak

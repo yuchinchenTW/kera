@@ -1,5 +1,30 @@
 # 問題清單核對紀錄
 
+## 第六批修復（2026-09-08）
+
+本節是最新進度；下方初次核對與第一批紀錄保留歷史證據，不代表目前程式狀態。
+
+| 編號 | 狀態 | 修復與驗證 |
+| --- | --- | --- |
+| 53 | 已修復 | 單機殺手目標只排除自己與已知殺手，不再排除隱藏紅方。以真實 main.js 入口和 DOM 替身驗證目標選項。 |
+| 54 | 已修復 | 語言切換只翻譯及 render，不重建引擎。測試先結算夜晚、進入投票再切換兩種語言，確認階段與局面顯示不重置。 |
+| 55 | 已修復 | 支援 URL `?seed=12345`，接受非負安全整數（含 0）；無效或缺值用 Date.now。固定 URL seed 的重開會重用該值；完整重現仍需相同主題、難度、操作、程式版本。 |
+| 56 | 已修復 | npm test 執行回歸入口；審計有 issue 回傳 1；模擬 worker error、非零退出或未交結果即退出均使整次模擬失敗並終止其他 workers。測試含正常完整統計、throw、exit(0)、exit(7)、注入審計問題的退出碼。 |
+| 57 | 已修復 | 審計建構 allAi:true，夜晚傳 null，夜晚與投票均傳 includeHuman:true；注入測試確認每一席都不是人類並驗證呼叫參數。未改 simulate 的 AI 設定。 |
+| 58 | 已修復（本批範圍） | 取消 node_modules、兩份 .bak 與兩份模型的 Git 追蹤，保留本機檔；補忽略規則；移除 prestart 和 ONNX 正常安裝依賴，離線更新 lockfile。依使用者停止神經網路方向的決定，舊 --neural 入口僅保留為需另裝 runtime/model 的實驗工具。未改寫 Git 歷史，完整 clone 仍含歷史大檔。早期紀錄提及的 fitness 權重設計不在這次 Repo 清理範圍。 |
+
+驗證：`npm test` 通過 **70 項主檢查**（包含原有 13 項結算回歸）。另涵蓋 worker 送出結果後才出錯的拒絕路徑。前端測試使用 DOM 替身，非瀏覽器畫面測試。
+
+修正全 AI 設定後，`node tests/behavior_audit.js` 的 250 局測試產生 **3 項紀錄，exit 1**，不是 No issues found：
+
+- Seed 153 R4：Police Player 7 未投 Player 9，改投 Player 15。
+- Seed 166 R4：Police Player 17 未投 Player 8，改投 Player 10。
+- Seed 168 R6：Police Player 11 未投 Player 5，改投 Player 7。
+
+這三筆保留待追查 AI 行為或審計條件，未藉由弱化檢查消除。此次未修改 #6、#10、#18、#26，四項仍待策略或規則裁定。
+
+## 初次核對紀錄
+
 核對日期：2026-09-07。基準 commit：`e5f1dd4`。環境：Windows、Node.js `v22.18.0`。
 
 初次核對通過 34 個局部驗證；收到完整 #14、#15、#22～27 後增至 48 個。第一批修復已修改 `server.js`，範圍為 #1～5、#15；引擎與 AI 尚未修改。執行 `node tests/review_verification.mjs` 現通過 **52 項主檢查**，其中已包含 `tests/server_resolution.mjs` 的 13 個延遲結算/例外回歸情境，以及兩個頁面的完整靜態模組 import 檢查。
@@ -93,6 +118,10 @@
 | 50 | 已修復，低 | 殺手夜間簡報先決定是否改打跳警者，再組合描述用的 top/alt，首夜「Target X tonight」與實際目標一致。測試：roleClaims 有 5 號跳警時，簡報寫 Player 6 且 `_killerChatTarget` 為 5。 |
 | 51 | 已修復，低 | `policePubliclyRevealed` 改為「公開揭露對象仍存活」，不再要求當天聊天再次提到；`policePublicRevealedRed` 本來就只在公開宣稱時設定。測試：第 3 天無人提及時，普通藍方仍投公開紅方。 |
 | 52 | 已修復，中 | 新增 `mentionedPlayerIds`（長名優先、不重疊比對），套用於 memory、analysis、vote、chat、night、engine 與 behavior_audit 共 11 處；每行只計算一次以避免 O(n³)。測試：「Player 10 is suspicious」不再算成提及 Player 1。 |
+
+### 第六批審計異常追查（#59）
+
+真正全 AI 的 250 局審計出現 3 筆「警察未投確證紅方」（seed 153 R4、166 R4、168 R6，審計輪次從 0 起算）。重現結果：三例中警察一開始都投了 `policeRevealedRed`，之後 `vote.js` 的 hard 共識跟票第二階段發現警察的票是孤票、且共識目標在警察眼中嫌疑值 ≥ 0.4，就把票改到共識目標。原本 `privatePoliceRedId` 那行保護只涵蓋非警察，警察從未被保護，屬既有問題；第一次審計只出現 1 筆是因為當時每場有一個不行動的人類座位。修法：跟票迴圈中，若行動者是警察且目前票投向 `policeRevealedRed`，不改票。修後審計「Voted revealed red」146/146、0 issues、退出碼 0；新增探針 #59（公開宣稱形成共識時，握有私查結果的警察仍投私查紅方）。
 
 ## 規則裁定
 

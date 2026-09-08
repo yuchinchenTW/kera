@@ -58,7 +58,7 @@ const stats = {
 
 (async () => {
 for (let seed = 1; seed <= GAMES; seed++) {
-  const e = new GameEngine(seed, "GOOD_VS_EVIL", "hard");
+  const e = new GameEngine(seed, "GOOD_VS_EVIL", "hard", { allAi: true });
   let lastDoctorTarget = {};
   let prevKillerChat = 0;
   let prevPoliceChat = 0;
@@ -69,7 +69,7 @@ for (let seed = 1; seed <= GAMES; seed++) {
     // Capture state before night
     const aliveBeforeNight = e.state.players.filter((p) => p.alive).map((p) => p.id);
 
-    await e.resolveNight({});
+    await e.resolveNight(null, { includeHuman: true });
     if (e.state.phase === "END") break;
 
     // ─ Analyze night actions from publicLog + state ─
@@ -148,7 +148,7 @@ for (let seed = 1; seed <= GAMES; seed++) {
     const revealedRedBefore = e.state.policeRevealedRed;
     const revealedRedPlayer = revealedRedBefore !== null ? e.state.players[revealedRedBefore] : null;
 
-    await e.resolveVote(null);
+    await e.resolveVote(null, "", { includeHuman: true });
     if (e.state.phase === "END") break;
 
     // Analyze votes from history
@@ -337,10 +337,14 @@ console.log("\n── ISSUES (first 30) ──");
 if (issues.length === 0) {
   console.log("  No issues found!");
 } else {
+  process.exitCode = 1;
   console.log(`  Total issues: ${issues.length}`);
   for (const issue of issues.slice(0, 30)) {
     console.log(`  ⚠ ${issue}`);
   }
   if (issues.length > 30) console.log(`  ... and ${issues.length - 30} more`);
 }
-})();
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

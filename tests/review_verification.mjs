@@ -1,6 +1,7 @@
 // Local-only audit probes. #1-5 and #15 now assert the repaired behavior.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import net from 'node:net';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
@@ -709,6 +710,20 @@ await check('#50 killer night briefing names the target that is actually attacke
   assert.equal(e.state._killerChatTarget, 5);
   assert.match(briefing, /Target Player 6 tonight/);
 });
+await check('#59 police keep voting their confirmed red against a bandwagon', async () => {
+  const e = scenario({ 0: 'POLICE', 1: 'KILLER' });
+  e.state.difficulty = 'hard';
+  for (const p of e.state.players) p.isHuman = false;
+  e.state.policeRevealedRed = 1;          // private: the police know 1 is red
+  e.state.policePublicRevealedRed = 5;    // public claim everyone else piles onto
+  e.state.policePublicRedIds = [5];
+  e.state.rng = () => 0.1; // above the 5% random-abstain roll, below every follow/bandwagon threshold
+  ensureBeliefs(e.state);
+  e.state.players[0].aiMemory.suspicion[5] = 0.9; // the crowd's pick looks suspicious to the police too
+  const votes = await buildAiVoteActions(e.state);
+  assert.ok(votes.filter((v) => v.targetId === 5).length >= 2, 'a consensus forms on the public claim');
+  assert.equal(votes.find((v) => v.actorId === 0).targetId, 1);
+});
 await check('#51 blue voters still follow a public reveal on later days', async () => {
   const e = scenario({ 0: 'KILLER', 1: 'POLICE' });
   e.state.players[2].isHuman = false;
@@ -766,4 +781,77 @@ await check('#52 Player 10 no longer counts as a Player 1 mention', () => {
   assert.deepEqual(mentionedBy[10], [2]);
   assert.equal(mentionedBy[1], undefined);
 });
-console.log(`${passed} review checks passed (#1-5, #7-9, #11-15, #19-20, #23-24 night, #27-52 regression checks; other findings remain audit probes).`);
+function runNode(args) {
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, args, {
+      cwd: root, windowsHide: true, timeout: 30000, maxBuffer: 2 * 1024 * 1024,
+      env: { ...process.env, NODE_OPTIONS: '' },
+    }, (error, stdout, stderr) => {
+      if (error && (error.killed || typeof error.code !== 'number')) return reject(error);
+      resolve({ code: error?.code || 0, stdout, stderr });
+    });
+  });
+}
+const preload = (source) => ['--import', `data:text/javascript,${encodeURIComponent(source)}`];
+await check('#53-55 real frontend entry preserves games and accepts replay seeds', async () => {
+  const result = await runNode(['tests/frontend_regression.mjs']);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /Frontend regressions passed/);
+});
+await check('#56 successful simulation returns all requested games', async () => {
+  const result = await runNode(['tests/simulate.js', '8', 'GOOD_VS_EVIL', 'hard', '--json', '--seed=12345']);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).count, 8);
+});
+for (const failure of [
+  'throw new Error("injected worker failure")',
+  'process.exit(0)',
+  'process.exit(7)',
+  'process.exit = () => { throw new Error("injected post-result failure"); }',
+]) {
+  await check(`#56 worker failure rejects partial results: ${failure}`, async () => {
+    const result = await runNode([
+      ...preload(`import os from 'node:os';
+        import { syncBuiltinESMExports } from 'node:module';
+        import { isMainThread } from 'node:worker_threads';
+        os.cpus = () => [{}, {}]; syncBuiltinESMExports();
+        if (!isMainThread) { ${failure}; }`),
+      'tests/simulate.js', '2', '--json', '--seed=12345',
+    ]);
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /Simulation failed:/);
+    assert.equal(result.stdout.trim(), '', 'partial statistics must not be reported as success');
+  });
+}
+for (const injectIssue of [false, true]) {
+  await check(`#56-57 audit uses all AI and exits ${injectIssue ? 1 : 0} for injected findings`, async () => {
+    const result = await runNode([
+      ...preload(`import assert from 'node:assert/strict';
+        import { GameEngine } from ${JSON.stringify(new URL('../src/engine.js', import.meta.url).href)};
+        GameEngine.prototype.resolveNight = async function(action, options) {
+          assert.equal(action, null);
+          assert.equal(options.includeHuman, true);
+          assert.ok(this.state.players.every(p => !p.isHuman));
+          this.state.phase = 'DAY';
+          this.state.players[0].alive = false;
+          this.state.dayChat = ${injectIssue ? '[this.state.players[0].name + ": injected dead speaker"]' : '[]'};
+        };
+        GameEngine.prototype.resolveVote = async function(target, words, options) {
+          assert.equal(options.includeHuman, true);
+          this.state.phase = 'END';
+        };`),
+      'tests/behavior_audit.js',
+    ]);
+    assert.equal(result.code, injectIssue ? 1 : 0, result.stderr);
+    assert.match(result.stdout, injectIssue ? /Total issues: 250/ : /No issues found/);
+  });
+}
+await check('#58 normal installs exclude the discontinued neural runtime', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const lock = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.scripts.test, 'node tests/review_verification.mjs');
+  assert.equal(pkg.scripts.prestart, undefined);
+  assert.equal(pkg.dependencies['onnxruntime-node'], undefined);
+  assert.ok(!Object.keys(lock.packages).some((key) => key.includes('onnxruntime')));
+});
+console.log(`${passed} review checks passed (#1-5, #7-9, #11-15, #19-20, #23-24 night, #27-58 regression checks; other findings remain audit probes).`);

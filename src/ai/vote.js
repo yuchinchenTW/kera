@@ -649,6 +649,8 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
       if (v.targetId === consensusTarget) continue; // already voting consensus
       const actor = getPlayer(state, v.actorId);
       if (!actor || actor.isHuman) continue;
+      // Police holding a confirmed red never abandon it for the crowd's pick.
+      if (actor.role === Roles.POLICE.id && v.targetId === state.policeRevealedRed) continue;
       // Red AI joins consensus to blend in — but only if target isn't a fellow red
       if (actor.faction === Faction.RED) {
         const conTarget = getPlayer(state, consensusTarget);

@@ -618,13 +618,21 @@ async function simulateGames(count, theme, difficulty, { L, neuralMode: _neuralM
   }
 
   // Multi-threaded
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const baseSeed = _cliSeed ?? Date.now();
     const chunkSize = Math.ceil(count / numThreads);
     let completedGames = 0;
     let finishedWorkers = 0;
     let merged = emptyStats();
     const workerFile = fileURLToPath(import.meta.url);
+    const workers = [];
+    let failed = false;
+    function fail(error) {
+      if (failed) return;
+      failed = true;
+      Promise.allSettled(workers.map((worker) => worker.terminate()))
+        .then(() => reject(error));
+    }
 
     for (let t = 0; t < numThreads; t++) {
       const startIdx = t * chunkSize;
@@ -632,31 +640,41 @@ async function simulateGames(count, theme, difficulty, { L, neuralMode: _neuralM
       if (startIdx >= count) break;
 
       const neuralFactions = _neuralRedOnly ? ["RED"] : _neuralBlueOnly ? ["BLUE"] : null;
-      const worker = new Worker(workerFile, {
-        workerData: { startIdx, endIdx, baseSeed, theme, difficulty, neuralFactions },
-      });
+      let worker;
+      try {
+        worker = new Worker(workerFile, {
+          workerData: { startIdx, endIdx, baseSeed, theme, difficulty, neuralFactions },
+        });
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      workers.push(worker);
+      let receivedResult = false;
 
       worker.on("message", (msg) => {
+        if (failed) return;
         if (msg.type === "progress") {
           completedGames = Math.min(completedGames + (msg.delta || 20), count);
           if (count >= 100) {
             process.stderr.write(`\r  ${L.progress(completedGames, count)}        `);
           }
-        } else if (msg.type === "done") {
+        } else if (msg.type === "done" && !receivedResult) {
+          receivedResult = true;
           merged = mergeStats(merged, msg.stats);
-          finishedWorkers++;
-          if (finishedWorkers === Math.min(numThreads, Math.ceil(count / chunkSize))) {
-            if (count >= 100) process.stderr.write("\r" + " ".repeat(50) + "\r");
-            resolve(merged);
-          }
         }
       });
 
-      worker.on("error", (err) => {
-        console.error("[PARTIAL] Worker crashed:", err.message || err);
-        process.stderr.write("\n  ⚠ Results may be incomplete due to worker crash\n");
+      worker.on("error", fail);
+      worker.on("exit", (code) => {
+        if (failed) return;
+        if (code !== 0 || !receivedResult) {
+          fail(new Error(`Simulation worker exited with code ${code}${receivedResult ? "" : " without results"}`));
+          return;
+        }
         finishedWorkers++;
         if (finishedWorkers === Math.min(numThreads, Math.ceil(count / chunkSize))) {
+          if (count >= 100) process.stderr.write("\r" + " ".repeat(50) + "\r");
           resolve(merged);
         }
       });
@@ -976,6 +994,9 @@ async function main() {
   console.log("");
 }
 
-main();
+main().catch((error) => {
+  console.error("Simulation failed:", error.message || error);
+  process.exitCode = 1;
+});
 
 } // end isMainThread else

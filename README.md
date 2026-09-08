@@ -14,6 +14,10 @@ npm start          # serves http://localhost:3001
 - Single-player: `http://localhost:3001/`
 - Multiplayer: `http://localhost:3001/multiplayer.html`
 
+Single-player replay seed: `http://localhost:3001/?seed=12345`. Use a non-negative safe integer; missing or invalid seeds use the current time. With a seed in the URL, Restart repeats that seed. Reproducing a game also requires the same theme, difficulty, actions, and code version.
+
+Install dependencies once before starting; `npm start` no longer runs an install or needs network access.
+
 ## Overview (EN)
 - Social deduction game for 18 seats with multiple themed role mixes.
 - Single-player (1 human + 17 AI) and WebSocket multiplayer (multiple humans, AI fills remaining seats and takes over on disconnect).
@@ -308,6 +312,7 @@ AI 決策邏輯遵守與玩家相同的資訊可見性規則：
 
 ## Simulation / 模擬測試
 ```bash
+npm test                                           # regression checks, including server settlement tests
 node tests/simulate.js 500                           # 500 局，預設主題/難度
 node tests/simulate.js 500 GOOD_VS_EVIL hard         # 指定主題和難度
 node tests/simulate.js 200 --compare                 # 比較全部 4 種難度
@@ -318,6 +323,8 @@ node tests/simulate.js 100 GOOD_VS_EVIL hard --seed=12345  # 固定種子重現�
 node tests/simulate.js --help                        # 顯示所有選項及可用主題
 node tests/behavior_audit.js                         # 250 場行為審計（行動/聊天/投票邏輯）
 ```
+
+The behavior audit uses 18 AI seats and exits with code 1 when it finds issues. Simulation worker errors or exits without results also fail with code 1; incomplete statistics are not reported as successful results.
 
 輸出內容包括：陣營勝率、遊戲長度分佈、勝利原因、各角色統計（勝率、存活率、夜殺率、票殺率），以及可選的難度比較表。
 
@@ -370,3 +377,5 @@ python training/cma_optimize.py --population 16 --games 150        # 更大搜�
 `training/` 目錄中其餘檔案（`train.py`、`model.py`、`fast_engine.py`、`fast_encode_jit.py`、`env.py`、`vec_env.py`、`evaluate.py`、`analyze_behavior.py`、`distill.py`、`export_onnx.py`、`game_server.js`、`state_encoder.js`、`mafia_policy.onnx`）以及 `src/ai/neural.js` 屬於一次 MAPPO 自我對弈訓練實驗的遺留。此方向已停止開發，遊戲伺服器與客戶端都不會載入模型或使用這些模組；保留僅供參考。
 
 The remaining files under `training/` and `src/ai/neural.js` are leftovers from a discontinued MAPPO self-play experiment. The game server and clients never load the model or call these modules; they are kept for reference only.
+
+Model binaries (`.pt`, `.onnx`) and `onnxruntime-node` are no longer included in the current checkout or normal install. The legacy `simulate.js --neural` path requires a separately installed runtime and a local model. `training/state_encoder.js` remains necessary for the frontend's static module imports even though inference is disabled. Removing tracked binaries does not remove them from Git history or shrink a full clone of that history.

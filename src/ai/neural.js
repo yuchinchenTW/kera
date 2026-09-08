@@ -18,7 +18,7 @@ export async function loadNeuralModel(path) {
   try {
     ort = await import("onnxruntime-node");
   } catch {
-    console.warn("[Neural AI] onnxruntime-node not available (browser environment?)");
+    console.warn("[Neural AI] Optional onnxruntime-node is unavailable; legacy neural simulations require a separate runtime install and local model.");
     return false;
   }
 
