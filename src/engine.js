@@ -1,4 +1,4 @@
-import { buildAiNightActions, buildAiVoteActions, generateChatLines, generateLastWords, generateFactionChat, generateNightFactionChat } from "./ai/index.js";
+import { buildAiNightActions, buildAiVoteActions, generateChatLines, generateLastWords, generateFactionChat, generateNightFactionChat, mentionedPlayerIds } from "./ai/index.js";
 import {
   addPrivateLog,
   addPublicLog,
@@ -951,10 +951,8 @@ export class GameEngine {
     const chats = this.state.dayChat || [];
     for (const line of chats) {
       if (line.startsWith("[VOTE] ") || line.startsWith("[LAST] ")) continue;
-      for (const p of this.state.players) {
-        if (line.includes(p.name)) {
-          mentionCounts[p.id] = (mentionCounts[p.id] || 0) + 1;
-        }
+      for (const id of mentionedPlayerIds(line, this.state.players)) {
+        mentionCounts[id] = (mentionCounts[id] || 0) + 1;
       }
     }
 

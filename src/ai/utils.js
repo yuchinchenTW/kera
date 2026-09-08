@@ -26,6 +26,32 @@ export function publicChatMemory(p) {
   return (p?.aiMemory?.chatMemory || []).filter((m) => m.source !== "faction");
 }
 
+/**
+ * Ids of players mentioned in a line. Longer names are matched first and a shorter
+ * name only counts when it is not part of an already matched longer one, so
+ * "Player 10" never registers as a mention of "Player 1".
+ */
+export function mentionedPlayerIds(line, players) {
+  const ids = new Set();
+  if (typeof line !== "string" || !line) return ids;
+  const claimed = [];
+  const sorted = (players || []).filter((p) => p && p.name).sort((a, b) => b.name.length - a.name.length);
+  for (const p of sorted) {
+    let from = 0;
+    for (;;) {
+      const idx = line.indexOf(p.name, from);
+      if (idx < 0) break;
+      const end = idx + p.name.length;
+      if (!claimed.some(([s, e]) => idx < e && end > s)) {
+        ids.add(p.id);
+        claimed.push([idx, end]);
+      }
+      from = end;
+    }
+  }
+  return ids;
+}
+
 export function ensureAdvancedMemory(p) {
   if (!p.aiMemory) p.aiMemory = { suspicion: {}, roleProbs: {} };
   if (!p.aiMemory.roleProbs) p.aiMemory.roleProbs = {};

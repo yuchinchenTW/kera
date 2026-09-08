@@ -1,6 +1,6 @@
 import { alivePlayers, getPlayer } from "../state.js";
 import { Roles, Faction } from "../roles.js";
-import { isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, pickTemplate, roleNameZh } from "./utils.js";
+import { isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, pickTemplate, roleNameZh, mentionedPlayerIds } from "./utils.js";
 import { analyzeChatBehavior, analyzeVotingPatterns, factionProb, publicPoliceConfirmed, recordPublicRedClaim } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
 import { pickKillerSmartTarget, pickPoliceSmartTarget } from "./targeting.js";
@@ -641,10 +641,11 @@ export function generateChatLines(state, maxLines = 6) {
       // Find who spoke and who was accused
       let speakerName = null;
       let accusedName = null;
+      const mentionedIds = mentionedPlayerIds(enPart, state.players);
       for (const p of state.players) {
         if (!p) continue;
         if (enPart.startsWith(p.name + ":")) speakerName = p.name;
-        else if (enPart.includes(p.name)) accusedName = p.name;
+        else if (mentionedIds.has(p.id)) accusedName = p.name;
       }
       if (!speakerName || !accusedName) continue;
 
@@ -698,10 +699,11 @@ export function generateChatLines(state, maxLines = 6) {
         if (!p) continue;
         if (enPart.startsWith(p.name + ":")) accuserName = p.name;
       }
+      const accusedIds = mentionedPlayerIds(enPart, state.players);
       for (const p of state.players) {
         if (!p) continue;
         if (p.name === accuserName) continue;
-        if (enPart.includes(p.name) && p.alive && !p.isHuman) {
+        if (accusedIds.has(p.id) && p.alive && !p.isHuman) {
           accusedPlayer = p;
           break;
         }
@@ -762,6 +764,17 @@ export function generateNightFactionChat(state) {
         (state.lastNightSavedIds || []).includes(t.id)
       ) : null;
 
+      // ─ Check for publicly-claimed police (highest priority kill) ─
+      // Decided first so every line below describes the target we will actually attack.
+      const claimedPoliceTarget = nonKillers.find((t) =>
+        t.alive && state.roleClaims?.[t.id] === Roles.POLICE.id
+      );
+      if (claimedPoliceTarget && actualTarget?.id !== claimedPoliceTarget.id) {
+        // Override target to the claimed police
+        actualTarget = claimedPoliceTarget;
+        state._killerChatTarget = actualTarget.id;
+      }
+
       // Build role probability info for the chosen target
       const topProbs = actualTarget ? {
         policeProb: speaker.aiMemory?.roleProbs?.[actualTarget.id]?.[Roles.POLICE.id] ?? 0,
@@ -784,16 +797,6 @@ export function generateNightFactionChat(state) {
       // Police reveal danger — only if publicly announced
       const policeRevealed = (state.policePublicRevealedRed ?? null) !== null;
       const revealedIsUs = policeRevealed && allKillersAlive.some((k) => k.id === state.policePublicRevealedRed);
-
-      // ─ Check for publicly-claimed police (highest priority kill) ─
-      const claimedPoliceTarget = nonKillers.find((t) =>
-        t.alive && state.roleClaims?.[t.id] === Roles.POLICE.id
-      );
-      if (claimedPoliceTarget && actualTarget?.id !== claimedPoliceTarget.id) {
-        // Override target to the claimed police
-        actualTarget = claimedPoliceTarget;
-        if (actualTarget) state._killerChatTarget = actualTarget.id;
-      }
 
       // ─ Build tactical lines ─
       if (isFirstNight) {
@@ -1471,12 +1474,13 @@ export function generateLastWords(state, playerId) {
   // ── GREEN faction dying ──
   if (player.faction === Faction.GREEN) {
     if (player.role === Roles.GRUDGE_BEAST.id) {
-      if (mostSuspicious && state.rng() < 0.5) {
-        const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.greenGrudge);
-        return tmpl(player.name, mostSuspicious.name);
-      }
-      const tmpl = pickTemplate(state.rng, LAST_WORDS_TEMPLATES.greenGrudge);
-      return tmpl(player.name);
+      // Templates that name a target are only eligible when we actually have one.
+      const nameTarget = !!mostSuspicious && state.rng() < 0.5;
+      const pool = nameTarget
+        ? LAST_WORDS_TEMPLATES.greenGrudge
+        : LAST_WORDS_TEMPLATES.greenGrudge.filter((t) => t.length < 2);
+      const tmpl = pickTemplate(state.rng, pool);
+      return tmpl(player.name, mostSuspicious?.name);
     }
     if (player.role === Roles.ZOMBIE.id) {
       // Reveal bite targets to help allied zombies avoid re-biting (reduce FATAL)

@@ -1,6 +1,6 @@
 import { alivePlayers, getPlayer } from "../state.js";
 import { Roles, Faction, roleMeta } from "../roles.js";
-import { clamp, isHard, ensureAdvancedMemory, rolePriorCounts } from "./utils.js";
+import { clamp, isHard, ensureAdvancedMemory, rolePriorCounts, mentionedPlayerIds } from "./utils.js";
 
 export function analyzeVotingPatterns(state) {
   const voteHist = state.history?.votes || [];
@@ -119,13 +119,14 @@ export function analyzeChatBehavior(state) {
   for (const line of chats) {
     // Skip tagged lines — vote-phase and last words shouldn't count as active chat behavior
     if (line.startsWith("[VOTE] ") || line.startsWith("[LAST] ")) continue;
+    const mentioned = mentionedPlayerIds(line, state.players);
     for (const p of state.players) {
       if (!p) continue;
       if (line.startsWith(p.name + ":")) {
         speakCount[p.id] = (speakCount[p.id] || 0) + 1;
       }
       // Track mentions
-      if (line.includes(p.name) && !line.startsWith(p.name + ":")) {
+      if (mentioned.has(p.id) && !line.startsWith(p.name + ":")) {
         if (!mentionedBy[p.id]) mentionedBy[p.id] = [];
         for (const speaker of state.players) {
           if (speaker && line.startsWith(speaker.name + ":") && speaker.id !== p.id) {

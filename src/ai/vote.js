@@ -1,6 +1,6 @@
 import { alivePlayers, getPlayer } from "../state.js";
 import { Roles, Faction, roleMeta, roleListFromTheme } from "../roles.js";
-import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, pickTemplate, publicChatMemory } from "./utils.js";
+import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, pickTemplate, publicChatMemory, mentionedPlayerIds } from "./utils.js";
 import { analyzeVotingPatterns, analyzeChatBehavior, factionProb, publicPoliceConfirmed, publicRedIds, recordPublicRedClaim, canSeeFaction } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
 import { pickTargetBySuspicion } from "./targeting.js";
@@ -17,10 +17,10 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
   const chatMentions = {};
   const chats = state.dayChat || [];
   for (const line of chats) {
+    const mentioned = mentionedPlayerIds(line, state.players);
     for (const player of state.players) {
       if (!player) continue;
-      const name = player.name;
-      if (line.includes(name)) {
+      if (mentioned.has(player.id)) {
         chatMentions[player.id] = (chatMentions[player.id] || 0) + 1;
       }
     }
@@ -31,13 +31,7 @@ export async function buildAiVoteActions(state, humanVoteTargetId = null, opts =
   // Check if police publicly revealed a red in this round's dayChat
   // Non-police should only follow the reveal if it was actually announced
   const revealedRedTarget = (state.policePublicRevealedRed ?? null) !== null ? getPlayer(state, (state.policePublicRevealedRed ?? null)) : null;
-  let policePubliclyRevealed = revealedRedTarget && chats.some((line) => {
-    if (line.startsWith("[VOTE] ") || line.startsWith("[LAST] ")) return false;
-    // Check if any police speaker mentioned the revealed red with accusation keywords
-    const en = (line.split("||")[0] || "").toLowerCase();
-    return line.includes(revealedRedTarget.name) &&
-      (en.includes("red") || en.includes("confirmed") || en.includes("investigation"));
-  });
+  let policePubliclyRevealed = !!revealedRedTarget?.alive;
   if (hard && !policePubliclyRevealed && (state.policeRevealedRed ?? null) !== null) {
     const redTarget = getPlayer(state, state.policeRevealedRed);
     const policeSpeaker = alivePlayers(state).find((p) => p.role === Roles.POLICE.id && !p.isHuman);

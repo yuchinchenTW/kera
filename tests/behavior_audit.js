@@ -4,6 +4,7 @@
  */
 import { GameEngine } from "../src/engine.js";
 import { Roles } from "../src/roles.js";
+import { mentionedPlayerIds } from "../src/ai/utils.js";
 
 const GAMES = 250;
 const MAX_ROUNDS = 8;
@@ -122,8 +123,8 @@ for (let seed = 1; seed <= GAMES; seed++) {
       );
       stats.killerChatTotal++;
       if (murderedThisRound.length > 0) {
-        const targetName = murderedThisRound[0].name;
-        const mentioned = newKillerLines.some((l) => l.includes(targetName));
+        const targetId = murderedThisRound[0].id;
+        const mentioned = newKillerLines.some((l) => mentionedPlayerIds(l, e.state.players).has(targetId));
         if (mentioned) stats.killerChatMentionsTarget++;
       }
     }
@@ -227,7 +228,7 @@ for (let seed = 1; seed <= GAMES; seed++) {
           en.includes("confirmed red")
         ) {
           for (const p of e.state.players) {
-            if (p && p.id !== voter.id && line.includes(p.name)) {
+            if (p && p.id !== voter.id && mentionedPlayerIds(line, e.state.players).has(p.id)) {
               chatTarget = p.id;
               break;
             }

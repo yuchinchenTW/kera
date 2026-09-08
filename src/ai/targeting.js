@@ -20,6 +20,22 @@ export function pickTargetBySuspicion(state, actor, filterFn = () => true) {
   return best;
 }
 
+/** Red attackers on easy/normal: pick whoever looks *least* red (most likely an enemy). */
+export function pickTargetByBlueLikelihood(state, actor, filterFn = () => true) {
+  let best = null;
+  let bestScore = -1;
+  for (const target of alivePlayers(state)) {
+    if (target.id === actor.id) continue;
+    if (!filterFn(target)) continue;
+    const score = 1 - (actor.aiMemory?.suspicion?.[target.id] ?? 0.5);
+    if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
+      bestScore = score;
+      best = target;
+    }
+  }
+  return best;
+}
+
 export function pickPoliceSmartTarget(state, actor) {
   let best = null;
   let bestScore = -Infinity;

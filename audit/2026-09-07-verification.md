@@ -79,6 +79,21 @@
 | 43 | 已修復，中 | `night.js` 4 處、`targeting.js` 4 處、`vote.js` 2 處遍歷他人 `chatMemory` 改為 `publicChatMemory(p)`，過濾 `source: "faction"`；本人讀自己記憶的路徑（含 `applyDeductionChains`）不變。測試：人類殺手私聊產生 faction entry 後，公開讀取不含該筆。 |
 | 44 | 已修復（程式碼核對），低 | 殭屍投票候選不再排除其他殭屍；未另寫行為測試，因候選集合差異受嫌疑值影響不易穩定斷言。 |
 
+## 第五批修復
+
+範圍：AI 行為 #45～#52，修改 `src/ai/utils.js`、`targeting.js`、`night.js`、`memory.js`、`analysis.js`、`vote.js`、`chat.js`、`index.js`、`src/engine.js` 與 `tests/behavior_audit.js`。`node tests/review_verification.mjs` 增至 **61 項**。同 seed 200 局 hard：BLUE 22.5%（上一批 21.5%），平均天數 5.7；normal 23.0%；OTHER_DIMENSION normal 32.0%。行為審計「聊天—投票一致性」由 5.6% 升到 25.6%，因為名字比對不再把 Player 10～18 誤判為 Player 1。
+
+| 編號 | 目前狀態 | 修復與驗證 |
+| --- | --- | --- |
+| 45 | 已修復，中 | 新增 `pickTargetByBlueLikelihood`（取嫌疑最低者）。簡單/普通難度的狙擊手、縱火者、藤魔、夢魔、死靈改用它；綁匪評分改為 `(1-redProb)+(1-suspicion)`。困難分支未動。測試：信念認為 1 號是殺手、2 號是警察時，普通狙擊手射 2 號。 |
+| 46 | 已修復，中 | 怨獸遺言在沒有目標時只從不需要目標名的模板中抽選。測試：四個 rng 值都不出現 undefined。 |
+| 47 | 已修復，中 | 以 `aiMemory.chatParsed` 記錄已解析到的 dayChat 與陣營聊天索引，只解析新行；不再用「今天已有 entry」判斷。同時修掉陣營聊天每次呼叫都重複寫入的問題。測試：夜間私聊後再加入的白天公開聊天會被解析；重複呼叫不增加 entry。 |
+| 48 | 已修復，中 | `ensureBeliefs` 以可觀察證據指紋（天數、階段、聊天長度、投票輪數、死亡、救援、公開揭露、宣稱、陣營聊天長度、個別調查結果數、角色）判斷是否重算；指紋相同直接跳過。測試：連續兩次呼叫 roleProbs 相同，新增投票紀錄後才改變。 |
+| 49 | 已修復，低 | `pickHumanTarget` 只接受目標存活的人類提交。測試：人類殺手投死人時 AI 殺手另選活人。 |
+| 50 | 已修復，低 | 殺手夜間簡報先決定是否改打跳警者，再組合描述用的 top/alt，首夜「Target X tonight」與實際目標一致。測試：roleClaims 有 5 號跳警時，簡報寫 Player 6 且 `_killerChatTarget` 為 5。 |
+| 51 | 已修復，低 | `policePubliclyRevealed` 改為「公開揭露對象仍存活」，不再要求當天聊天再次提到；`policePublicRevealedRed` 本來就只在公開宣稱時設定。測試：第 3 天無人提及時，普通藍方仍投公開紅方。 |
+| 52 | 已修復，中 | 新增 `mentionedPlayerIds`（長名優先、不重疊比對），套用於 memory、analysis、vote、chat、night、engine 與 behavior_audit 共 11 處；每行只計算一次以避免 O(n³)。測試：「Player 10 is suspicious」不再算成提及 Player 1。 |
+
 ## 規則裁定
 
 - #18 維持待裁定的平衡問題；#21、#25 為誤報，#22 依既定勝利優先序結案。

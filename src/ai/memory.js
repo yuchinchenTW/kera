@@ -1,6 +1,6 @@
 import { alivePlayers, getPlayer } from "../state.js";
 import { Roles, Faction, Theme, roleMeta } from "../roles.js";
-import { clamp, isHard, rolePriorCounts, getGamePhase, ensureAdvancedMemory } from "./utils.js";
+import { clamp, isHard, rolePriorCounts, getGamePhase, ensureAdvancedMemory, mentionedPlayerIds } from "./utils.js";
 import { analyzeVotingPatterns, analyzeChatBehavior, computeSelfThreat, publicRevealedRed, applyDeductionChains, factionProb } from "./analysis.js";
 
 // ─── Enhanced Belief System ────────────────────────────────────────────────
@@ -30,9 +30,24 @@ export function ensureBeliefs(state) {
   // Identify dead players and their death correlations
   const recentDeaths = state.players.filter((p) => !p.alive && p.deathCause);
 
+  // Evidence fingerprint: beliefs are re-derived only when something observable changed,
+  // so a second ensureBeliefs call in the same situation is a no-op instead of another
+  // round of likelihood bumps.
+  const stateStamp = [
+    state.dayNumber, state.phase, (state.dayChat || []).length, state.history?.votes?.length || 0,
+    recentDeaths.length, (state.lastNightSavedIds || []).join(","), living.length,
+    state.policeRevealedRed ?? "", state.policePublicRevealedRed ?? "",
+    (state.policePublicRedIds || []).length, (state.policePublicClearedBlueIds || []).length,
+    Object.keys(state.roleClaims || {}).length,
+    (state.killerChat || []).length, (state.policeChat || []).length, (state.grudgeChat || []).length,
+  ].join("|");
+
   for (const p of alivePlayers(state)) {
     if (p.isHuman) continue;
     ensureAdvancedMemory(p);
+    const beliefStamp = `${stateStamp}|${(p.aiMemory.investigationResults || []).length}|${p.role}`;
+    if (p.aiMemory.beliefStamp === beliefStamp) continue;
+    p.aiMemory.beliefStamp = beliefStamp;
     const revealedRed = publicRevealedRed(state, p);
 
     // Update self-threat
@@ -43,20 +58,28 @@ export function ensureBeliefs(state) {
     // ── Improvement 1: Cross-round chat memory tracking ──
     if (hard) {
       const dayNum = state.dayNumber || 1;
-      const alreadyParsedThisDay = p.aiMemory.chatMemory.some((m) => m.day === dayNum);
-      if (!alreadyParsedThisDay) {
-        const chats = state.dayChat || [];
+      p.aiMemory.chatParsed = p.aiMemory.chatParsed || { day: 0, dayChatIndex: 0, factionIndex: 0 };
+      const parsed = p.aiMemory.chatParsed;
+      if (parsed.day !== dayNum) {
+        parsed.day = dayNum;
+        parsed.dayChatIndex = 0; // dayChat is rebuilt each day
+      }
+      {
+        const allChats = state.dayChat || [];
+        const chats = allChats.slice(parsed.dayChatIndex);
+        parsed.dayChatIndex = allChats.length;
         for (let line of chats) {
           // Skip vote-phase tagged lines — they're post-decision, not new evidence
           if (line.startsWith("[VOTE] ")) continue;
           // Strip [LAST] prefix — last words are valid evidence but from dead speakers
           if (line.startsWith("[LAST] ")) line = line.slice(7);
+          const mentioned = mentionedPlayerIds(line, state.players);
           for (const sp of state.players) {
             if (!sp || !line.startsWith(sp.name + ":")) continue;
             const entry = { day: dayNum, speakerId: sp.id, mentionedIds: [], accusedId: null, defendedId: null };
             for (const other of state.players) {
               if (!other || other.id === sp.id) continue;
-              if (line.includes(other.name)) {
+              if (mentioned.has(other.id)) {
                 entry.mentionedIds.push(other.id);
                 // Detect accuse/defend keywords in both English (before ||) and Chinese (after ||)
                 const enPart = line.split("||")[0] || line;
@@ -87,7 +110,10 @@ export function ensureBeliefs(state) {
         p.role === Roles.KILLER.id ? (state.killerChat || []) :
         p.role === Roles.POLICE.id ? (state.policeChat || []) :
         p.role === Roles.GRUDGE_BEAST.id ? (state.grudgeChat || []) : [];
-      for (const line of factionChat) {
+      const newFactionLines = factionChat.slice(parsed.factionIndex);
+      parsed.factionIndex = factionChat.length;
+      for (const line of newFactionLines) {
+        const mentioned = mentionedPlayerIds(line, state.players);
         // Skip lines already parsed (AI-generated lines are usually in dayChat too)
         let speakerFound = false;
         for (const sp of state.players) {
@@ -96,7 +122,7 @@ export function ensureBeliefs(state) {
           const entry = { day: dayNum, speakerId: sp.id, mentionedIds: [], accusedId: null, defendedId: null, source: "faction" };
           for (const other of state.players) {
             if (!other || other.id === sp.id) continue;
-            if (line.includes(other.name)) {
+            if (mentioned.has(other.id)) {
               entry.mentionedIds.push(other.id);
               const enPart = line.split("||")[0] || line;
               const lowerEn = enPart.toLowerCase();

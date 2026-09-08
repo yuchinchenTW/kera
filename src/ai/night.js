@@ -1,9 +1,9 @@
 import { alivePlayers, getPlayer } from "../state.js";
 import { Roles, Faction } from "../roles.js";
-import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, publicChatMemory } from "./utils.js";
+import { clamp, isHard, randomChoice, shuffled, getGamePhase, ensureAdvancedMemory, publicChatMemory, mentionedPlayerIds } from "./utils.js";
 import { analyzeChatBehavior, analyzeVotingPatterns, factionProb, publicPoliceConfirmed, estimateFactionCounts } from "./analysis.js";
 import { ensureBeliefs } from "./memory.js";
-import { pickTargetBySuspicion, pickGroupTarget, pickKillerSmartTarget, pickPoliceSmartTarget, pickCowboySmartTarget, pickSniperSmartTarget, pickTerroristSmartTarget, pickZombieTarget } from "./targeting.js";
+import { pickTargetBySuspicion, pickTargetByBlueLikelihood, pickGroupTarget, pickKillerSmartTarget, pickPoliceSmartTarget, pickCowboySmartTarget, pickSniperSmartTarget, pickTerroristSmartTarget, pickZombieTarget } from "./targeting.js";
 
 // ─── Night Actions ─────────────────────────────────────────────────────────
 
@@ -32,7 +32,7 @@ export async function buildAiNightActions(state, opts = {}) {
 
   const pickHumanTarget = (actionType) => {
     const candidates = humanActionList.filter(
-      (a) => a.type === actionType && typeof a.targetId === "number"
+      (a) => a.type === actionType && typeof a.targetId === "number" && getPlayer(state, a.targetId)?.alive
     );
     if (!candidates.length) return null;
     const choiceIdx = Math.floor(state.rng() * candidates.length);
@@ -476,7 +476,7 @@ export async function buildAiNightActions(state, opts = {}) {
           if (state.rng() < activateChance) {
             const target = hard
               ? pickSniperSmartTarget(state, actor)
-              : pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+              : pickTargetByBlueLikelihood(state, actor, (t) => t.id !== actor.id);
             if (target) actions.push({ actorId: actor.id, type: "SNIPER_SHOT", targetId: target.id });
           }
         }
@@ -805,7 +805,8 @@ export async function buildAiNightActions(state, opts = {}) {
               + doctorProb * 0.8 + policeProb * 0.6 + agentProb * 0.4;
           } else {
             const redProb = factionProb(actor, t.id, Faction.RED) ?? 0.5;
-            score = redProb + (actor.aiMemory?.suspicion?.[t.id] ?? 0.5);
+            // Easy/normal: still aim at whoever looks blue, just with a cruder estimate
+            score = (1 - redProb) + (1 - (actor.aiMemory?.suspicion?.[t.id] ?? 0.5));
           }
           if (score > bestScore || (score === bestScore && state.rng() < 0.5)) {
             bestScore = score;
@@ -841,8 +842,9 @@ export async function buildAiNightActions(state, opts = {}) {
           for (const line of (state.dayChat || [])) {
             const stripped = line.startsWith("[LAST] ") ? line.slice(7) : null;
             if (!stripped || !stripped.includes("I bit ")) continue;
+            const mentioned = mentionedPlayerIds(stripped, state.players);
             for (const p of state.players) {
-              if (p?.alive && stripped.includes(p.name)) {
+              if (p?.alive && mentioned.has(p.id)) {
                 myBittenTargets.add(p.id);
               }
             }
@@ -850,8 +852,9 @@ export async function buildAiNightActions(state, opts = {}) {
           // Also check publicLog for last words with bite reveals
           for (const entry of (state.publicLog || [])) {
             if (typeof entry !== "string" || !entry.includes("I bit ")) continue;
+            const mentioned = mentionedPlayerIds(entry, state.players);
             for (const p of state.players) {
-              if (p?.alive && entry.includes(p.name)) {
+              if (p?.alive && mentioned.has(p.id)) {
                 myBittenTargets.add(p.id);
               }
             }
@@ -997,7 +1000,7 @@ export async function buildAiNightActions(state, opts = {}) {
           if (doIgnite) {
             actions.push({ actorId: actor.id, type: "ARSON_IGNITE" });
           } else {
-            const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+            const target = pickTargetByBlueLikelihood(state, actor, (t) => t.id !== actor.id && !t.status.arsonMarked);
             if (target) actions.push({ actorId: actor.id, type: "ARSON_MARK", targetId: target.id });
           }
         }
@@ -1025,7 +1028,7 @@ export async function buildAiNightActions(state, opts = {}) {
           const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "VINE_SEED", targetId: target.id });
         } else {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          const target = pickTargetByBlueLikelihood(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "VINE_SEED", targetId: target.id });
         }
         break;
@@ -1055,7 +1058,7 @@ export async function buildAiNightActions(state, opts = {}) {
           const target = best || pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "NIGHTMARE_ATTACK", targetId: target.id });
         } else {
-          const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+          const target = pickTargetByBlueLikelihood(state, actor, (t) => t.id !== actor.id);
           if (target) actions.push({ actorId: actor.id, type: "NIGHTMARE_ATTACK", targetId: target.id });
         }
         break;
@@ -1108,8 +1111,9 @@ export async function buildAiNightActions(state, opts = {}) {
           const exPurifiedIds = new Set();
           for (const entry of state.publicLog || []) {
             if (typeof entry === "string" && entry.includes("cleansed")) {
+              const mentioned = mentionedPlayerIds(entry, state.players);
               for (const p of state.players) {
-                if (p.alive && entry.includes(p.name)) exPurifiedIds.add(p.id);
+                if (p.alive && mentioned.has(p.id)) exPurifiedIds.add(p.id);
               }
             }
           }
@@ -1284,7 +1288,7 @@ export async function buildAiNightActions(state, opts = {}) {
             }
             // else: hold souls, wait for 3+
           } else {
-            const target = pickTargetBySuspicion(state, actor, (t) => t.id !== actor.id);
+            const target = pickTargetByBlueLikelihood(state, actor, (t) => t.id !== actor.id);
             if (target) actions.push({ actorId: actor.id, type: "NECROMANCER_CURSE", targetId: target.id });
           }
         }

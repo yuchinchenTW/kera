@@ -15,7 +15,7 @@ import { publicPoliceConfirmed, analyzeChatBehavior, canSeeFaction, estimateFact
 import { publicChatMemory } from '../src/ai/utils.js';
 import { buildAiNightActions } from '../src/ai/night.js';
 import { buildAiVoteActions } from '../src/ai/vote.js';
-import { generateLastWords } from '../src/ai/chat.js';
+import { generateLastWords, generateNightFactionChat } from '../src/ai/chat.js';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -675,15 +675,52 @@ await check('#40 blue voter follows the public accusation, not the private polic
   const votes = await buildAiVoteActions(e.state);
   assert.equal(votes.find((v) => v.actorId === 2).targetId, 3);
 });
-await check('#46 grudge last words can contain undefined', () => {
-  const e = scenario({ 0: 'GRUDGE_BEAST' });
-  e.state.difficulty = 'hard';
-  e.state.players[0].alive = false;
-  e.state.players[0].isHuman = false;
-  e.state.rng = () => 0.99;
-  assert.match(generateLastWords(e.state, 0), /undefined/);
+await check('#46 grudge last words never contain undefined', () => {
+  for (const roll of [0.01, 0.4, 0.6, 0.99]) {
+    const e = scenario({ 0: 'GRUDGE_BEAST' });
+    e.state.difficulty = 'hard';
+    e.state.players[0].alive = false;
+    e.state.players[0].isHuman = false;
+    e.state.rng = () => roll;
+    const words = generateLastWords(e.state, 0);
+    assert.ok(words && !/undefined/.test(words), `roll ${roll}: ${words}`);
+  }
 });
-await check('#47 early faction memory suppresses later public chat', () => {
+await check('#45 easy/normal red attackers aim at the least suspicious player', async () => {
+  const e = scenario({ 0: 'SNIPER', 1: 'KILLER', 2: 'POLICE' });
+  e.state.players[0].isHuman = false;
+  e.state.players[0].aiMemory.roleProbs = { 1: { KILLER: 1 }, 2: { POLICE: 1 } };
+  e.state.rng = () => 0.1; // below the day-1 activation chance
+  const actions = await buildAiNightActions(e.state, {});
+  const shot = actions.find((a) => a.actorId === 0 && a.type === 'SNIPER_SHOT');
+  assert.ok(shot, 'sniper fires');
+  assert.equal(shot.targetId, 2, 'the player believed blue is chosen, not the one believed red');
+});
+await check('#50 killer night briefing names the target that is actually attacked', () => {
+  const e = scenario({ 0: 'KILLER', 1: 'KILLER', 2: 'POLICE' });
+  e.state.difficulty = 'hard';
+  e.state.players[0].isHuman = false;
+  e.state.players[1].isHuman = false;
+  e.state.roleClaims = { 5: 'POLICE' };
+  e.state.rng = () => 0.3;
+  generateNightFactionChat(e.state);
+  const briefing = (e.state.killerChat || []).find((l) => /Target Player \d+ tonight/.test(l));
+  assert.ok(briefing, 'a first-night target line is produced');
+  assert.equal(e.state._killerChatTarget, 5);
+  assert.match(briefing, /Target Player 6 tonight/);
+});
+await check('#51 blue voters still follow a public reveal on later days', async () => {
+  const e = scenario({ 0: 'KILLER', 1: 'POLICE' });
+  e.state.players[2].isHuman = false;
+  e.state.policePublicRevealedRed = 3;
+  e.state.policePublicRedIds = [3];
+  e.state.dayNumber = 3;
+  e.state.dayChat = ['Player 8: nothing new today'];
+  e.state.rng = () => 0;
+  const votes = await buildAiVoteActions(e.state);
+  assert.equal(votes.find((v) => v.actorId === 2).targetId, 3);
+});
+await check('#47 later public chat is parsed even after early faction memory', () => {
   const e = scenario({ 0: 'KILLER', 1: 'KILLER', 2: 'POLICE' });
   e.state.difficulty = 'hard';
   e.state.players[0].isHuman = false;
@@ -693,26 +730,40 @@ await check('#47 early faction memory suppresses later public chat', () => {
   ensureBeliefs(e.state);
   const memory = e.state.players[0].aiMemory.chatMemory;
   assert.ok(memory.some((m) => m.source === 'faction'));
-  assert.equal(memory.some((m) => m.speakerId === 2), false);
+  assert.equal(memory.some((m) => m.speakerId === 2 && m.accusedId === 5), true);
+  // Re-running without new lines does not duplicate entries.
+  const count = memory.length;
+  ensureBeliefs(e.state);
+  assert.equal(e.state.players[0].aiMemory.chatMemory.length, count);
 });
-await check('#48 repeated belief calls change probabilities without new events', () => {
+await check('#48 repeated belief calls are idempotent until new evidence arrives', () => {
   const state = createInitialState(1, 'GOOD_VS_EVIL', 'hard', { allAi: true });
   state.history.votes.push({ day: 1, order: [{ actorId: 1, targetId: 2 }], tally: { 2: 1 }, flips: [], mentions: {} });
   ensureBeliefs(state);
   const before = JSON.stringify(state.players[0].aiMemory.roleProbs);
   ensureBeliefs(state);
+  assert.equal(JSON.stringify(state.players[0].aiMemory.roleProbs), before);
+  state.history.votes.push({ day: 2, order: [{ actorId: 1, targetId: 2 }], tally: { 2: 1 }, flips: [], mentions: {} });
+  ensureBeliefs(state);
   assert.notEqual(JSON.stringify(state.players[0].aiMemory.roleProbs), before);
 });
-await check('#49 shared killer target accepts a dead human target', async () => {
+await check('#49 shared killer target ignores a dead human target', async () => {
   const e = scenario({ 0: 'KILLER', 1: 'KILLER', 2: 'POLICE' });
   e.state.players[0].isHuman = false;
   e.state.players[3].alive = false;
   const actions = await buildAiNightActions(e.state, { humanActions: { 1: action(1, 'KILLER_VOTE', 3) } });
-  assert.equal(actions.find((a) => a.actorId === 0).targetId, 3);
+  const vote = actions.find((a) => a.actorId === 0);
+  assert.ok(vote);
+  assert.notEqual(vote.targetId, 3);
+  assert.equal(e.state.players[vote.targetId].alive, true);
 });
-await check('#52 Player 10 falsely counts as Player 1 mention', () => {
+await check('#52 Player 10 no longer counts as a Player 1 mention', () => {
   const state = createInitialState(1);
-  state.dayChat = ['Player 2: Player 10 is suspicious'];
-  assert.deepEqual(analyzeChatBehavior(state).mentionedBy[0], [1]);
+  state.dayChat = ['Player 2: Player 10 is suspicious', 'Player 3: Player 1 and Player 11 both'];
+  const { mentionedBy } = analyzeChatBehavior(state);
+  assert.deepEqual(mentionedBy[9], [1]);
+  assert.deepEqual(mentionedBy[0], [2]);
+  assert.deepEqual(mentionedBy[10], [2]);
+  assert.equal(mentionedBy[1], undefined);
 });
-console.log(`${passed} review checks passed (#1-5, #7-9, #11-15, #19-20, #23-24 night, #27-43 regression checks; other findings remain audit probes).`);
+console.log(`${passed} review checks passed (#1-5, #7-9, #11-15, #19-20, #23-24 night, #27-52 regression checks; other findings remain audit probes).`);
